@@ -1,0 +1,47 @@
+{
+  "port": 7777,
+  "reposRoot": "C:/Users/kingn",
+  "extraRepos": [],
+  "claudeHome": "C:/Users/kingn/.claude",
+  "poll": {
+    "agentsMs": 3000,
+    "gitMs": 10000,
+    "timelineLines": 30
+  },
+  "dispatch": {
+    "permissionMode": "auto",
+    "defaultModel": "fable",
+    "maxConcurrent": 4
+  },
+  "roles": {
+    "director": {
+      "model": "fable",
+      "effort": "high",
+      "purpose": "Owns the goal. Breaks it into tasks across repos, sets dependencies, judges whether the result meets the ask."
+    },
+    "manager": {
+      "model": "opus",
+      "effort": "high",
+      "purpose": "Owns one task. Writes the worker brief, dispatches, verifies the diff and tests, unblocks or escalates to the director."
+    },
+    "coder": {
+      "model": "sonnet",
+      "effort": "medium",
+      "purpose": "Implements a brief in one worktree. Manager may escalate to opus for cross-repo or subtle changes."
+    },
+    "reviewer": {
+      "model": "opus",
+      "effort": "high",
+      "purpose": "Independent read of a finished diff. Never the same instance that wrote it."
+    },
+    "searcher": {
+      "model": "haiku",
+      "effort": "low",
+      "purpose": "Grep, file location, and fact lookups. Read-only."
+    }
+  },
+  "aws": {
+    "profile": "",
+    "autoRefresh": false
+  }
+}

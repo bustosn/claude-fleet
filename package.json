@@ -1,0 +1,38 @@
+{
+  "name": "claude-fleet",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Local control room for Claude Code sessions, worktrees, agent-to-agent chat, and daily chores",
+  "scripts": {
+    "start": "tsx server/index.ts",
+    "dev": "node scripts/dev.js",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "vite build --config web/vite.config.ts",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "check": "npm run typecheck && npm run build",
+    "ship": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ship.ps1"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.295",
+    "express": "^4.21.2",
+    "puppeteer-core": "^24.43.1",
+    "tsx": "^4.19.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

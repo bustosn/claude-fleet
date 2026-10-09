@@ -1,0 +1,6 @@
+#!/bin/sh
+# After `git merge` or `git pull` lands on main in the main checkout, rebuild and restart the daily instance.
+# Enabled once per clone with: git config core.hooksPath scripts/hooks
+[ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || exit 0
+[ "$(git rev-parse --git-dir)" = ".git" ] || exit 0   # linked worktrees have a .git file, not the directory
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ship.ps1 -BuildOnly
