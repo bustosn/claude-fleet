@@ -8,6 +8,7 @@ export type View =
   | { kind: 'new-chat'; cwd?: string }
   | { kind: 'worktree'; path: string }
   | { kind: 'session'; id: string }
+  | { kind: 'terminal'; id: string }
   | { kind: 'hub' };
 
 /** Open views, like editor tabs. Overview is the home screen and never a tab. */
@@ -32,6 +33,7 @@ export function tabKey(v: View): string {
     case 'new-chat': return 'new-chat';
     case 'worktree': return `wt:${v.path.toLowerCase()}`;
     case 'session': return `session:${v.id}`;
+    case 'terminal': return `terminal:${v.id}`;
     case 'hub': return 'hub';
   }
 }

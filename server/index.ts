@@ -2,11 +2,14 @@ import express, { type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createServer, type IncomingMessage } from 'node:http';
+import { WebSocketServer, type WebSocket } from 'ws';
 import { renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { loadConfig, root } from './config.js';
 import { Collector } from './collector.js';
 import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
+import { TerminalManager, type Terminal } from './terminals.js';
 import { conversationHistory } from './sources/conversations.js';
 import { run, errText } from './util.js';
 
@@ -22,6 +25,9 @@ const collector = new Collector(config, chats, path.join(stateDir, `homes-${conf
 chats.titleFor = id => collector.titleOf(id);
 chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title);
 const aws = new AwsCreds(config.aws, stateDir);
+const terminals = new TerminalManager(config.terminal.shell);
+collector.terminals = terminals;
+terminals.on('change', () => collector.publish());
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -130,6 +136,38 @@ app.post('/api/chats/:id/permission', (req, res) => {
 app.post('/api/chats/:id/interrupt', async (req, res) => { const c = chats.get(req.params.id); if (!c) return res.status(404).end(); await c.interrupt(); res.json({ ok: true }); });
 app.delete('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); if (!c) return res.status(404).end(); c.close(); res.json({ ok: true }); });
 
+// Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.
+app.get('/api/terminals', (_req, res) => res.json(terminals.list()));
+app.post('/api/terminals', (req, res) => {
+  const dir = String(req.body?.cwd || config.reposRoot);
+  if (!fs.existsSync(dir)) return res.status(400).json({ error: `cwd not found: ${dir}` });
+  try { res.json(terminals.open({ cwd: dir, cols: Number(req.body?.cols) || undefined, rows: Number(req.body?.rows) || undefined }).summary()); }
+  catch (err) { res.status(500).json({ error: `could not start a shell: ${errText(err)}` }); }
+});
+app.delete('/api/terminals/:id', (req, res) => terminals.close(req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'no such terminal' }));
+
+// Browsers do not apply same-origin rules to WebSockets, so any web page could otherwise open a shell here. Only Fleet's own pages may.
+function originAllowed(req: IncomingMessage): boolean {
+  const o = req.headers.origin;
+  if (!o) return true; // not a browser
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(o);
+}
+function attachTerminal(ws: WebSocket, t: Terminal) {
+  const send = (m: unknown) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)); };
+  if (t.scrollback) send({ t: 'out', d: t.scrollback });
+  if (t.exitCode != null) send({ t: 'exit', code: t.exitCode });
+  const onData = (d: string) => send({ t: 'out', d });
+  const onExit = (code: number) => send({ t: 'exit', code });
+  t.on('data', onData); t.on('exit', onExit);
+  ws.on('message', raw => {
+    let m: any; try { m = JSON.parse(String(raw)); } catch { return; }
+    if (m.t === 'in' && typeof m.d === 'string') t.write(m.d);
+    else if (m.t === 'resize') t.resize(Number(m.cols), Number(m.rows));
+    else if (m.t === 'title' && typeof m.title === 'string') t.setTitle(m.title);
+  });
+  ws.on('close', () => { t.off('data', onData); t.off('exit', onExit); });
+}
+
 // Built web app (vite build → dist/web). In dev, Vite serves the app and proxies /api here.
 const webDist = path.join(root, 'dist', 'web');
 if (fs.existsSync(webDist)) {
@@ -141,8 +179,17 @@ if (fs.existsSync(webDist)) {
 
 collector.start();
 chats.persistTo(path.join(stateDir, `chats-${config.port}.json`));
-app.listen(config.port, '127.0.0.1', () => {
+const server = createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  const m = /^\/api\/terminals\/([a-z0-9]{4,16})\/ws$/i.exec(req.url || '');
+  const t = m && originAllowed(req) ? terminals.get(m[1]) : null;
+  if (!t) { socket.destroy(); return; }
+  wss.handleUpgrade(req, socket, head, ws => attachTerminal(ws, t));
+});
+server.listen(config.port, '127.0.0.1', () => {
   console.log(`claude-fleet API on http://127.0.0.1:${config.port}  repos=${config.reposRoot}${fs.existsSync(webDist) ? '  web=dist/web' : '  web=none'}`);
   const reopened = chats.reopen();
   if (reopened) console.log(`reopened ${reopened} chat(s) from the previous run`);
 });
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); process.exit(0); });

@@ -6,6 +6,7 @@ import { listConversations, type SavedConversation } from './sources/conversatio
 import { normPath, errText, mapLimit } from './util.js';
 import { SessionHomes, type WorktreeRef, type Placement } from './sources/homes.js';
 import type { ChatManager } from './chat.js';
+import type { TerminalManager } from './terminals.js';
 import type { FleetConfig } from './config.js';
 import type { Snapshot, Session, Column, ChatStatus, Worktree } from '../shared/types.js';
 
@@ -13,6 +14,8 @@ type Located = (Omit<Worktree, 'sessions'> & { repo: string; by: Placement['by']
 
 export class Collector extends EventEmitter {
   config: FleetConfig; chats: ChatManager | null; homes: SessionHomes;
+  /** Set by the server after construction; its `change` events call publish(). */
+  terminals: TerminalManager | null = null;
   agents: AgentRow[] = []; jobs: Record<string, JobRecord> = {}; repos: RepoScan[] = []; conversations: SavedConversation[] = [];
   errors: Record<string, string> = {};
   snapshot: Snapshot; private lastSig = '';
@@ -74,7 +77,7 @@ export class Collector extends EventEmitter {
 
   publish() {
     const next = this.build();
-    const sig = JSON.stringify({ s: next.sessions, r: next.repos, c: next.conversations, ch: next.chats, e: next.errors });
+    const sig = JSON.stringify({ s: next.sessions, r: next.repos, c: next.conversations, ch: next.chats, t: next.terminals, e: next.errors });
     if (sig === this.lastSig) return;
     this.lastSig = sig;
     this.snapshot = next;
@@ -134,7 +137,7 @@ export class Collector extends EventEmitter {
     }
     const repos = this.repos.map(r => ({ ...r, worktrees: r.worktrees.map(w => ({ ...w, sessions: byWorktree.get(normPath(w.path)) || [] })) }));
 
-    return { generatedAt: Date.now(), sessions, repos, conversations, chats, errors: { ...this.errors }, roles: this.config.roles, dispatch: this.config.dispatch };
+    return { generatedAt: Date.now(), sessions, repos, conversations, chats, terminals: this.terminals?.list() || [], errors: { ...this.errors }, roles: this.config.roles, dispatch: this.config.dispatch };
   }
 }
 

@@ -63,8 +63,11 @@ export interface ChatSummary {
 export interface Role { model: string; effort: string; purpose: string }
 export interface DispatchDefaults { permissionMode: string; defaultModel: string; maxConcurrent: number }
 
+/** A shell running inside Fleet. The browser attaches over a WebSocket; it keeps running when its tab closes. */
+export interface TerminalSummary { id: string; cwd: string; shell: string; title: string; startedAt: number; exitCode: number | null }
+
 export interface Snapshot {
-  generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[];
+  generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[];
   errors: Record<string, string>; roles: Record<string, Role>; dispatch: DispatchDefaults;
 }
 

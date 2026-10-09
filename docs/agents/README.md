@@ -26,7 +26,7 @@ The daily instance on 7777 belongs to the person using the app. Never restart it
 - Status is always a dot plus a label. Selection and interaction use the accent; nothing else does.
 - Destructive buttons confirm by a second click, not a modal.
 - Keys and tokens never reach a log line or an event payload. The AWS hub shows expiry and identity only.
-- Do not add dependencies for things a few lines of code can do. Current list: express, the Agent SDK, zod, puppeteer-core, react, lucide-react, tailwind, vite, typescript, tsx.
+- Do not add dependencies for things a few lines of code can do. Current list: express, the Agent SDK, zod, puppeteer-core, node-pty, ws, react, lucide-react, @xterm/xterm (+ addon-fit), tailwind, vite, typescript, tsx.
 
 ## Decisions already made
 

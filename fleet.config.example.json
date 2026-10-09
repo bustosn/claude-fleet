@@ -49,5 +49,8 @@
     "autoApprove": false,
     "autoRefresh": true,
     "autoRefreshMinutesBefore": 60
+  },
+  "terminal": {
+    "shell": null
   }
 }

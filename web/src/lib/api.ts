@@ -1,4 +1,4 @@
-import type { AwsRun, AwsStatus, ChatEvent, ChatSummary, SlashCommandView, Snapshot } from '../../../shared/types';
+import type { AwsRun, AwsStatus, ChatEvent, ChatSummary, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
 export type * from '../../../shared/types';
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
@@ -26,6 +26,9 @@ export const api = {
   awsStatus: (force = false) => j<AwsStatus>(`/api/aws/status${force ? '?force=1' : ''}`),
   awsRefresh: (forceLogin = false) => post<AwsRun>('/api/aws/refresh', { forceLogin }),
   awsCancel: () => post<{ ok: true }>('/api/aws/cancel'),
+  terminals: () => j<TerminalSummary[]>('/api/terminals'),
+  openTerminal: (cwd?: string) => post<TerminalSummary>('/api/terminals', { cwd }),
+  closeTerminal: (id: string) => j<{ ok: true }>(`/api/terminals/${id}`, { method: 'DELETE' }),
 };
 
 /** Server-sent events with a typed handler. Reconnects on its own; the browser handles that. */

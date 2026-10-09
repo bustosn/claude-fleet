@@ -12,6 +12,8 @@ export interface FleetConfig {
   port: number; reposRoot: string; extraRepos: string[]; claudeHome: string;
   poll: { agentsMs: number; gitMs: number; timelineLines: number; conversationsMs: number; conversationsLimit: number };
   dispatch: DispatchDefaults; roles: Record<string, Role>; aws: Partial<AwsConfig>;
+  /** Shell for terminal tabs. Null picks powershell.exe on Windows, $SHELL elsewhere. */
+  terminal: { shell: string | null };
 }
 
 export const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -26,6 +28,7 @@ export function loadConfig(): FleetConfig {
     poll: { agentsMs: 3000, gitMs: 10000, timelineLines: 30, conversationsMs: 15000, conversationsLimit: 200, ...(raw.poll || {}) },
     dispatch: { permissionMode: 'auto', defaultModel: 'fable', maxConcurrent: 4, ...(raw.dispatch || {}) },
     roles: raw.roles || {}, aws: raw.aws || {},
+    terminal: { shell: raw.terminal?.shell ? String(raw.terminal.shell) : null },
   };
   return cfg;
 }

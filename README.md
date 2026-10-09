@@ -58,11 +58,12 @@ A restart ends the daily instance's live chat processes; they reopen from their 
 | Chats | the Agent SDK's `query()` in streaming-input mode, one subprocess per chat |
 | Agent-to-agent | an in-process MCP server (`fleet_list_chats`, `fleet_send`, `fleet_ask`, `fleet_reply`, `fleet_read`) mounted into every chat |
 | AWS credentials | `~/bin/awsreset` for the silent path; `aws sso login --use-device-code` with the approval page opened in your browser as the fallback |
+| Terminals | `node-pty` shells in the server, `xterm.js` in a tab, a WebSocket between them. Closing the tab keeps the shell; Kill ends it. A `claude` started in one shows up as a session like any other |
 
 Design and roadmap: [`docs/plans/`](docs/plans/). If you are an agent working on this repo, start at [`docs/agents/`](docs/agents/).
 
 ## Config
 
-`fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), and the `aws` section.
+`fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), the `aws` section, and `terminal.shell` (null picks PowerShell on Windows, `$SHELL` elsewhere).
 
 It is not tracked: each machine (and each worktree) keeps its own copy, made from `fleet.config.example.json`. `reposRoot` and `claudeHome` are the only values that have to change. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.

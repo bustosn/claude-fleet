@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { GitBranch, KeyRound, LayoutGrid, MessageSquare, Plus, Search, Terminal } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
+import { openTerminal } from '../lib/terminal';
 
-interface Item { id: string; label: string; hint: string; icon: typeof Search; view: View }
+/** An item either opens a view or runs an action. */
+interface Item { id: string; label: string; hint: string; icon: typeof Search; view?: View; run?: () => void }
 
 export function CommandPalette() {
   const open = useStore(s => s.paletteOpen);
@@ -20,7 +22,9 @@ export function CommandPalette() {
       { id: 'overview', label: 'Overview', hint: 'fleet board', icon: LayoutGrid, view: { kind: 'overview' } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
+      { id: 'terminal', label: 'New terminal', hint: 'open a shell in the folder you are looking at', icon: Terminal, run: () => openTerminal() },
     ];
+    for (const t of snap.terminals) out.push({ id: `t:${t.id}`, label: t.title, hint: `terminal · ${shortPath(t.cwd)}${t.exitCode != null ? ' · exited' : ''}`, icon: Terminal, view: { kind: 'terminal', id: t.id } });
     for (const s of snap.sessions) out.push({ id: `s:${s.id}`, label: s.title || s.name, hint: `${s.kind === 'dashboard' ? 'chat' : s.kind} · ${s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)} · ${s.state}`, icon: s.kind === 'dashboard' ? MessageSquare : Terminal,
       view: s.kind === 'dashboard' && s.chatId ? { kind: 'chat', chatId: s.chatId, title: s.title } : { kind: 'session', id: s.id } });
     for (const r of snap.repos) for (const w of r.worktrees) out.push({ id: `w:${w.path}`, label: `${r.name} / ${w.branch || shortPath(w.path)}`, hint: shortPath(w.path), icon: GitBranch, view: { kind: 'worktree', path: w.path } });
@@ -35,7 +39,7 @@ export function CommandPalette() {
   }, [items, q]);
 
   if (!open) return null;
-  const pick = (i: Item) => actions.go(i.view);
+  const pick = (i: Item) => { if (i.run) { actions.setPalette(false); i.run(); } else if (i.view) actions.go(i.view); };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[12vh]" onPointerDown={e => { if (e.target === e.currentTarget) actions.setPalette(false); }}>

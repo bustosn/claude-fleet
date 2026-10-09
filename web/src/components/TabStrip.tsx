@@ -3,6 +3,7 @@ import { Bot, FolderGit2, GitBranch, KeyRound, MessageSquare, Plus, Terminal, X 
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, tabKey, useStore, type Tab, type View } from '../lib/store';
+import { openTerminal } from '../lib/terminal';
 
 /** Open views as editor-style tabs. Middle-click closes; the active tab carries the accent line. */
 export function TabStrip() {
@@ -19,6 +20,7 @@ export function TabStrip() {
     <div ref={strip} role="tablist" aria-label="Open views" className="flex h-[34px] shrink-0 items-stretch overflow-x-auto border-b border-line bg-surface [scrollbar-width:thin]">
       {tabs.map(t => <TabButton key={t.key} tab={t} active={t.key === active} label={tabLabel(t.view, snap)} />)}
       <button className="iconbtn my-auto ml-1 shrink-0" style={{ width: 26, height: 26 }} title="New chat" aria-label="New chat" onClick={() => actions.go({ kind: 'new-chat' })}><Plus size={14} aria-hidden="true" /></button>
+      <button className="iconbtn my-auto shrink-0" style={{ width: 26, height: 26 }} title="New terminal (in the current worktree or chat's folder)" aria-label="New terminal" onClick={() => openTerminal()}><Terminal size={14} aria-hidden="true" /></button>
     </div>
   );
 }
@@ -48,6 +50,7 @@ function iconFor(v: View, state?: string) {
   if (v.kind === 'worktree') return GitBranch;
   if (v.kind === 'hub') return KeyRound;
   if (v.kind === 'session') return state ? Terminal : Bot;
+  if (v.kind === 'terminal') return Terminal;
   if (v.kind === 'overview') return FolderGit2;
   return MessageSquare;
 }
@@ -73,6 +76,11 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
     case 'worktree': {
       for (const r of snap?.repos || []) for (const w of r.worktrees) if (w.path.toLowerCase() === v.path.toLowerCase()) return { text: w.isMain ? r.name : `${r.name} / ${w.branch || shortPath(w.path)}`, hint: `${w.path}\n${w.branch || ''}` };
       return { text: shortPath(v.path).split('/').pop() || v.path, hint: v.path };
+    }
+    case 'terminal': {
+      const t = snap?.terminals.find(x => x.id === v.id);
+      if (!t) return { text: 'Terminal', hint: 'Terminal (no longer running)', state: 'ended' };
+      return { text: t.title, hint: `${t.shell}\n${t.cwd}`, state: t.exitCode == null ? undefined : 'ended' };
     }
   }
 }

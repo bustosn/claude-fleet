@@ -5,6 +5,7 @@ import { ResumeView, NewChatView } from '../views/StartChat';
 import { WorktreeView } from '../views/WorktreeView';
 import { SessionView } from '../views/SessionView';
 import { HubView } from '../views/HubView';
+import { TerminalView } from '../views/TerminalView';
 import { TabStrip } from './TabStrip';
 
 export function Main() {
@@ -18,6 +19,7 @@ export function Main() {
       {view.kind === 'new-chat' && <NewChatView cwd={view.cwd} />}
       {view.kind === 'worktree' && <WorktreeView path={view.path} />}
       {view.kind === 'session' && <SessionView id={view.id} />}
+      {view.kind === 'terminal' && <TerminalView key={view.id} id={view.id} />}
       {view.kind === 'hub' && <HubView />}
     </main>
   );
