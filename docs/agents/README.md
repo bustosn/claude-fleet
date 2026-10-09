@@ -14,6 +14,7 @@ Start here if you are a Claude session asked to change this app.
 ```
 npm run dev        # API on 7778 with restart-on-change, Vite on 5178 with HMR
 npm run check      # typecheck both sides and build the web app
+node scripts/smoke.mjs http://127.0.0.1:7778   # the running dev API renders in headless Chrome; ship runs this against every build before the restart
 npm start          # daily instance: API on 7777 serving dist/web
 ```
 
@@ -31,6 +32,7 @@ The daily instance on 7777 belongs to the person using the app. Never restart it
 ## Decisions already made
 
 - Backend stays Node because the Agent SDK is a Node library. A desktop shell (Tauri) would wrap this server, not replace it.
+- Never build a fallback inside a `useStore` selector (`s.x || []`, `.map`, `.filter`): a fresh value each read makes useSyncExternalStore loop until React gives up, and the page is blank. Select the raw field; apply the fallback outside.
 - `claude agents --json` is the source of truth for sessions. The jobs folder and transcript files are read best-effort only; their format is not a stable contract.
 - Chats that resume a session currently open in a terminal are forked, never shared.
 - Automated approval of the AWS SSO consent page is off. The code exists (`server/awsApprove.ts`) but the user's Entra tenant prompts for sign-in in a fresh profile every time, which defeats the purpose.

@@ -34,8 +34,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\autostart.ps1 -Restart   # af
 Shipping a change, once it is committed on `dev`:
 
 ```
-npm run ship       # from either checkout: merge dev into main, install if the lockfile changed, build, restart the daily instance, push main
+npm run ship       # from either checkout: merge dev into main, install if the lockfile changed, build, smoke-test, restart the daily instance, push main
 ```
+
+The smoke test loads the fresh build in headless Chrome on a spare port and fails the ship if the app does not render or throws, so a bad build never reaches the daily instance. Run it by hand against anything: `node scripts/smoke.mjs http://127.0.0.1:7777`. It leaves a screenshot in `state/smoke.png`.
 
 To have any `git merge` or `git pull` on main build and restart by itself, point git at the tracked hooks once:
 
