@@ -43,6 +43,8 @@ To have any `git merge` or `git pull` on main build and restart by itself, point
 cd ~/claude-fleet && git config core.hooksPath scripts/hooks
 ```
 
+`ship` turns hooks off for its own merge, so enabling them does not make it build and restart twice.
+
 A restart ends the daily instance's live chat processes; they reopen from their saved sessions on the next start.
 
 ## What it reads and drives
