@@ -61,3 +61,5 @@ Design and roadmap: [`docs/plans/`](docs/plans/). If you are an agent working on
 ## Config
 
 `fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), and the `aws` section.
+
+Moving to another machine: those first three paths are the only machine-specific values. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.
