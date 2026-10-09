@@ -7,6 +7,7 @@ Node + TypeScript server, React + TypeScript + Vite + Tailwind web app. No frame
 ## Run
 
 ```
+cp fleet.config.example.json fleet.config.json   # once, then set reposRoot and claudeHome
 npm install
 npm run build      # once, builds the web app into dist/web
 npm start          # daily instance: http://127.0.0.1:7777
@@ -62,4 +63,4 @@ Design and roadmap: [`docs/plans/`](docs/plans/). If you are an agent working on
 
 `fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), and the `aws` section.
 
-Moving to another machine: those first three paths are the only machine-specific values. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.
+It is not tracked: each machine (and each worktree) keeps its own copy, made from `fleet.config.example.json`. `reposRoot` and `claudeHome` are the only values that have to change. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.

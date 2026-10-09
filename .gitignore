@@ -2,3 +2,5 @@ node_modules/
 *.log
 state/
 dist/
+# Per-machine: copy fleet.config.example.json and set the paths for this machine.
+fleet.config.json

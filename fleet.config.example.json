@@ -1,8 +1,8 @@
 {
   "port": 7777,
-  "reposRoot": "C:/Users/kingn",
+  "reposRoot": "C:/Users/you/Code",
   "extraRepos": [],
-  "claudeHome": "C:/Users/kingn/.claude",
+  "claudeHome": "C:/Users/you/.claude",
   "poll": {
     "agentsMs": 3000,
     "gitMs": 10000,
@@ -42,6 +42,12 @@
   },
   "aws": {
     "profile": "",
-    "autoRefresh": false
+    "credProfile": "default",
+    "resetScript": "C:/Users/you/bin/awsreset",
+    "ssoRegion": "us-east-1",
+    "chromePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "autoApprove": false,
+    "autoRefresh": true,
+    "autoRefreshMinutesBefore": 60
   }
 }
