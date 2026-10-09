@@ -21,7 +21,9 @@ if (-not $BuildOnly) {
   if ($current -ne 'main') { throw "main checkout is on '$current', expected main" }
   if (git status --porcelain) { throw "main checkout has uncommitted changes; commit or discard them first" }
   Write-Host "merging $Branch into main"
-  git merge --no-edit $Branch
+  # Hooks off for this merge: core.hooksPath would fire post-merge, which calls this script again (-BuildOnly).
+  # The build and restart below cover it once. The path only has to not exist.
+  git -c core.hooksPath=scripts/hooks-off merge --no-edit $Branch
   if ($LASTEXITCODE -ne 0) { throw "merge failed; resolve it in $main" }
 }
 $after = git rev-parse HEAD
