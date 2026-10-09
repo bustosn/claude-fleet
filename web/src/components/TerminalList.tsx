@@ -6,7 +6,9 @@ import { openTerminal } from '../lib/terminal';
 
 /** Sidebar section: every shell Fleet is running, including ones whose tab was closed. */
 export function TerminalList() {
-  const terms = useStore(s => s.snapshot?.terminals || []);
+  // The fallback stays outside the selector: useSyncExternalStore compares results by identity,
+  // and a fresh [] on every call reads as a store change, which loops until React gives up.
+  const terms = useStore(s => s.snapshot?.terminals) || [];
   const view = useStore(s => s.view);
   const active = view.kind === 'terminal' ? view.id : null;
   const kill = (id: string) => api.closeTerminal(id).then(() => actions.closeTab(tabKey({ kind: 'terminal', id }))).catch(e => actions.toast(e.message, 'error'));
