@@ -48,11 +48,16 @@ export interface SlashCommandView { name: string; description: string; argumentH
 
 export interface PermissionView { id: string; toolName: string; input: string; suggestions: number }
 
+/** Token counts. `input` is uncached prompt tokens; cacheRead and cacheWrite are the cached parts of the same prompt. */
+export interface TokenUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
+
 export interface ChatSummary {
   id: string; sessionId: string | null; resumeId: string | null; forked: boolean; cwd: string; model: string; title: string;
   repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null; permissionMode: string; status: ChatStatus; startedAt: number;
   pending: PermissionView[]; error: string | null;
   asksIn: { id: string; from: string }[]; asksOut: { id: string; to: string }[];
+  /** Session totals from the latest result (the SDK reports them cumulatively), plus the size of the prompt the model last saw. Null until the first turn ends. */
+  tokens: { total: TokenUsage; context: number; contextWindow: number | null } | null;
 }
 
 export interface Role { model: string; effort: string; purpose: string }
@@ -82,7 +87,10 @@ export type ChatEvent =
   | { t: 'tool_result'; toolUseId: string; isError: boolean; text: string; length: number; at: number }
   | { t: 'permission'; id: string; toolName: string; input: string; suggestions: number; at: number }
   | { t: 'permission_resolved'; id: string; behavior: 'allow' | 'deny'; at: number }
-  | { t: 'result'; subtype: string; cost: number | null; duration: number | null; turns: number | null; errors: string[] | null; at: number }
+  /** Live during a turn: what this turn has used so far, and how big the prompt was at the latest model step. */
+  | { t: 'usage'; turn: TokenUsage; context: number; at: number }
+  | { t: 'result'; subtype: string; cost: number | null; duration: number | null; turns: number | null; errors: string[] | null;
+      usage: TokenUsage | null; total: TokenUsage | null; context: number; contextWindow: number | null; at: number }
   | { t: 'error'; message: string; at: number };
 
 export interface AwsRun {

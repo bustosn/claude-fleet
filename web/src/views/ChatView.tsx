@@ -2,9 +2,10 @@ import { useEffect, useReducer, useRef, useState, type FormEvent, type KeyboardE
 import { ArrowRight, Pencil, Send, Square, X } from 'lucide-react';
 import { api, subscribe, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type SlashCommandView } from '../lib/api';
 import { md, esc } from '../lib/markdown';
-import { shortPath } from '../lib/format';
+import { fmtTokens, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Status, WorktreePicker } from '../components/ui';
+import type { TokenUsage } from '../../../shared/types';
 
 type Entry =
   | { k: 'user'; id: number; text: string; origin: MessageOrigin }
@@ -17,11 +18,15 @@ type Entry =
 type EntryInput = Entry extends infer E ? (E extends Entry ? Omit<E, 'id'> : never) : never;
 /** What the model is doing right now, shown under the log while a turn runs. */
 type Activity = { kind: 'thinking' | 'tool'; name?: string; since: number } | null;
-interface ChatState { entries: Entry[]; status: ChatStatus; summary: ChatSummary | null; seq: number; activity: Activity }
+/** Token readout. `estOut` is a chars/4 guess for text that has streamed since the last exact count, so the number keeps moving mid-reply. */
+type Tokens = { turn: TokenUsage; context: number; estOut: number; total: TokenUsage | null; contextWindow: number | null; cost: number | null };
+const noUsage: TokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+const noTokens: Tokens = { turn: noUsage, context: 0, estOut: 0, total: null, contextWindow: null, cost: null };
+interface ChatState { entries: Entry[]; status: ChatStatus; summary: ChatSummary | null; seq: number; activity: Activity; tokens: Tokens | null }
 type Action = { type: 'event'; ev: ChatEvent } | { type: 'summary'; summary: ChatSummary } | { type: 'history'; evs: ChatEvent[] } | { type: 'sys'; text: string; err?: boolean };
 
 function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
-  let { entries, seq, status, activity } = state;
+  let { entries, seq, status, activity, tokens } = state;
   const now = Date.now();
   const thinking = (keepSince = false) => { activity = { kind: 'thinking', since: keepSince && activity ? activity.since : now }; };
   const push = (e: EntryInput) => { entries = [...entries, { ...e, id: ++seq } as Entry]; };
@@ -34,7 +39,9 @@ function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
       if (last?.k === 'assistant' && last.streaming) entries = entries.map(e => e === last ? { ...e, text: e.text + ev.text } : e);
       else push({ k: 'assistant', text: ev.text, streaming: true });
       activity = null; // words are arriving; the text itself is the signal
+      if (tokens) tokens = { ...tokens, estOut: tokens.estOut + ev.text.length / 4 };
       break;
+    case 'usage': tokens = { ...(tokens || noTokens), turn: ev.turn, context: ev.context, estOut: 0 }; break;
     case 'tool_start': if (last?.k === 'assistant' && last.streaming) entries = entries.map(e => e === last ? { ...e, streaming: false } : e); activity = { kind: 'tool', name: ev.name, since: now }; break;
     case 'assistant': {
       // The complete message replaces the entry the deltas were streaming into instead of adding a second copy.
@@ -57,25 +64,37 @@ function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
     }
     case 'permission': push({ k: 'perm', permId: ev.id, toolName: ev.toolName, input: ev.input }); status = 'needs-you'; activity = null; break;
     case 'permission_resolved': entries = entries.map(e => e.k === 'perm' && e.permId === ev.id ? { ...e, resolved: ev.behavior } : e); thinking(); break;
-    case 'result': activity = null; push({ k: 'sys', text: `turn done, ${ev.subtype}${ev.cost != null ? `, $${ev.cost.toFixed(3)}` : ''}${ev.duration ? `, ${(ev.duration / 1000).toFixed(1)}s` : ''}${ev.errors ? `, ${ev.errors.join('; ')}` : ''}` }); break;
+    case 'result': {
+      activity = null;
+      const t = tokens || noTokens;
+      tokens = { turn: ev.usage || t.turn, context: ev.context || t.context, estOut: 0, total: ev.total ?? t.total, contextWindow: ev.contextWindow ?? t.contextWindow, cost: ev.cost ?? t.cost };
+      const u = ev.usage;
+      push({ k: 'sys', text: `turn done, ${ev.subtype}${u ? `, ${fmtTokens(u.input + u.cacheRead + u.cacheWrite)} in, ${fmtTokens(u.output)} out` : ''}${ev.cost != null ? `, $${ev.cost.toFixed(3)}` : ''}${ev.duration ? `, ${(ev.duration / 1000).toFixed(1)}s` : ''}${ev.errors ? `, ${ev.errors.join('; ')}` : ''}` });
+      break;
+    }
     case 'error': push({ k: 'sys', text: ev.message, err: true }); activity = null; break;
     case 'init': break;
   }
   if (history) return { ...state, entries, seq };
-  return { ...state, entries, seq, status, activity };
+  return { ...state, entries, seq, status, activity, tokens };
 }
 
 function reducer(state: ChatState, a: Action): ChatState {
   switch (a.type) {
     case 'event': return apply(state, a.ev, false);
     case 'history': { let s = state; for (const ev of a.evs) s = apply(s, ev, true); return { ...s, entries: [...s.entries, { k: 'sys', id: ++s.seq, text: 'end of saved history' }] }; }
-    case 'summary': return { ...state, summary: a.summary, status: a.summary.status, activity: a.summary.status === 'running' ? state.activity || { kind: 'thinking', since: Date.now() } : null };
+    case 'summary': {
+      // Session totals survive reopening the tab; the live turn figures only exist while the tab is subscribed.
+      const st = a.summary.tokens;
+      const tokens = st ? { ...(state.tokens || noTokens), total: st.total, contextWindow: st.contextWindow, context: state.tokens?.context || st.context } : state.tokens;
+      return { ...state, summary: a.summary, status: a.summary.status, tokens, activity: a.summary.status === 'running' ? state.activity || { kind: 'thinking', since: Date.now() } : null };
+    }
     case 'sys': return { ...state, entries: [...state.entries, { k: 'sys', id: state.seq + 1, text: a.text, err: a.err }], seq: state.seq + 1 };
   }
 }
 
 export function ChatView({ chatId }: { chatId: string }) {
-  const [state, dispatch] = useReducer(reducer, { entries: [], status: 'starting', summary: null, seq: 0, activity: null });
+  const [state, dispatch] = useReducer(reducer, { entries: [], status: 'starting', summary: null, seq: 0, activity: null, tokens: null });
   const snap = useStore(s => s.snapshot);
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -163,10 +182,11 @@ export function ChatView({ chatId }: { chatId: string }) {
 
       <div ref={log} className="grid min-h-0 flex-1 auto-rows-max content-start gap-2 overflow-y-auto px-4 py-3" onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
         {state.entries.length === 0 && <div className="msg sys">Say what you need. Replies stream in here, and tool calls show as they run.</div>}
-        {state.entries.map(e => <EntryView key={e.id} e={e} chatId={chatId} />)}
+        {groupTools(state.entries).map(e => e.k === 'group' ? <ToolGroup key={e.id} tools={e.tools} chatId={chatId} /> : <EntryView key={e.id} e={e} chatId={chatId} />)}
         {state.activity && <ActivityRow activity={state.activity} />}
       </div>
 
+      <TokenStrip t={state.tokens} running={state.status === 'running'} />
       <form className="relative flex gap-2 border-t border-line bg-surface px-4 py-3" onSubmit={send}>
         {menuOpen && <CommandMenu matches={matches} index={Math.min(cmdIndex, matches.length - 1)} onPick={pickCommand} onHover={setCmdIndex} />}
         <textarea ref={composer} className="input flex-1" rows={3} value={text} placeholder="Message Claude. Enter sends, Shift+Enter for a new line, / for commands." onChange={e => { setText(e.target.value); setCmdIndex(0); setCmdDismissed(false); }}
@@ -197,6 +217,24 @@ function CommandMenu({ matches, index, onPick, onHover }: { matches: SlashComman
   );
 }
 
+/** Context fill, this turn, and session totals. "in" counts every prompt token the model read, cached or not, so a turn with many tool
+ *  steps reads far more than its context size. The output count is a chars/4 guess (marked ~) until the step reports the exact number. */
+function TokenStrip({ t, running }: { t: Tokens | null; running: boolean }) {
+  if (!t) return null;
+  const read = (u: TokenUsage) => u.input + u.cacheRead + u.cacheWrite;
+  const out = t.turn.output + (running ? Math.round(t.estOut) : 0);
+  const pct = t.contextWindow ? Math.round((t.context / t.contextWindow) * 100) : null;
+  const level = pct == null ? '' : pct >= 90 ? 'text-crit' : pct >= 70 ? 'text-warn' : '';
+  const n = (v: number, cls = '') => <b className={`num text-fg-muted ${cls}`}>{fmtTokens(v)}</b>;
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-line bg-surface px-4 py-1 text-[11px] text-fg-faint mono" role="status" aria-live={running ? 'polite' : 'off'} title="Tokens: context is the prompt size at the latest model step; in/out are totals for the turn and the session">
+      <span>context {n(t.context, level)}{t.contextWindow ? <> of {fmtTokens(t.contextWindow)} <span className={level}>{pct}%</span></> : null}</span>
+      <span>turn {n(read(t.turn))} in, {running && t.estOut > 0 ? '~' : ''}{n(out)} out</span>
+      {t.total && <span>session {n(read(t.total))} in, {n(t.total.output)} out{t.cost != null ? `, $${t.cost.toFixed(2)}` : ''}</span>}
+    </div>
+  );
+}
+
 /** Pulsing dots plus what is happening and for how long. Gone the moment words stream or the turn ends. */
 function ActivityRow({ activity }: { activity: NonNullable<Activity> }) {
   const [, tick] = useState(0);
@@ -209,6 +247,41 @@ function ActivityRow({ activity }: { activity: NonNullable<Activity> }) {
       <span>{label}</span>
       <span className="num text-fg-faint">{secs}s</span>
     </div>
+  );
+}
+
+type ToolEntry = Extract<Entry, { k: 'tool' }>;
+type Rendered = Entry | { k: 'group'; id: number; tools: ToolEntry[] };
+
+/** Consecutive tool calls fold into one row, like the terminal does, so the log reads prompt to reply. A lone call stays as it is. */
+function groupTools(entries: Entry[]): Rendered[] {
+  const out: Rendered[] = [];
+  for (const e of entries) {
+    const prev = out[out.length - 1];
+    if (e.k === 'tool' && prev?.k === 'group') prev.tools.push(e);
+    else if (e.k === 'tool') out.push({ k: 'group', id: e.id, tools: [e] }); // keyed by the first call, so the row keeps its open state as calls are added
+    else out.push(e);
+  }
+  return out.map(e => e.k === 'group' && e.tools.length === 1 ? e.tools[0] : e);
+}
+
+const toolLabel = (name: string) => name.replace(/^mcp__fleet__/, 'fleet: ');
+
+function ToolGroup({ tools, chatId }: { tools: ToolEntry[]; chatId: string }) {
+  const counts = new Map<string, number>();
+  for (const t of tools) counts.set(toolLabel(t.name), (counts.get(toolLabel(t.name)) || 0) + 1);
+  const errors = tools.filter(t => t.result?.isError).length;
+  const running = tools.filter(t => !t.result).length;
+  return (
+    <details className="msg tool group">
+      <summary>
+        <span className="font-semibold text-info">{tools.length} tool calls</span>
+        <span className="text-fg-faint"> · {[...counts].map(([n, c]) => c > 1 ? `${n} ×${c}` : n).join(', ')}</span>
+        {errors > 0 && <span className="text-crit"> · {errors} error{errors > 1 ? 's' : ''}</span>}
+        {running > 0 && <span className="text-fg-faint"> · {running} running</span>}
+      </summary>
+      <div className="grid gap-1.5 px-2.5 pb-2.5">{tools.map(t => <EntryView key={t.id} e={t} chatId={chatId} />)}</div>
+    </details>
   );
 }
 

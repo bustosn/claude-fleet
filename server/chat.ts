@@ -5,7 +5,7 @@ import { query, type SDKUserMessage, type Query } from '@anthropic-ai/claude-age
 import { createFleetServer, FLEET_TOOL_NAMES } from './fleetTools.js';
 import { summarizeInput } from './sources/conversations.js';
 import type { FleetConfig } from './config.js';
-import type { ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, PermissionView, SlashCommandView } from '../shared/types.js';
+import type { ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
 class Inbox implements AsyncIterable<SDKUserMessage> {
@@ -84,12 +84,18 @@ export class ChatManager extends EventEmitter {
   }
 }
 
+
+const zeroUsage = (): TokenUsage => ({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
+
 export class Chat extends EventEmitter {
   mgr: ChatManager; id = randomUUID().slice(0, 8);
   resumeId: string | null; sessionId: string | null; cwd: string; model: string; fork: boolean; permissionMode: string;
   status: ChatStatus = 'starting'; events: ChatEvent[] = []; pending = new Map<string, Pending>(); inbox = new Inbox();
   abort = new AbortController(); startedAt = Date.now(); error: string | null = null;
   firstText = ''; asksIn: AskRecord[] = []; asksOut: AskRecord[] = []; turnText = '';
+  // Token accounting. `turn` accumulates over the model steps of the current turn; `stepOutput` is what the current step has reported so far
+  // (message_delta carries a cumulative count). `context` is the prompt size at the latest step. `total` comes from the SDK, cumulative per session.
+  turn: TokenUsage = zeroUsage(); private stepOutput = 0; context = 0; total: TokenUsage | null = null; contextWindow: number | null = null;
   private q: Query | null = null;
   private commands: import('@anthropic-ai/claude-agent-sdk').SlashCommand[] = [];
   private terminalCommands = new Set<string>();
@@ -108,7 +114,8 @@ export class Chat extends EventEmitter {
     return { id: this.id, sessionId: this.sessionId, resumeId: this.resumeId, forked: this.fork, cwd: this.cwd, model: this.model, title: this.title,
       repo: wt?.repo || null, branch: wt?.branch || null, worktree: wt?.path || null, locatedBy: wt?.by || null,
       permissionMode: this.permissionMode, status: this.status, startedAt: this.startedAt, pending: [...this.pending.values()].map(p => p.view), error: this.error,
-      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })) };
+      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })),
+      tokens: this.total ? { total: this.total, context: this.context, contextWindow: this.contextWindow } : null };
   }
 
   emitEvent(ev: ChatEventInput) {
@@ -129,6 +136,7 @@ export class Chat extends EventEmitter {
       const tail = origin.askId ? `\n\nAnswer by calling fleet_reply with ask_id "${origin.askId}". Be concise and concrete.` : '';
       body = `${head}\n\n${text}${tail}`;
     }
+    this.turn = zeroUsage(); this.stepOutput = 0; // a new turn starts with this message
     this.inbox.push({ type: 'user', message: { role: 'user', content: body }, parent_tool_use_id: null } as SDKUserMessage);
     this.emitEvent({ t: 'user', text, origin: origin || null });
     this.turnText = '';
@@ -198,6 +206,18 @@ export class Chat extends EventEmitter {
           if (e.type === 'content_block_delta' && e.delta?.type === 'text_delta') this.emitEvent({ t: 'delta', text: e.delta.text });
           else if (e.type === 'content_block_start' && e.content_block?.type === 'tool_use') this.emitEvent({ t: 'tool_start', name: e.content_block.name });
           else if (e.type === 'content_block_start' && e.content_block?.type === 'thinking') this.emitEvent({ t: 'thinking' });
+          else if (e.type === 'message_start') {
+            // One model step begins: its prompt size is known now. Output arrives at the step's end in message_delta.
+            const u = e.message?.usage || {};
+            const input = u.input_tokens || 0, cacheRead = u.cache_read_input_tokens || 0, cacheWrite = u.cache_creation_input_tokens || 0;
+            this.turn.input += input; this.turn.cacheRead += cacheRead; this.turn.cacheWrite += cacheWrite;
+            this.context = input + cacheRead + cacheWrite; this.stepOutput = 0;
+            this.emitEvent({ t: 'usage', turn: { ...this.turn }, context: this.context });
+          }
+          else if (e.type === 'message_delta' && typeof e.usage?.output_tokens === 'number') {
+            this.turn.output += e.usage.output_tokens - this.stepOutput; this.stepOutput = e.usage.output_tokens;
+            this.emitEvent({ t: 'usage', turn: { ...this.turn }, context: this.context });
+          }
           break;
         }
         case 'assistant': {
@@ -216,12 +236,23 @@ export class Chat extends EventEmitter {
           }
           break;
         }
-        case 'result':
-          this.emitEvent({ t: 'result', subtype: msg.subtype, cost: msg.total_cost_usd ?? null, duration: msg.duration_ms ?? null, turns: msg.num_turns ?? null, errors: msg.errors || null });
+        case 'result': {
+          // `usage` is this turn, main loop only. `modelUsage` is cumulative for the session and is where the context window size lives.
+          const u = msg.usage;
+          const usage: TokenUsage | null = u ? { input: u.input_tokens || 0, cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0, output: u.output_tokens || 0 } : null;
+          const models = Object.values(msg.modelUsage || {}) as any[];
+          if (models.length) {
+            this.total = models.reduce((a, m) => ({ input: a.input + (m.inputTokens || 0), cacheRead: a.cacheRead + (m.cacheReadInputTokens || 0), cacheWrite: a.cacheWrite + (m.cacheCreationInputTokens || 0), output: a.output + (m.outputTokens || 0) }), zeroUsage());
+            this.contextWindow = Math.max(0, ...models.map(m => m.contextWindow || 0)) || null;
+          }
+          if (usage) this.turn = usage;
+          this.emitEvent({ t: 'result', subtype: msg.subtype, cost: msg.total_cost_usd ?? null, duration: msg.duration_ms ?? null, turns: msg.num_turns ?? null, errors: msg.errors || null,
+            usage, total: this.total, context: this.context, contextWindow: this.contextWindow });
           // Fallback for asks the target answered in prose instead of via fleet_reply: only when the turn clearly belonged to that ask.
           for (const a of [...this.asksIn]) if (a.unambiguous && this.turnText.trim()) a.resolve(this.turnText.trim());
           this.setStatus(this.pending.size ? 'needs-you' : 'idle');
           break;
+        }
         default:
           break;
       }

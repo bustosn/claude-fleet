@@ -18,6 +18,9 @@ export function timeLeft(iso: string | null): { text: string; level: 'ok' | 'war
 
 export const shortPath = (p: string | null | undefined) => (p || '').replace(/\\/g, '/').replace(/^C:\/Users\/[^/]+\//i, '~/').replace(/^C:\/Users\/[^/]+$/i, '~');
 
+/** 950 → "950", 12345 → "12.3k", 123456 → "123k", 1500000 → "1.50M". */
+export const fmtTokens = (n: number) => n < 1000 ? String(Math.round(n)) : n < 10000 ? `${(n / 1000).toFixed(1)}k` : n < 1e6 ? `${Math.round(n / 1000)}k` : `${(n / 1e6).toFixed(2)}M`;
+
 /** Ticket key from a branch or folder name: JL-1234, MERC-55, DEVSD-9. */
 export function ticketKey(s: string | null | undefined): string | null {
   const m = (s || '').match(/\b([A-Z]{2,6}-\d{2,6})\b/i);
