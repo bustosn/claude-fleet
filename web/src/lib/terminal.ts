@@ -9,6 +9,7 @@ export function currentFolder(): string | undefined {
   if (view.kind === 'terminal') return snapshot?.terminals.find(t => t.id === view.id)?.cwd;
   if (view.kind === 'session') return snapshot?.sessions.find(s => s.id === view.id)?.cwd;
   if (view.kind === 'new-chat' || view.kind === 'resume') return view.cwd;
+  if (view.kind === 'dialogue') return snapshot?.dialogues.find(d => d.id === view.id)?.cwd;
   return undefined;
 }
 

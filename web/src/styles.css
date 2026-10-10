@@ -125,6 +125,14 @@ dialog label { display: grid; gap: 4px; margin-bottom: 10px; font-size: 12px; co
 .msg.user { background: var(--accent-soft); justify-self: end; max-width: 80%; white-space: pre-wrap; }
 .msg.user.peer { background: var(--warn-soft); justify-self: start; max-width: 90%; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
 .msg.user.manual { background: var(--good-soft); justify-self: start; max-width: 90%; border: 1px solid color-mix(in srgb, var(--good) 45%, transparent); }
+.msg.user.dialogue { background: var(--raised); justify-self: start; max-width: 90%; border: 1px solid var(--line-strong); max-height: 240px; overflow: auto; }
+/* Dialogue transcript: side A on the left, side B on the right, a moderator note between them. */
+.msg.turn { max-width: 82%; border: 1px solid var(--line); background: var(--surface); }
+.msg.turn.a { justify-self: start; background: var(--accent-soft); }
+.msg.turn.b { justify-self: end; background: var(--raised); }
+.msg.turn p { margin: 0 0 8px; } .msg.turn p:last-child { margin: 0; } .msg.turn ul { margin: 4px 0; padding-left: 20px; }
+.msg.note { justify-self: center; max-width: 70%; background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); white-space: pre-wrap; }
+.side { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: 6px; border-radius: 4px; background: var(--fg-muted); color: var(--surface); font-size: 10px; font-weight: 700; vertical-align: -3px; }
 .msg.assistant { background: var(--surface); border: 1px solid var(--line); }
 .msg.assistant p { margin: 0 0 8px; } .msg.assistant p:last-child { margin: 0; }
 .msg.assistant ul { margin: 4px 0; padding-left: 20px; }

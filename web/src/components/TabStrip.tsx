@@ -1,5 +1,6 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
-import { Bot, FolderGit2, GitBranch, KeyRound, MessageSquare, Plus, Terminal, X } from 'lucide-react';
+import { Bot, FolderGit2, GitBranch, KeyRound, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
+import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, tabKey, useStore, type Tab, type View } from '../lib/store';
@@ -51,6 +52,7 @@ function iconFor(v: View, state?: string) {
   if (v.kind === 'hub') return KeyRound;
   if (v.kind === 'session') return state ? Terminal : Bot;
   if (v.kind === 'terminal') return Terminal;
+  if (v.kind === 'dialogue' || v.kind === 'new-dialogue') return Users;
   if (v.kind === 'overview') return FolderGit2;
   return MessageSquare;
 }
@@ -76,6 +78,12 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
     case 'worktree': {
       for (const r of snap?.repos || []) for (const w of r.worktrees) if (w.path.toLowerCase() === v.path.toLowerCase()) return { text: w.isMain ? r.name : `${r.name} / ${w.branch || shortPath(w.path)}`, hint: `${w.path}\n${w.branch || ''}` };
       return { text: shortPath(v.path).split('/').pop() || v.path, hint: v.path };
+    }
+    case 'new-dialogue': return { text: 'New dialogue', hint: 'Two chats talk a topic through' };
+    case 'dialogue': {
+      const d = snap?.dialogues.find(x => x.id === v.id);
+      if (!d) return { text: 'Dialogue', hint: 'Dialogue (no longer known)', state: 'ended' };
+      return { text: d.topic, hint: `${d.topic}\n${d.participants.map(p => p.name).join(' and ')} · ${d.turns}/${d.rounds * 2} messages`, state: dialogueDot[d.status] };
     }
     case 'terminal': {
       const t = snap?.terminals.find(x => x.id === v.id);

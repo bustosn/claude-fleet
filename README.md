@@ -59,6 +59,7 @@ A restart ends the daily instance's live chat processes; they reopen from their 
 | Saved conversations | the Agent SDK's `listSessions`, `getSessionMessages`, `renameSession` |
 | Chats | the Agent SDK's `query()` in streaming-input mode, one subprocess per chat |
 | Agent-to-agent | an in-process MCP server (`fleet_list_chats`, `fleet_send`, `fleet_ask`, `fleet_reply`, `fleet_read`) mounted into every chat |
+| Dialogues | two chats talk a topic through: the server relays each message, counts rounds, and you steer, pause, extend, or stop. Transcript as markdown |
 | AWS credentials | `~/bin/awsreset` for the silent path; `aws sso login --use-device-code` with the approval page opened in your browser as the fallback |
 | Terminals | `node-pty` shells in the server, `xterm.js` in a tab, a WebSocket between them. Closing the tab keeps the shell; Kill ends it. A `claude` started in one shows up as a session like any other |
 

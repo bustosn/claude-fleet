@@ -4,7 +4,7 @@ Start here if you are a Claude session asked to change this app.
 
 ## Orientation
 
-- `server/` is a Node + TypeScript API, run with `tsx` (no build step). `server/index.ts` is the route list; `server/collector.ts` builds the snapshot; `server/chat.ts` hosts chats; `server/fleetTools.ts` is the agent-to-agent toolset; `server/aws.ts` is the credential hub.
+- `server/` is a Node + TypeScript API, run with `tsx` (no build step). `server/index.ts` is the route list; `server/collector.ts` builds the snapshot; `server/chat.ts` hosts chats; `server/dialogue.ts` runs two chats against each other on a topic; `server/fleetTools.ts` is the agent-to-agent toolset; `server/aws.ts` is the credential hub.
 - `web/` is React + TypeScript + Vite + Tailwind. `web/src/lib/store.ts` holds all UI state (one external store, no context tree). Views live in `web/src/views`, shell pieces in `web/src/components`.
 - `shared/types.ts` is the contract between the two. Change it first, then both sides.
 - `docs/plans/` is the design intent. Where it disagrees with the code, the code wins; update the doc.

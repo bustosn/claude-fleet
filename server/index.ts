@@ -10,6 +10,7 @@ import { Collector } from './collector.js';
 import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
 import { TerminalManager, type Terminal } from './terminals.js';
+import { DialogueManager } from './dialogue.js';
 import { conversationHistory } from './sources/conversations.js';
 import { run, errText } from './util.js';
 
@@ -28,6 +29,12 @@ const aws = new AwsCreds(config.aws, stateDir);
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
 terminals.on('change', () => collector.publish());
+const dialogues = new DialogueManager(chats);
+collector.dialogues = dialogues;
+dialogues.on('change', () => collector.publish());
+// Participant chats start here by default: no project CLAUDE.md, so the two sides argue the topic, not a repo.
+const scratchDir = path.join(stateDir, 'scratch');
+fs.mkdirSync(scratchDir, { recursive: true });
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -136,6 +143,39 @@ app.post('/api/chats/:id/permission', (req, res) => {
 app.post('/api/chats/:id/interrupt', async (req, res) => { const c = chats.get(req.params.id); if (!c) return res.status(404).end(); await c.interrupt(); res.json({ ok: true }); });
 app.delete('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); if (!c) return res.status(404).end(); c.close(); res.json({ ok: true }); });
 
+// Dialogues: two chats talking about a topic, Fleet relaying each turn. The person is the moderator: pause, steer, extend, stop.
+app.post('/api/dialogues', (req, res) => {
+  const b = req.body || {};
+  const dir = b.cwd ? String(b.cwd) : scratchDir;
+  if (!fs.existsSync(dir)) return res.status(400).json({ error: `cwd not found: ${dir}` });
+  try { res.json(dialogues.start({ topic: b.topic, rounds: b.rounds, maxWords: b.maxWords, cwd: dir, permissionMode: b.permissionMode, participants: b.participants }).summary()); }
+  catch (err) { res.status(400).json({ error: errText(err) }); }
+});
+app.get('/api/dialogues', (_req, res) => res.json(dialogues.list()));
+app.get('/api/dialogues/:id', (req, res) => { const d = dialogues.get(req.params.id); d ? res.json(d.summary()) : res.status(404).json({ error: 'no such dialogue' }); });
+app.get('/api/dialogues/:id/transcript.md', (req, res) => { const d = dialogues.get(req.params.id); d ? res.type('text/markdown').send(d.transcript()) : res.status(404).json({ error: 'no such dialogue' }); });
+app.get('/api/dialogues/:id/events', (req, res) => {
+  const d = dialogues.get(req.params.id); if (!d) return res.status(404).end();
+  const s = sse(res);
+  s.send(d.summary(), 'dialogue');
+  for (const ev of d.events) s.send(ev);
+  const onEv = (ev: unknown) => { s.send(ev); s.send(d.summary(), 'dialogue'); };
+  d.on('event', onEv);
+  req.on('close', () => { d.off('event', onEv); s.stop(); });
+});
+for (const action of ['pause', 'resume', 'stop', 'steer', 'extend'] as const) {
+  app.post(`/api/dialogues/:id/${action}`, (req, res) => {
+    const d = dialogues.get(req.params.id); if (!d) return res.status(404).json({ error: 'no such dialogue' });
+    try {
+      if (action === 'steer') d.steer(String(req.body?.text || ''));
+      else if (action === 'extend') d.extend(Number(req.body?.rounds) || 1);
+      else d[action]();
+      res.json(d.summary());
+    } catch (err) { res.status(400).json({ error: errText(err) }); }
+  });
+}
+app.delete('/api/dialogues/:id', (req, res) => dialogues.remove(req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'no such dialogue' }));
+
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.
 app.get('/api/terminals', (_req, res) => res.json(terminals.list()));
 app.post('/api/terminals', (req, res) => {
@@ -179,6 +219,7 @@ if (fs.existsSync(webDist)) {
 
 collector.start();
 chats.persistTo(path.join(stateDir, `chats-${config.port}.json`));
+dialogues.persistTo(path.join(stateDir, `dialogues-${config.port}.json`));
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
@@ -191,5 +232,7 @@ server.listen(config.port, '127.0.0.1', () => {
   console.log(`claude-fleet API on http://127.0.0.1:${config.port}  repos=${config.reposRoot}${fs.existsSync(webDist) ? '  web=dist/web' : '  web=none'}`);
   const reopened = chats.reopen();
   if (reopened) console.log(`reopened ${reopened} chat(s) from the previous run`);
+  const kept = dialogues.reopen();
+  if (kept) console.log(`restored ${kept} dialogue(s); live ones are paused until resumed`);
 });
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); process.exit(0); });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, KeyRound, LayoutGrid, MessageSquare, Plus, Search, Terminal } from 'lucide-react';
+import { GitBranch, KeyRound, LayoutGrid, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
@@ -23,7 +23,9 @@ export function CommandPalette() {
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
       { id: 'terminal', label: 'New terminal', hint: 'open a shell in the folder you are looking at', icon: Terminal, run: () => openTerminal() },
+      { id: 'new-dialogue', label: 'New dialogue', hint: 'two chats talk a topic through while you moderate', icon: Users, view: { kind: 'new-dialogue' } },
     ];
+    for (const d of snap.dialogues) out.push({ id: `d:${d.id}`, label: d.topic, hint: `dialogue · ${d.participants.map(p => p.name).join(' and ')} · ${d.status}`, icon: Users, view: { kind: 'dialogue', id: d.id } });
     for (const t of snap.terminals) out.push({ id: `t:${t.id}`, label: t.title, hint: `terminal · ${shortPath(t.cwd)}${t.exitCode != null ? ' · exited' : ''}`, icon: Terminal, view: { kind: 'terminal', id: t.id } });
     for (const s of snap.sessions) out.push({ id: `s:${s.id}`, label: s.title || s.name, hint: `${s.kind === 'dashboard' ? 'chat' : s.kind} · ${s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)} · ${s.state}`, icon: s.kind === 'dashboard' ? MessageSquare : Terminal,
       view: s.kind === 'dashboard' && s.chatId ? { kind: 'chat', chatId: s.chatId, title: s.title } : { kind: 'session', id: s.id } });

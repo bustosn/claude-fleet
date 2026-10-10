@@ -93,6 +93,8 @@ export class Chat extends EventEmitter {
   status: ChatStatus = 'starting'; events: ChatEvent[] = []; pending = new Map<string, Pending>(); inbox = new Inbox();
   abort = new AbortController(); startedAt = Date.now(); error: string | null = null;
   firstText = ''; asksIn: AskRecord[] = []; asksOut: AskRecord[] = []; turnText = '';
+  /** A dialogue names its participants ("Critic · topic") and owns their turns; both show in the summary. */
+  label: string | null = null; dialogueId: string | null = null;
   // Token accounting. `turn` accumulates over the model steps of the current turn; `stepOutput` is what the current step has reported so far
   // (message_delta carries a cumulative count). `context` is the prompt size at the latest step. `total` comes from the SDK, cumulative per session.
   turn: TokenUsage = zeroUsage(); private stepOutput = 0; context = 0; total: TokenUsage | null = null; contextWindow: number | null = null;
@@ -107,14 +109,14 @@ export class Chat extends EventEmitter {
     this.cwd = opts.cwd; this.model = opts.model; this.fork = opts.fork; this.permissionMode = opts.permissionMode;
   }
 
-  get title(): string { return this.mgr.titleFor(this.sessionId) || this.firstText.slice(0, 60) || `chat ${this.id}`; }
+  get title(): string { return this.label || this.mgr.titleFor(this.sessionId) || this.firstText.slice(0, 60) || `chat ${this.id}`; }
 
   summary(): ChatSummary {
     const wt = this.mgr.locate(this.cwd, this.sessionId || this.resumeId, this.title);
     return { id: this.id, sessionId: this.sessionId, resumeId: this.resumeId, forked: this.fork, cwd: this.cwd, model: this.model, title: this.title,
       repo: wt?.repo || null, branch: wt?.branch || null, worktree: wt?.path || null, locatedBy: wt?.by || null,
       permissionMode: this.permissionMode, status: this.status, startedAt: this.startedAt, pending: [...this.pending.values()].map(p => p.view), error: this.error,
-      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })),
+      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })), dialogueId: this.dialogueId,
       tokens: this.total ? { total: this.total, context: this.context, contextWindow: this.contextWindow } : null };
   }
 
@@ -125,12 +127,12 @@ export class Chat extends EventEmitter {
   }
   setStatus(s: ChatStatus) { this.status = s; this.emitEvent({ t: 'status', status: s }); this.mgr.emit('change'); }
 
-  // origin: null for the person typing; peer/manual for fleet traffic.
+  // origin: null for the person typing; peer/manual for fleet traffic; dialogue text arrives already framed by the orchestrator.
   send(text: string, origin?: MessageOrigin) {
     if (this.status === 'ended') throw new Error('chat ended');
     if (!this.firstText && !origin) this.firstText = text;
     let body = text;
-    if (origin) {
+    if (origin && origin.kind !== 'dialogue') {
       const head = origin.kind === 'manual' ? `[Forwarded from chat "${origin.fromTitle}" (${origin.fromChatId}) by the user]`
         : `[Fleet message from chat "${origin.fromTitle}" (${origin.fromChatId})${origin.askId ? `, ask_id ${origin.askId}` : ''}]`;
       const tail = origin.askId ? `\n\nAnswer by calling fleet_reply with ask_id "${origin.askId}". Be concise and concrete.` : '';

@@ -1,4 +1,6 @@
-import type { AwsRun, AwsStatus, ChatEvent, ChatSummary, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
+import type { AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
+
+export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
@@ -29,13 +31,19 @@ export const api = {
   terminals: () => j<TerminalSummary[]>('/api/terminals'),
   openTerminal: (cwd?: string) => post<TerminalSummary>('/api/terminals', { cwd }),
   closeTerminal: (id: string) => j<{ ok: true }>(`/api/terminals/${id}`, { method: 'DELETE' }),
+  dialogue: (id: string) => j<DialogueSummary>(`/api/dialogues/${id}`),
+  startDialogue: (spec: DialogueSpec) => post<DialogueSummary>('/api/dialogues', spec),
+  dialogueAction: (id: string, action: 'pause' | 'resume' | 'stop') => post<DialogueSummary>(`/api/dialogues/${id}/${action}`),
+  steerDialogue: (id: string, text: string) => post<DialogueSummary>(`/api/dialogues/${id}/steer`, { text }),
+  extendDialogue: (id: string, rounds: number) => post<DialogueSummary>(`/api/dialogues/${id}/extend`, { rounds }),
+  removeDialogue: (id: string) => j<{ ok: true }>(`/api/dialogues/${id}`, { method: 'DELETE' }),
 };
 
 /** Server-sent events with a typed handler. Reconnects on its own; the browser handles that. */
 export function subscribe<T>(url: string, onMessage: (data: T, event: string) => void, onState?: (live: boolean) => void): () => void {
   const es = new EventSource(url);
   es.onmessage = e => onMessage(JSON.parse(e.data), 'message');
-  es.addEventListener('chat', e => onMessage(JSON.parse((e as MessageEvent).data), 'chat'));
+  for (const name of ['chat', 'dialogue']) es.addEventListener(name, e => onMessage(JSON.parse((e as MessageEvent).data), name));
   es.onopen = () => onState?.(true);
   es.onerror = () => onState?.(false);
   return () => es.close();

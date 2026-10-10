@@ -56,6 +56,8 @@ export interface ChatSummary {
   repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null; permissionMode: string; status: ChatStatus; startedAt: number;
   pending: PermissionView[]; error: string | null;
   asksIn: { id: string; from: string }[]; asksOut: { id: string; to: string }[];
+  /** Set while a dialogue orchestrates this chat: its turns arrive from Fleet, not from the person typing. */
+  dialogueId: string | null;
   /** Session totals from the latest result (the SDK reports them cumulatively), plus the size of the prompt the model last saw. Null until the first turn ends. */
   tokens: { total: TokenUsage; context: number; contextWindow: number | null } | null;
 }
@@ -67,11 +69,35 @@ export interface DispatchDefaults { permissionMode: string; defaultModel: string
 export interface TerminalSummary { id: string; cwd: string; shell: string; title: string; startedAt: number; exitCode: number | null }
 
 export interface Snapshot {
-  generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[];
+  generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[]; dialogues: DialogueSummary[];
   errors: Record<string, string>; roles: Record<string, Role>; dispatch: DispatchDefaults;
 }
 
-export type MessageOrigin = { kind: 'peer' | 'manual'; fromChatId: string; fromTitle: string; askId?: string } | null;
+/** peer: a fleet tool call; manual: forwarded by the person from another chat; dialogue: relayed by a dialogue orchestrator. */
+export type MessageOrigin = { kind: 'peer' | 'manual' | 'dialogue'; fromChatId: string; fromTitle: string; askId?: string; dialogueId?: string } | null;
+
+/** Two chats talking to each other about a topic, with Fleet relaying every turn and counting rounds. */
+export type DialogueStatus = 'running' | 'paused' | 'done' | 'failed' | 'ended';
+export type Side = 'A' | 'B';
+export interface Participant {
+  side: Side; name: string; persona: string; chatId: string; model: string;
+  /** The dialogue started this chat and ends it when it finishes. Chats the person attached are left running. */
+  owned: boolean;
+}
+export interface DialogueSummary {
+  id: string; topic: string; status: DialogueStatus; cwd: string;
+  /** rounds: exchanges wanted (one message from each side); turns: messages delivered so far. */
+  rounds: number; turns: number; maxWords: number;
+  speaking: Side | null; participants: Participant[];
+  startedAt: number; endedAt: number | null; error: string | null;
+  /** Moderator notes queued for the next speaker, and whether a pause is waiting for the current message to finish. */
+  pendingNotes: number; pausePending: boolean;
+}
+export type DialogueEvent =
+  | { t: 'status'; status: DialogueStatus; at: number }
+  | { t: 'speaking'; side: Side; turn: number; at: number }
+  | { t: 'turn'; turn: number; side: Side; name: string; text: string; final: boolean; at: number }
+  | { t: 'note'; text: string; kind: 'moderator' | 'system'; at: number };
 
 export type ContentBlock =
   | { type: 'text'; text: string }

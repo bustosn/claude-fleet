@@ -9,6 +9,8 @@ export type View =
   | { kind: 'worktree'; path: string }
   | { kind: 'session'; id: string }
   | { kind: 'terminal'; id: string }
+  | { kind: 'dialogue'; id: string }
+  | { kind: 'new-dialogue' }
   | { kind: 'hub' };
 
 /** Open views, like editor tabs. Overview is the home screen and never a tab. */
@@ -34,6 +36,8 @@ export function tabKey(v: View): string {
     case 'worktree': return `wt:${v.path.toLowerCase()}`;
     case 'session': return `session:${v.id}`;
     case 'terminal': return `terminal:${v.id}`;
+    case 'dialogue': return `dialogue:${v.id}`;
+    case 'new-dialogue': return 'new-dialogue';
     case 'hub': return 'hub';
   }
 }

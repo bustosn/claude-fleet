@@ -6,6 +6,8 @@ import { WorktreeView } from '../views/WorktreeView';
 import { SessionView } from '../views/SessionView';
 import { HubView } from '../views/HubView';
 import { TerminalView } from '../views/TerminalView';
+import { DialogueView } from '../views/DialogueView';
+import { NewDialogueView } from '../views/NewDialogue';
 import { TabStrip } from './TabStrip';
 
 export function Main() {
@@ -20,6 +22,8 @@ export function Main() {
       {view.kind === 'worktree' && <WorktreeView path={view.path} />}
       {view.kind === 'session' && <SessionView id={view.id} />}
       {view.kind === 'terminal' && <TerminalView key={view.id} id={view.id} />}
+      {view.kind === 'dialogue' && <DialogueView key={view.id} id={view.id} />}
+      {view.kind === 'new-dialogue' && <NewDialogueView />}
       {view.kind === 'hub' && <HubView />}
     </main>
   );

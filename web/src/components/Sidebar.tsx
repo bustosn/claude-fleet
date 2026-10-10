@@ -3,6 +3,7 @@ import { actions, useStore } from '../lib/store';
 import { ProjectTree } from './ProjectTree';
 import { ConversationList } from './ConversationList';
 import { TerminalList } from './TerminalList';
+import { DialogueList } from './DialogueList';
 
 export function Sidebar() {
   const width = useStore(s => s.sidebarWidth);
@@ -18,6 +19,7 @@ export function Sidebar() {
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         <ProjectTree />
         <TerminalList />
+        <DialogueList />
         <ConversationList />
       </div>
       <div

@@ -180,6 +180,8 @@ export function ChatView({ chatId }: { chatId: string }) {
         <button className="btn sm ghost" onClick={() => api.endChat(chatId).then(() => actions.toast('Chat ended'))} title="End this chat process"><X size={13} aria-hidden="true" /> End</button>
       </header>
       {s?.forked && <div className="border-b border-warn/40 bg-warn-soft px-4 py-1.5 text-[11px] text-fg-muted">The original session is open in a terminal, so this chat continues a forked copy with its own session id.</div>}
+      {s?.dialogueId && <div className="flex items-center gap-2 border-b border-line bg-accent-soft px-4 py-1.5 text-[11px] text-fg-muted">This chat is a participant in a dialogue; Fleet is delivering its turns. Anything you type here goes to it as well.
+        <button className="btn sm ghost ml-auto" onClick={() => actions.go({ kind: 'dialogue', id: s.dialogueId! })}>Open the dialogue</button></div>}
 
       <div ref={log} className="grid min-h-0 flex-1 auto-rows-max content-start gap-2 overflow-y-auto px-4 py-3" onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
         {state.entries.length === 0 && <div className="msg sys">Say what you need. Replies stream in here, and tool calls show as they run.</div>}
@@ -328,7 +330,8 @@ function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
   switch (e.k) {
     case 'user': {
       const o = e.origin;
-      return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{o.kind === 'manual' ? 'forwarded from' : 'from'} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{e.text}</div>;
+      const label = o?.kind === 'manual' ? 'forwarded from' : o?.kind === 'dialogue' ? 'dialogue · relayed from' : 'from';
+      return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{label} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{e.text}</div>;
     }
     case 'assistant': return <div className={`msg assistant ${e.streaming ? 'opacity-90' : ''}`} dangerouslySetInnerHTML={{ __html: md(e.text) }} />;
     case 'tool': return <ToolRow e={e} />;
