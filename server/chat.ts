@@ -5,6 +5,8 @@ import { query, type SDKUserMessage, type Query } from '@anthropic-ai/claude-age
 import { createFleetServer, FLEET_TOOL_NAMES } from './fleetTools.js';
 import { summarizeInput } from './sources/conversations.js';
 import type { FleetConfig } from './config.js';
+import { ShellRunner } from './shellRunner.js';
+import type { TerminalManager } from './terminals.js';
 import type { ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
@@ -31,6 +33,8 @@ export class ChatManager extends EventEmitter {
   config: FleetConfig; chats = new Map<string, Chat>(); asks = new Map<string, AskRecord>();
   titleFor: (sessionId: string | null) => string | null = () => null;
   locate: (cwd: string, sessionId?: string | null, title?: string) => Located = () => null;
+  /** For `!` commands: the shells live in the terminal manager so they show in the sidebar and can open as tabs. */
+  terminals: TerminalManager | null = null; shellDir = '';
   private persistFile: string | null = null;
 
   constructor(config: FleetConfig) { super(); this.config = config; }
@@ -101,6 +105,7 @@ export class Chat extends EventEmitter {
   private q: Query | null = null;
   private commands: import('@anthropic-ai/claude-agent-sdk').SlashCommand[] = [];
   private terminalCommands = new Set<string>();
+  private shell: ShellRunner | null = null;
 
   constructor(mgr: ChatManager, opts: { sessionId: string | null; cwd: string; model: string; fork: boolean; permissionMode: string; id?: string }) {
     super();
@@ -120,10 +125,30 @@ export class Chat extends EventEmitter {
       tokens: this.total ? { total: this.total, context: this.context, contextWindow: this.contextWindow } : null };
   }
 
-  emitEvent(ev: ChatEventInput) {
+  // keep=false for high-rate progress events (shell output snapshots) that would otherwise push real history out of the ring.
+  emitEvent(ev: ChatEventInput, keep = true) {
     const full = { ...ev, at: Date.now() } as ChatEvent;
-    this.events.push(full); if (this.events.length > 800) this.events.splice(0, this.events.length - 800);
+    if (keep) { this.events.push(full); if (this.events.length > 800) this.events.splice(0, this.events.length - 800); }
     this.emit('event', full);
+  }
+
+  /** The chat's own shell, started on the first `!`. Its runs stream into the log; nothing reaches the model until sent. */
+  private shellRunner(): ShellRunner {
+    if (this.shell) return this.shell;
+    if (!this.mgr.terminals) throw new Error('terminals are not available');
+    const r = new ShellRunner(this.mgr.terminals, this.cwd, this.mgr.shellDir, () => this.title);
+    r.on('start', run => this.emitEvent({ t: 'shell', id: run.id, cmd: run.cmd, cwd: run.cwd, terminalId: run.terminalId }));
+    r.on('output', run => this.emitEvent({ t: 'shell_out', id: run.id, output: run.output, truncated: run.truncated }, false));
+    r.on('done', run => this.emitEvent({ t: 'shell_done', id: run.id, exitCode: run.exitCode, interrupted: run.interrupted, output: run.output, truncated: run.truncated }));
+    return this.shell = r;
+  }
+  runShell(cmd: string) { if (this.status === 'ended') throw new Error('chat ended'); return this.shellRunner().run(cmd); }
+  interruptShell() { return this.shell?.interrupt() ?? false; }
+  /** "Send to Claude" on a finished run: it goes with a short message so the model knows to look at it. */
+  sendShellRun(runId: string) {
+    const run = this.shell?.get(runId);
+    if (!run || !this.shell!.queue(runId)) throw new Error('no finished shell command with that id');
+    this.send('Look at the output of `' + run.cmd + '` above.');
   }
   setStatus(s: ChatStatus) { this.status = s; this.emitEvent({ t: 'status', status: s }); this.mgr.emit('change'); }
 
@@ -138,6 +163,8 @@ export class Chat extends EventEmitter {
       const tail = origin.askId ? `\n\nAnswer by calling fleet_reply with ask_id "${origin.askId}". Be concise and concrete.` : '';
       body = `${head}\n\n${text}${tail}`;
     }
+    // Commands the person ran with `!` since their last message ride along, so "fix that" after `!npm test` just works.
+    if (!origin) { const ctx = this.shell?.takeContext(); if (ctx) body = `${ctx}\n\n${body}`; }
     this.turn = zeroUsage(); this.stepOutput = 0; // a new turn starts with this message
     this.inbox.push({ type: 'user', message: { role: 'user', content: body }, parent_tool_use_id: null } as SDKUserMessage);
     this.emitEvent({ t: 'user', text, origin: origin || null });
@@ -174,6 +201,7 @@ export class Chat extends EventEmitter {
   }
   async interrupt() { try { await this.q?.interrupt(); } catch (e: any) { this.emitEvent({ t: 'error', message: String(e.message || e) }); } }
   close() {
+    this.shell?.close();
     this.inbox.close(); this.abort.abort(); try { this.q?.close(); } catch {}
     for (const a of [...this.asksOut]) a.reject(new Error('asking chat ended'));
     for (const a of [...this.asksIn]) a.reject(new Error(`"${this.title}" ended before answering`));

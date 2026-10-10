@@ -121,7 +121,11 @@ export type ChatEvent =
   | { t: 'usage'; turn: TokenUsage; context: number; at: number }
   | { t: 'result'; subtype: string; cost: number | null; duration: number | null; turns: number | null; errors: string[] | null;
       usage: TokenUsage | null; total: TokenUsage | null; context: number; contextWindow: number | null; at: number }
-  | { t: 'error'; message: string; at: number };
+  | { t: 'error'; message: string; at: number }
+  /** A `!` command the person ran in the chat's own shell. Output streams as snapshots; nothing reaches the model until sent. */
+  | { t: 'shell'; id: string; cmd: string; cwd: string; terminalId: string; at: number }
+  | { t: 'shell_out'; id: string; output: string; truncated: boolean; at: number }
+  | { t: 'shell_done'; id: string; exitCode: number | null; interrupted: boolean; output: string; truncated: boolean; at: number };
 
 export interface AwsRun {
   id: string; startedAt: number; done: boolean; ok: boolean | null; state: string;

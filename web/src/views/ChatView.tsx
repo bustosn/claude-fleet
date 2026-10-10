@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowRight, Pencil, Send, Square, X } from 'lucide-react';
+import { ArrowRight, Pencil, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
 import { api, subscribe, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type SlashCommandView } from '../lib/api';
 import { rankCommands } from '../lib/commands';
 import { md, esc } from '../lib/markdown';
@@ -13,7 +13,8 @@ type Entry =
   | { k: 'assistant'; id: number; text: string; streaming: boolean }
   | { k: 'tool'; id: number; toolId: string; name: string; input: string; description?: string; result?: { text: string; length: number; isError: boolean } }
   | { k: 'sys'; id: number; text: string; err?: boolean }
-  | { k: 'perm'; id: number; permId: string; toolName: string; input: string; resolved?: 'allow' | 'deny' };
+  | { k: 'perm'; id: number; permId: string; toolName: string; input: string; resolved?: 'allow' | 'deny' }
+  | { k: 'shell'; id: number; runId: string; cmd: string; cwd: string; terminalId: string; output: string; truncated: boolean; exitCode: number | null; done: boolean; interrupted: boolean };
 
 // Distributive Omit: a plain Omit over the union would collapse it to the shared keys.
 type EntryInput = Entry extends infer E ? (E extends Entry ? Omit<E, 'id'> : never) : never;
@@ -74,6 +75,12 @@ function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
       break;
     }
     case 'error': push({ k: 'sys', text: ev.message, err: true }); activity = null; break;
+    case 'shell': push({ k: 'shell', runId: ev.id, cmd: ev.cmd, cwd: ev.cwd, terminalId: ev.terminalId, output: '', truncated: false, exitCode: null, done: false, interrupted: false }); break;
+    case 'shell_out': entries = entries.map(e => e.k === 'shell' && e.runId === ev.id ? { ...e, output: ev.output, truncated: ev.truncated } : e); break;
+    case 'shell_done':
+      if (entries.some(e => e.k === 'shell' && e.runId === ev.id)) entries = entries.map(e => e.k === 'shell' && e.runId === ev.id ? { ...e, output: ev.output, truncated: ev.truncated, exitCode: ev.exitCode, done: true, interrupted: ev.interrupted } : e);
+      else push({ k: 'shell', runId: ev.id, cmd: '(earlier command)', cwd: '', terminalId: '', output: ev.output, truncated: ev.truncated, exitCode: ev.exitCode, done: true, interrupted: ev.interrupted });
+      break;
     case 'init': break;
   }
   if (history) return { ...state, entries, seq };
@@ -104,7 +111,13 @@ export function ChatView({ chatId }: { chatId: string }) {
   const [commands, setCommands] = useState<SlashCommandView[]>([]);
   const [cmdIndex, setCmdIndex] = useState(0);
   const [cmdDismissed, setCmdDismissed] = useState(false);
+  const [histIdx, setHistIdx] = useState(-1);
   const composer = useRef<HTMLTextAreaElement>(null);
+
+  // `!` runs in the chat's own shell. Up/Down walk earlier commands while the composer is empty or holds a one-line `!`.
+  const bang = text.startsWith('!');
+  const shellRunning = [...state.entries].reverse().find((e): e is Extract<Entry, { k: 'shell' }> => e.k === 'shell' && !e.done);
+  const bangHistory = [...new Set(state.entries.filter((e): e is Extract<Entry, { k: 'shell' }> => e.k === 'shell').map(e => e.cmd).reverse())];
 
   // The command list exists once the Claude process has started; refetch after init in case it was empty before.
   const initDone = state.entries.length > 0 || state.status !== 'starting';
@@ -122,6 +135,12 @@ export function ChatView({ chatId }: { chatId: string }) {
       if (e.key === 'ArrowUp') { e.preventDefault(); setCmdIndex(i => (i - 1 + matches.length) % matches.length); return; }
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); pickCommand(matches[Math.min(cmdIndex, matches.length - 1)]); return; }
       if (e.key === 'Escape') { e.preventDefault(); setCmdDismissed(true); return; }
+    }
+    if (e.key === 'Escape' && shellRunning) { e.preventDefault(); api.shellInterrupt(chatId).catch(() => {}); return; }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && bangHistory.length && (text === '' || (bang && !text.includes('\n')))) {
+      const next = e.key === 'ArrowUp' ? Math.min(histIdx + 1, bangHistory.length - 1) : Math.max(histIdx - 1, -1);
+      e.preventDefault(); setHistIdx(next); setText(next < 0 ? '' : '!' + bangHistory[next]);
+      return;
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
@@ -155,7 +174,12 @@ export function ChatView({ chatId }: { chatId: string }) {
   const send = (e?: FormEvent) => {
     e?.preventDefault();
     const t = text.trim(); if (!t) return;
-    setText('');
+    setText(''); setHistIdx(-1);
+    if (t.startsWith('!')) {
+      const cmd = t.slice(1).trim(); if (!cmd) return;
+      api.shell(chatId, cmd).catch(err => dispatch({ type: 'sys', text: err.message, err: true }));
+      return;
+    }
     api.send(chatId, t).catch(err => dispatch({ type: 'sys', text: err.message, err: true }));
   };
   const rename = async () => {
@@ -195,7 +219,9 @@ export function ChatView({ chatId }: { chatId: string }) {
       <TokenStrip t={state.tokens} running={state.status === 'running'} />
       <form className="relative flex gap-2 border-t border-line bg-surface px-4 py-3" onSubmit={send}>
         {menuOpen && <CommandMenu matches={matches} index={Math.min(cmdIndex, matches.length - 1)} onPick={pickCommand} onHover={setCmdIndex} />}
-        <textarea ref={composer} className="input flex-1" rows={3} value={text} placeholder="Message Claude. Enter sends, Shift+Enter for a new line, / for commands." onChange={e => { setText(e.target.value); setCmdIndex(0); setCmdDismissed(false); }}
+        {bang && !menuOpen && <div className="absolute bottom-full left-4 right-4 mb-1 rounded border border-line bg-surface px-3 py-1.5 text-[11px] text-fg-faint">
+          Runs in this chat's shell{s ? ` (${shortPath(s.cwd)})` : ''}. Enter runs, Esc interrupts, Up recalls. The output is yours until you send it to Claude.</div>}
+        <textarea ref={composer} className={`input flex-1 ${bang ? 'mono' : ''}`} rows={3} value={text} placeholder="Message Claude. Enter sends, Shift+Enter for a new line, / for commands, ! for your shell." onChange={e => { setText(e.target.value); setCmdIndex(0); setCmdDismissed(false); setHistIdx(-1); }}
           onKeyDown={onComposerKey} disabled={state.status === 'ended'} />
         <button className="btn primary self-end" type="submit" disabled={state.status === 'ended' || !text.trim()}><Send size={13} aria-hidden="true" /> Send</button>
       </form>
@@ -329,6 +355,44 @@ function ToolRow({ e }: { e: ToolEntry }) {
   );
 }
 
+const SHELL_PREVIEW = 12;
+
+/** A `!` command: the command on a prompt line, output under it (the tail while it runs, the head once done, like a tool row),
+ *  and what to do with it. Nothing here has reached the model unless it was sent. */
+function ShellRow({ e, chatId }: { e: Extract<Entry, { k: 'shell' }>; chatId: string }) {
+  const [open, setOpen] = useState(false);
+  const [sent, setSent] = useState(false);
+  const lines = e.output ? e.output.split('\n') : [];
+  const hidden = Math.max(0, lines.length - SHELL_PREVIEW);
+  const shown = open ? lines : e.done ? lines.slice(0, SHELL_PREVIEW) : lines.slice(-SHELL_PREVIEW);
+  const bad = e.done && (e.interrupted || e.exitCode !== 0);
+  const status = !e.done ? 'running' : e.interrupted ? 'interrupted' : e.exitCode == null ? 'did not finish' : `exit ${e.exitCode}`;
+  const send = () => api.shellSend(chatId, e.runId).then(() => setSent(true)).catch(err => actions.toast(err.message, 'error'));
+  return (
+    <div className="msg tool">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className="shrink-0 font-semibold text-accent">you ran</span>
+        <span className="min-w-0 truncate text-fg-faint">{shortPath(e.cwd)}</span>
+        <span className={`ml-auto shrink-0 text-[11px] ${!e.done ? 'text-fg-muted' : bad ? 'text-crit' : 'text-fg-faint'}`}>{status}</span>
+      </div>
+      <pre className="cmd">{'❯ ' + e.cmd}</pre>
+      <div className={`mt-1 border-l-2 pl-2 ${bad ? 'border-crit' : 'border-line'}`}>
+        {lines.length === 0 ? <span className="text-[11px] text-fg-faint">{e.done ? '(no output)' : '…'}</span> : <pre className="out">{shown.join('\n')}</pre>}
+        {(hidden > 0 || e.truncated) && (
+          <button className="mt-0.5 text-[11px] text-fg-faint hover:text-fg" onClick={() => setOpen(o => !o)}>
+            {hidden > 0 ? (open ? 'show less' : `… +${hidden} lines`) : ''}{e.truncated ? `${hidden > 0 ? ' · ' : ''}output cut; the terminal has all of it` : ''}
+          </button>
+        )}
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-2">
+        {!e.done && <button className="btn sm" onClick={() => api.shellInterrupt(chatId)} title="Send Ctrl+C to the shell (Esc in the composer does the same)"><Square size={12} aria-hidden="true" /> Stop</button>}
+        {e.terminalId && <button className="btn sm ghost" onClick={() => actions.go({ kind: 'terminal', id: e.terminalId })} title="Open this chat's shell as a tab"><TerminalIcon size={12} aria-hidden="true" /> Open terminal</button>}
+        {e.done && <button className="btn sm ghost" disabled={sent} onClick={send} title="Send this output to Claude now. Otherwise it rides along with your next message."><Send size={12} aria-hidden="true" /> {sent ? 'Sent to Claude' : 'Send to Claude'}</button>}
+      </div>
+    </div>
+  );
+}
+
 function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
   switch (e.k) {
     case 'user': {
@@ -338,6 +402,7 @@ function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
     }
     case 'assistant': return <div className={`msg assistant ${e.streaming ? 'opacity-90' : ''}`} dangerouslySetInnerHTML={{ __html: md(e.text) }} />;
     case 'tool': return <ToolRow e={e} />;
+    case 'shell': return <ShellRow e={e} chatId={chatId} />;
     case 'sys': return <div className={`msg sys ${e.err ? 'err' : ''}`}>{e.text}</div>;
     case 'perm': return (
       <div className={`msg perm ${e.resolved ? 'resolved' : ''}`}>

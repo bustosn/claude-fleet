@@ -28,6 +28,7 @@ chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title
 const aws = new AwsCreds(config.aws, stateDir);
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
+chats.terminals = terminals; chats.shellDir = path.join(stateDir, 'shell');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
 collector.dialogues = dialogues;
@@ -139,6 +140,18 @@ app.post('/api/chats/:id/send', (req, res) => {
 app.post('/api/chats/:id/permission', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
   res.json({ ok: c.resolvePermission(String(req.body?.id || ''), req.body?.behavior === 'allow' ? 'allow' : 'deny', req.body?.message) });
+});
+// `!` commands: run in the chat's own shell. Output streams on the chat's event feed; the model only sees it when sent.
+app.post('/api/chats/:id/shell', (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  const cmd = String(req.body?.cmd || '').trim(); if (!cmd) return res.status(400).json({ error: 'empty command' });
+  try { const run = c.runShell(cmd); res.json({ id: run.id, terminalId: run.terminalId }); }
+  catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
+});
+app.post('/api/chats/:id/shell/interrupt', (req, res) => { const c = chats.get(req.params.id); if (!c) return res.status(404).end(); res.json({ ok: c.interruptShell() }); });
+app.post('/api/chats/:id/shell/:runId/send', (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  try { c.sendShellRun(req.params.runId); res.json({ ok: true }); } catch (e: any) { res.status(400).json({ error: String(e.message || e) }); }
 });
 app.post('/api/chats/:id/interrupt', async (req, res) => { const c = chats.get(req.params.id); if (!c) return res.status(404).end(); await c.interrupt(); res.json({ ok: true }); });
 app.delete('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); if (!c) return res.status(404).end(); c.close(); res.json({ ok: true }); });
