@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ArrowRight, Pencil, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
-import { api, subscribe, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type SlashCommandView } from '../lib/api';
+import { api, subscribe, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
 import { rankCommands } from '../lib/commands';
 import { md, esc } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
@@ -28,7 +28,7 @@ interface ChatState { entries: Entry[]; status: ChatStatus; summary: ChatSummary
 type Action = { type: 'event'; ev: ChatEvent } | { type: 'summary'; summary: ChatSummary } | { type: 'history'; evs: ChatEvent[] } | { type: 'sys'; text: string; err?: boolean };
 
 function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
-  let { entries, seq, status, activity, tokens } = state;
+  let { entries, seq, status, activity, tokens, summary } = state;
   const now = Date.now();
   const thinking = (keepSince = false) => { activity = { kind: 'thinking', since: keepSince && activity ? activity.since : now }; };
   const push = (e: EntryInput) => { entries = [...entries, { ...e, id: ++seq } as Entry]; };
@@ -81,10 +81,12 @@ function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
       if (entries.some(e => e.k === 'shell' && e.runId === ev.id)) entries = entries.map(e => e.k === 'shell' && e.runId === ev.id ? { ...e, output: ev.output, truncated: ev.truncated, exitCode: ev.exitCode, done: true, interrupted: ev.interrupted } : e);
       else push({ k: 'shell', runId: ev.id, cmd: '(earlier command)', cwd: '', terminalId: '', output: ev.output, truncated: ev.truncated, exitCode: ev.exitCode, done: true, interrupted: ev.interrupted });
       break;
-    case 'init': break;
+    // The process reports the model it actually runs; the summary may still hold the alias it was opened with.
+    case 'init': if (summary && ev.model) summary = { ...summary, model: ev.model }; break;
+    case 'model': push({ k: 'sys', text: `model set to ${ev.model}` }); if (summary) summary = { ...summary, model: ev.model }; break;
   }
   if (history) return { ...state, entries, seq };
-  return { ...state, entries, seq, status, activity, tokens };
+  return { ...state, entries, seq, status, activity, tokens, summary };
 }
 
 function reducer(state: ChatState, a: Action): ChatState {
@@ -196,7 +198,7 @@ export function ChatView({ chatId }: { chatId: string }) {
           <div className="truncate text-[13px] font-semibold leading-5">{title}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-fg-faint mono">
             {s && s.sessionId && s.locatedBy !== 'cwd' ? <WorktreePicker sessionId={s.sessionId} worktree={s.worktree} locatedBy={s.locatedBy} /> : <span className="truncate">{s ? (s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)) : ''}</span>}
-            {s && <><span aria-hidden="true">·</span><span className="shrink-0">{s.model}</span><span aria-hidden="true">·</span><span className="shrink-0">{s.permissionMode}</span></>}
+            {s && <><span aria-hidden="true">·</span><ModelPicker chatId={chatId} model={s.model} ready={initDone && state.status !== 'ended'} onError={msg => dispatch({ type: 'sys', text: msg, err: true })} /><span aria-hidden="true">·</span><span className="shrink-0">{s.permissionMode}</span></>}
             {s?.forked && <><span aria-hidden="true">·</span><span className="shrink-0">forked copy</span></>}
           </div>
         </div>
@@ -228,6 +230,29 @@ export function ChatView({ chatId }: { chatId: string }) {
 
       {forward && <ForwardDialog chatId={chatId} lastReply={[...state.entries].reverse().find(e => e.k === 'assistant')?.text || ''} onClose={() => setForward(false)} />}
     </div>
+  );
+}
+
+/** The chat's current model, and a dropdown to switch it. The list comes from the chat's own process, so it matches the account.
+ *  The current model may be an alias ("opus") or the full id the process reported, so options match on either. */
+function ModelPicker({ chatId, model, ready, onError }: { chatId: string; model: string; ready: boolean; onError: (msg: string) => void }) {
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (ready && !models.length) api.models(chatId).then(setModels).catch(() => {}); }, [chatId, ready, models.length]);
+  if (!models.length) return <span className="shrink-0">{model}</span>;
+  // "default" resolves to the same id as a named alias; show the name.
+  const current = (models.find(m => m.value === model) || models.find(m => m.resolvedModel === model && m.value !== 'default') || models.find(m => m.resolvedModel === model))?.value ?? model;
+  const options = models.some(m => m.value === current) ? models : [{ value: model, displayName: model, description: '', resolvedModel: null }, ...models];
+  const change = async (next: string) => {
+    if (next === current) return;
+    setBusy(true);
+    try { await api.setModel(chatId, next); } catch (err: any) { onError(`Could not switch model: ${err.message}`); } finally { setBusy(false); }
+  };
+  return (
+    <select className="inline-select shrink-0" value={current} disabled={busy || !ready} onChange={e => change(e.target.value)} aria-label="Model for this chat"
+      title={`${options.find(m => m.value === current)?.description || model}. Takes effect from the next turn.`}>
+      {options.map(m => <option key={m.value} value={m.value} title={m.description}>{m.displayName}</option>)}
+    </select>
   );
 }
 

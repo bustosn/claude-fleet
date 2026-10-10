@@ -1,4 +1,4 @@
-import type { AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
+import type { AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, ModelOption, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -21,6 +21,8 @@ export const api = {
   openChat: (opts: { sessionId?: string; cwd: string; model?: string; permissionMode?: string }) => post<ChatSummary>('/api/chats', opts),
   chat: (id: string) => j<ChatSummary>(`/api/chats/${id}`),
   commands: (id: string) => j<SlashCommandView[]>(`/api/chats/${id}/commands`),
+  models: (id: string) => j<ModelOption[]>(`/api/chats/${id}/models`),
+  setModel: (id: string, model: string) => post<ChatSummary>(`/api/chats/${id}/model`, { model }),
   send: (id: string, text: string, fromChatId?: string) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId }),
   permission: (id: string, permId: string, behavior: 'allow' | 'deny') => post<{ ok: boolean }>(`/api/chats/${id}/permission`, { id: permId, behavior }),
   interrupt: (id: string) => post<{ ok: true }>(`/api/chats/${id}/interrupt`),

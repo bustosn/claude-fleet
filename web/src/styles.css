@@ -105,6 +105,10 @@ button:disabled { cursor: default; }
 .input:focus { border-color: var(--accent); outline: none; }
 textarea.input { height: auto; padding: 8px; resize: vertical; line-height: 1.4; }
 select.input { padding-right: 24px; }
+/* A select that reads as part of a line of text until hovered: sized to the chosen option, not the longest one. */
+select.inline-select { height: 20px; padding: 0 2px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: inherit; font: inherit; field-sizing: content; cursor: pointer; }
+select.inline-select:hover, select.inline-select:focus { border-color: var(--line); background: var(--surface); outline: none; }
+select.inline-select:disabled { cursor: default; opacity: 0.6; }
 
 .kbd { display: inline-block; min-width: 16px; padding: 0 4px; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; font-size: 10px; line-height: 15px; color: var(--fg-muted); background: var(--raised); text-align: center; }
 

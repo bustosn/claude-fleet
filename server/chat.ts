@@ -7,7 +7,7 @@ import { summarizeInput } from './sources/conversations.js';
 import type { FleetConfig } from './config.js';
 import { ShellRunner } from './shellRunner.js';
 import type { TerminalManager } from './terminals.js';
-import type { ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
+import type { ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
 class Inbox implements AsyncIterable<SDKUserMessage> {
@@ -105,6 +105,7 @@ export class Chat extends EventEmitter {
   private q: Query | null = null;
   private commands: import('@anthropic-ai/claude-agent-sdk').SlashCommand[] = [];
   private terminalCommands = new Set<string>();
+  private models: import('@anthropic-ai/claude-agent-sdk').ModelInfo[] = [];
   private shell: ShellRunner | null = null;
 
   constructor(mgr: ChatManager, opts: { sessionId: string | null; cwd: string; model: string; fork: boolean; permissionMode: string; id?: string }) {
@@ -198,6 +199,22 @@ export class Chat extends EventEmitter {
     return this.commands.filter(c => !this.terminalCommands.has(c.name))
       .map(c => ({ name: c.name, description: c.description || '', argumentHint: c.argumentHint || '', aliases: c.aliases || [], builtin: !!c.builtin }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+  /** Models the process offers, fetched once. The list depends on the account, so it comes from the process rather than a fixed table. */
+  async modelList(): Promise<ModelOption[]> {
+    if (!this.q) return [];
+    if (!this.models.length) {
+      try { this.models = await Promise.race([this.q.supportedModels(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))]); }
+      catch { return []; }
+    }
+    return this.models.map(m => ({ value: m.value, displayName: m.displayName || m.value, description: m.description || '', resolvedModel: m.resolvedModel || null }));
+  }
+  /** Switches the live process; the turn in flight finishes on the old model and the next one uses the new. */
+  async setModel(model: string) {
+    if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
+    await this.q.setModel(model);
+    this.model = model;
+    this.emitEvent({ t: 'model', model }); this.mgr.emit('change');
   }
   async interrupt() { try { await this.q?.interrupt(); } catch (e: any) { this.emitEvent({ t: 'error', message: String(e.message || e) }); } }
   close() {

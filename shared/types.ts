@@ -45,6 +45,8 @@ export interface Conversation {
 
 /** A slash command the chat's Claude process accepts: built-in, or a skill/command from the user, project, or a plugin. */
 export interface SlashCommandView { name: string; description: string; argumentHint: string; aliases: string[]; builtin: boolean }
+/** A model the chat's Claude process can switch to. `value` may be an alias ("opus"); `resolvedModel` is the full id it stands for. */
+export interface ModelOption { value: string; displayName: string; description: string; resolvedModel: string | null }
 
 export interface PermissionView { id: string; toolName: string; input: string; suggestions: number }
 
@@ -109,6 +111,8 @@ export type ContentBlock =
 export type ChatEvent =
   | { t: 'status'; status: ChatStatus; at: number }
   | { t: 'init'; sessionId: string; model: string; at: number }
+  /** The person switched models mid-chat; the next turn uses it. */
+  | { t: 'model'; model: string; at: number }
   | { t: 'user'; text: string; origin: MessageOrigin; at: number }
   | { t: 'delta'; text: string; at: number }
   | { t: 'tool_start'; name: string; at: number }

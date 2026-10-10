@@ -120,6 +120,12 @@ app.post('/api/chats', (req, res) => {
 });
 app.get('/api/chats', (_req, res) => res.json(chats.list()));
 app.get('/api/chats/:id/commands', async (req, res) => { const c = chats.get(req.params.id); c ? res.json(await c.commandList()) : res.status(404).json({ error: 'no such chat' }); });
+app.get('/api/chats/:id/models', async (req, res) => { const c = chats.get(req.params.id); c ? res.json(await c.modelList()) : res.status(404).json({ error: 'no such chat' }); });
+app.post('/api/chats/:id/model', async (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  const model = String(req.body?.model || '').trim(); if (!model) return res.status(400).json({ error: 'no model given' });
+  try { await c.setModel(model); res.json(c.summary()); } catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
+});
 app.get('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); c ? res.json(c.summary()) : res.status(404).json({ error: 'no such chat' }); });
 app.get('/api/chats/:id/events', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).end();
