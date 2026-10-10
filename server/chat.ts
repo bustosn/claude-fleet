@@ -154,8 +154,20 @@ export class Chat extends EventEmitter {
     return true;
   }
 
-  /** Commands the composer can offer. Ones bound to a terminal UI (exit, statusline) are left out. */
-  commandList(): SlashCommandView[] {
+  /** Asks the process for its command list. The call can fail or come back empty while the process is still settling. */
+  private async fetchCommands(): Promise<boolean> {
+    if (!this.q) return false;
+    try {
+      const c = await Promise.race([this.q.supportedCommands(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))]);
+      if (c.length) this.commands = c;
+      return c.length > 0;
+    } catch { return false; }
+  }
+
+  /** Commands the composer can offer. Ones bound to a terminal UI (exit, statusline) are left out.
+   *  An empty cache is refilled here, so a fetch that failed at init does not leave the popup empty for the chat's lifetime. */
+  async commandList(): Promise<SlashCommandView[]> {
+    if (!this.commands.length) await this.fetchCommands();
     return this.commands.filter(c => !this.terminalCommands.has(c.name))
       .map(c => ({ name: c.name, description: c.description || '', argumentHint: c.argumentHint || '', aliases: c.aliases || [], builtin: !!c.builtin }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -198,7 +210,7 @@ export class Chat extends EventEmitter {
           if (msg.subtype === 'init') {
             this.sessionId = msg.session_id; this.model = msg.model || this.model;
             this.terminalCommands = new Set(msg.terminal_slash_commands || []);
-            this.q?.supportedCommands().then(c => { this.commands = c; }).catch(() => {});
+            this.fetchCommands().then(ok => { if (!ok) setTimeout(() => this.fetchCommands(), 1500); });
             this.emitEvent({ t: 'init', sessionId: msg.session_id, model: msg.model }); this.mgr.emit('change');
           }
           else if (msg.subtype === 'commands_changed') this.commands = msg.commands || [];

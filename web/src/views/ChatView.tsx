@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { ArrowRight, Pencil, Send, Square, X } from 'lucide-react';
 import { api, subscribe, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type SlashCommandView } from '../lib/api';
+import { rankCommands } from '../lib/commands';
 import { md, esc } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
@@ -110,7 +111,9 @@ export function ChatView({ chatId }: { chatId: string }) {
   useEffect(() => { if (initDone) api.commands(chatId).then(setCommands).catch(() => {}); }, [chatId, initDone]);
 
   const slashQuery = /^\/(\S*)$/.exec(text)?.[1];
-  const matches = slashQuery == null || cmdDismissed ? [] : commands.filter(c => c.name.startsWith(slashQuery) || c.aliases.some(a => a.startsWith(slashQuery)) || (slashQuery.length > 1 && c.name.includes(slashQuery))).slice(0, 12);
+  // Typing "/" into a chat whose list never arrived asks again, so one failed fetch at init is not permanent.
+  useEffect(() => { if (slashQuery != null && commands.length === 0) api.commands(chatId).then(setCommands).catch(() => {}); }, [chatId, slashQuery != null, commands.length]);
+  const matches = slashQuery == null || cmdDismissed ? [] : rankCommands(commands, slashQuery);
   const menuOpen = matches.length > 0;
   const pickCommand = (c: SlashCommandView) => { setText(`/${c.name} `); setCmdDismissed(true); composer.current?.focus(); };
   const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {

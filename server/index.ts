@@ -118,7 +118,7 @@ app.post('/api/chats', (req, res) => {
   res.json(chats.open({ sessionId, cwd: dir, model, permissionMode, fork: running }).summary());
 });
 app.get('/api/chats', (_req, res) => res.json(chats.list()));
-app.get('/api/chats/:id/commands', (req, res) => { const c = chats.get(req.params.id); c ? res.json(c.commandList()) : res.status(404).json({ error: 'no such chat' }); });
+app.get('/api/chats/:id/commands', async (req, res) => { const c = chats.get(req.params.id); c ? res.json(await c.commandList()) : res.status(404).json({ error: 'no such chat' }); });
 app.get('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); c ? res.json(c.summary()) : res.status(404).json({ error: 'no such chat' }); });
 app.get('/api/chats/:id/events', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).end();
