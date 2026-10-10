@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Terminal, TerminalManager } from './terminals.js';
@@ -63,7 +64,21 @@ export class ShellRunner extends EventEmitter {
     const run: ShellRun = { id, cmd, cwd: this.cwd, terminalId: t.id, startedAt: Date.now(), output: '', truncated: false, exitCode: null, done: false, interrupted: false, sent: false };
     this.runs.set(id, run); this.current = run;
 
-    const endRe = new RegExp(`${end} (\\d+)`);
+    // A POSIX shell prints the start marker and then aborts the script at a syntax error, so the end marker never comes.
+    // Checking the syntax first (-n parses without running) turns that hang into an immediate, readable failure.
+    if (!ps) {
+      try { execFileSync(t.shell, ['-n', file], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 5000, windowsHide: true }); }
+      catch (e: any) {
+        const msg = String(e.stderr || e.message || e).replace(file.replace(/\\/g, '/'), 'command').replace(file, 'command').trim();
+        run.output = msg; run.exitCode = 2; run.done = true; this.current = null; this.pending.push(run);
+        try { fs.unlinkSync(file); } catch {}
+        this.emit('start', run); this.emit('done', run);
+        return run;
+      }
+    }
+
+    // Negative codes are real on Windows: npm reports -4058 for ENOENT.
+    const endRe = new RegExp(`${end} (-?\\d+)`);
     let raw = '', buf = '', started = false;
     let flush: NodeJS.Timeout | null = null;
     const setOutput = (text: string, holdBack: boolean) => {
