@@ -1,13 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { query, type SDKUserMessage, type Query } from '@anthropic-ai/claude-agent-sdk';
 import { createFleetServer, FLEET_TOOL_NAMES } from './fleetTools.js';
 import { summarizeInput } from './sources/conversations.js';
 import type { FleetConfig } from './config.js';
 import { ShellRunner } from './shellRunner.js';
 import type { TerminalManager } from './terminals.js';
-import type { ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
+import type { Attachment, ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
 class Inbox implements AsyncIterable<SDKUserMessage> {
@@ -35,6 +36,8 @@ export class ChatManager extends EventEmitter {
   locate: (cwd: string, sessionId?: string | null, title?: string) => Located = () => null;
   /** For `!` commands: the shells live in the terminal manager so they show in the sidebar and can open as tabs. */
   terminals: TerminalManager | null = null; shellDir = '';
+  /** Dropped files that are not sent as images are saved here; every chat may read it without asking. */
+  attachDir = '';
   private persistFile: string | null = null;
 
   constructor(config: FleetConfig) { super(); this.config = config; }
@@ -88,6 +91,9 @@ export class ChatManager extends EventEmitter {
   }
 }
 
+
+const INLINE_IMAGE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const MAX_INLINE_IMAGE = 5 * 1024 * 1024; // the API's per-image limit, measured on the base64 text
 
 const zeroUsage = (): TokenUsage => ({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
 
@@ -154,9 +160,10 @@ export class Chat extends EventEmitter {
   setStatus(s: ChatStatus) { this.status = s; this.emitEvent({ t: 'status', status: s }); this.mgr.emit('change'); }
 
   // origin: null for the person typing; peer/manual for fleet traffic; dialogue text arrives already framed by the orchestrator.
-  send(text: string, origin?: MessageOrigin) {
+  send(text: string, origin?: MessageOrigin, attachments: Attachment[] = []) {
     if (this.status === 'ended') throw new Error('chat ended');
     if (!this.firstText && !origin) this.firstText = text;
+    const { images, files } = this.placeAttachments(attachments);
     let body = text;
     if (origin && origin.kind !== 'dialogue') {
       const head = origin.kind === 'manual' ? `[Forwarded from chat "${origin.fromTitle}" (${origin.fromChatId}) by the user]`
@@ -166,11 +173,32 @@ export class Chat extends EventEmitter {
     }
     // Commands the person ran with `!` since their last message ride along, so "fix that" after `!npm test` just works.
     if (!origin) { const ctx = this.shell?.takeContext(); if (ctx) body = `${ctx}\n\n${body}`; }
+    if (files.length) body = `${body}\n\nAttached file${files.length > 1 ? 's' : ''}:\n${files.map(f => `- ${f}`).join('\n')}`.trim();
+    const content = images.length ? [...images, ...(body ? [{ type: 'text', text: body }] : [])] : body;
     this.turn = zeroUsage(); this.stepOutput = 0; // a new turn starts with this message
-    this.inbox.push({ type: 'user', message: { role: 'user', content: body }, parent_tool_use_id: null } as SDKUserMessage);
-    this.emitEvent({ t: 'user', text, origin: origin || null });
+    this.inbox.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null } as SDKUserMessage);
+    this.emitEvent({ t: 'user', text, origin: origin || null, ...(attachments.length ? { attachments: attachments.map(a => a.name) } : {}) });
     this.turnText = '';
     this.setStatus('running');
+  }
+
+  /** Images the API takes go inline, as Claude Code sends a pasted image. Anything else, or an image over the API's size limit, is
+   *  saved under the attachments folder and named in the message: a browser cannot tell us where a dropped file lives, so Claude reads a copy. */
+  private placeAttachments(attachments: Attachment[]) {
+    const images: { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }[] = [];
+    const files: string[] = [];
+    if (!attachments.length) return { images, files };
+    const dir = path.join(this.mgr.attachDir, this.id, Date.now().toString(36));
+    for (const a of attachments) {
+      if (INLINE_IMAGE.has(a.mediaType) && a.data.length <= MAX_INLINE_IMAGE) { images.push({ type: 'image', source: { type: 'base64', media_type: a.mediaType, data: a.data } }); continue; }
+      mkdirSync(dir, { recursive: true });
+      const base = path.basename(a.name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'file';
+      let file = path.join(dir, base);
+      for (let n = 2; existsSync(file); n++) file = path.join(dir, base.replace(/(\.[^.]*)?$/, ` (${n})$1`));
+      writeFileSync(file, Buffer.from(a.data, 'base64'));
+      files.push(file);
+    }
+    return { images, files };
   }
 
   resolvePermission(id: string, behavior: 'allow' | 'deny', message?: string): boolean {
@@ -228,6 +256,7 @@ export class Chat extends EventEmitter {
   start() {
     const opts: any = {
       cwd: this.cwd, model: this.model, permissionMode: this.permissionMode,
+      additionalDirectories: this.mgr.attachDir ? [this.mgr.attachDir] : [],
       includePartialMessages: true, abortController: this.abort,
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       mcpServers: { fleet: createFleetServer(this.mgr, this) },

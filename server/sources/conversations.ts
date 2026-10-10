@@ -38,11 +38,17 @@ export async function conversationHistory(sessionId: string, keep = 300): Promis
     const at = 0;
     if (m.type === 'user') {
       if (typeof c === 'string') { const text = userText(c); if (text) out.push({ t: 'user', text, origin: null, at }); }
-      else if (Array.isArray(c)) for (const b of c) {
-        if (b.type === 'text') { const text = userText(b.text); if (text) out.push({ t: 'user', text, origin: null, at }); }
-        else if (b.type === 'tool_result') {
-          const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n') : '';
-          out.push({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 4000), length: text.length, at });
+      else if (Array.isArray(c)) {
+        // Pasted images sit before the text block; they ride on the message they came with.
+        const images = c.filter((b: any) => b.type === 'image').length;
+        let attachments: string[] | undefined = images ? Array.from({ length: images }, (_, i) => `image ${i + 1}`) : undefined;
+        if (attachments && !c.some((b: any) => b.type === 'text' && userText(b.text))) { out.push({ t: 'user', text: '', origin: null, attachments, at }); attachments = undefined; }
+        for (const b of c) {
+          if (b.type === 'text') { const text = userText(b.text); if (text) { out.push({ t: 'user', text, origin: null, ...(attachments ? { attachments } : {}), at }); attachments = undefined; } }
+          else if (b.type === 'tool_result') {
+            const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n') : '';
+            out.push({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 4000), length: text.length, at });
+          }
         }
       }
     } else if (m.type === 'assistant' && Array.isArray(c)) {

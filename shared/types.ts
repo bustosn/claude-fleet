@@ -45,6 +45,8 @@ export interface Conversation {
 
 /** A slash command the chat's Claude process accepts: built-in, or a skill/command from the user, project, or a plugin. */
 export interface SlashCommandView { name: string; description: string; argumentHint: string; aliases: string[]; builtin: boolean }
+/** A file pasted or dropped into the composer, base64. Images go to the model inline; other files are saved for it to read. */
+export interface Attachment { name: string; mediaType: string; data: string }
 /** A model the chat's Claude process can switch to. `value` may be an alias ("opus"); `resolvedModel` is the full id it stands for. */
 export interface ModelOption { value: string; displayName: string; description: string; resolvedModel: string | null }
 
@@ -113,7 +115,8 @@ export type ChatEvent =
   | { t: 'init'; sessionId: string; model: string; at: number }
   /** The person switched models mid-chat; the next turn uses it. */
   | { t: 'model'; model: string; at: number }
-  | { t: 'user'; text: string; origin: MessageOrigin; at: number }
+  /** `attachments` names what came with the message: pasted or dropped images and files. */
+  | { t: 'user'; text: string; origin: MessageOrigin; attachments?: string[]; at: number }
   | { t: 'delta'; text: string; at: number }
   | { t: 'tool_start'; name: string; at: number }
   | { t: 'thinking'; at: number }

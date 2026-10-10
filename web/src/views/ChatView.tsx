@@ -1,6 +1,6 @@
-import { useEffect, useReducer, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowRight, Pencil, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
-import { api, subscribe, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
+import { useEffect, useReducer, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
+import { ArrowRight, FileText, Paperclip, Pencil, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
+import { api, subscribe, type Attachment, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
 import { rankCommands } from '../lib/commands';
 import { md, esc } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
@@ -9,7 +9,7 @@ import { Status, WorktreePicker } from '../components/ui';
 import type { TokenUsage } from '../../../shared/types';
 
 type Entry =
-  | { k: 'user'; id: number; text: string; origin: MessageOrigin }
+  | { k: 'user'; id: number; text: string; origin: MessageOrigin; attachments?: string[] }
   | { k: 'assistant'; id: number; text: string; streaming: boolean }
   | { k: 'tool'; id: number; toolId: string; name: string; input: string; description?: string; result?: { text: string; length: number; isError: boolean } }
   | { k: 'sys'; id: number; text: string; err?: boolean }
@@ -35,7 +35,7 @@ function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
   const last = entries[entries.length - 1];
   switch (ev.t) {
     case 'status': status = ev.status; if (status === 'running') { if (!activity) thinking(); } else activity = null; break;
-    case 'user': if (last?.k === 'assistant' && last.streaming) entries = entries.map(e => e === last ? { ...e, streaming: false } : e); push({ k: 'user', text: ev.text, origin: ev.origin }); thinking(); break;
+    case 'user': if (last?.k === 'assistant' && last.streaming) entries = entries.map(e => e === last ? { ...e, streaming: false } : e); push({ k: 'user', text: ev.text, origin: ev.origin, attachments: ev.attachments }); thinking(); break;
     case 'thinking': thinking(); break;
     case 'delta':
       if (last?.k === 'assistant' && last.streaming) entries = entries.map(e => e === last ? { ...e, text: e.text + ev.text } : e);
@@ -115,6 +115,27 @@ export function ChatView({ chatId }: { chatId: string }) {
   const [cmdDismissed, setCmdDismissed] = useState(false);
   const [histIdx, setHistIdx] = useState(-1);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const [attachments, setAttachments] = useState<Pending[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+
+  // Files dropped or pasted wait above the composer and go with the next message.
+  const attach = async (files: File[]) => {
+    const tooBig = files.filter(f => f.size > MAX_ATTACHMENT);
+    if (tooBig.length) dispatch({ type: 'sys', text: `Too large to attach (over ${MAX_ATTACHMENT / 1024 / 1024} MB): ${tooBig.map(f => f.name).join(', ')}`, err: true });
+    const read = await Promise.all(files.filter(f => f.size <= MAX_ATTACHMENT).map(readAttachment));
+    if (read.length) setAttachments(a => [...a, ...read]);
+  };
+  // Alt+V, as in Claude Code on Windows. The browser asks once for clipboard access; Ctrl+V needs no permission and works too.
+  const pasteImage = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      const files: File[] = [];
+      for (const item of items) for (const type of item.types) if (type.startsWith('image/')) files.push(new File([await item.getType(type)], `pasted image.${type.split('/')[1]}`, { type }));
+      if (files.length) attach(files); else dispatch({ type: 'sys', text: 'No image on the clipboard.' });
+    } catch { dispatch({ type: 'sys', text: 'The browser blocked clipboard access. Ctrl+V pastes images too.', err: true }); }
+  };
+  const isFileDrag = (e: DragEvent) => e.dataTransfer.types.includes('Files');
 
   // `!` runs in the chat's own shell. Up/Down walk earlier commands while the composer is empty or holds a one-line `!`.
   const bang = text.startsWith('!');
@@ -138,6 +159,7 @@ export function ChatView({ chatId }: { chatId: string }) {
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); pickCommand(matches[Math.min(cmdIndex, matches.length - 1)]); return; }
       if (e.key === 'Escape') { e.preventDefault(); setCmdDismissed(true); return; }
     }
+    if (e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteImage(); return; }
     if (e.key === 'Escape' && shellRunning) { e.preventDefault(); api.shellInterrupt(chatId).catch(() => {}); return; }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && bangHistory.length && (text === '' || (bang && !text.includes('\n')))) {
       const next = e.key === 'ArrowUp' ? Math.min(histIdx + 1, bangHistory.length - 1) : Math.max(histIdx - 1, -1);
@@ -175,14 +197,18 @@ export function ChatView({ chatId }: { chatId: string }) {
 
   const send = (e?: FormEvent) => {
     e?.preventDefault();
-    const t = text.trim(); if (!t) return;
-    setText(''); setHistIdx(-1);
-    if (t.startsWith('!')) {
+    const t = text.trim();
+    if (t.startsWith('!')) { // attachments stay put for the next message to Claude
+      setText(''); setHistIdx(-1);
       const cmd = t.slice(1).trim(); if (!cmd) return;
       api.shell(chatId, cmd).catch(err => dispatch({ type: 'sys', text: err.message, err: true }));
       return;
     }
-    api.send(chatId, t).catch(err => dispatch({ type: 'sys', text: err.message, err: true }));
+    if (!t && !attachments.length) return;
+    const sent = attachments;
+    setText(''); setHistIdx(-1); setAttachments([]);
+    api.send(chatId, t, undefined, sent.map(({ name, mediaType, data }) => ({ name, mediaType, data })))
+      .catch(err => { dispatch({ type: 'sys', text: err.message, err: true }); setAttachments(a => [...sent, ...a]); });
   };
   const rename = async () => {
     if (!s?.sessionId) { dispatch({ type: 'sys', text: 'Send a first message before renaming; the session id does not exist yet.', err: true }); return; }
@@ -192,7 +218,12 @@ export function ChatView({ chatId }: { chatId: string }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col"
+      onDragEnter={e => { if (!isFileDrag(e) || state.status === 'ended') return; e.preventDefault(); dragDepth.current++; setDragging(true); }}
+      onDragOver={e => { if (isFileDrag(e) && state.status !== 'ended') { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+      onDragLeave={e => { if (isFileDrag(e) && --dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }}
+      onDrop={e => { if (!isFileDrag(e)) return; e.preventDefault(); dragDepth.current = 0; setDragging(false); if (state.status !== 'ended') attach([...e.dataTransfer.files]); }}>
+      {dragging && <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-lg border-2 border-dashed border-accent bg-accent-soft/80 text-[13px] font-semibold">Drop to attach to your next message</div>}
       <header className="flex min-h-11 items-center gap-2 border-b border-line bg-surface px-4 py-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-semibold leading-5">{title}</div>
@@ -223,15 +254,52 @@ export function ChatView({ chatId }: { chatId: string }) {
         {menuOpen && <CommandMenu matches={matches} index={Math.min(cmdIndex, matches.length - 1)} onPick={pickCommand} onHover={setCmdIndex} />}
         {bang && !menuOpen && <div className="absolute bottom-full left-4 right-4 mb-1 rounded border border-line bg-surface px-3 py-1.5 text-[11px] text-fg-faint">
           Runs in this chat's shell{s ? ` (${shortPath(s.cwd)})` : ''}. Enter runs, Esc interrupts, Up recalls. The output is yours until you send it to Claude.</div>}
-        <textarea ref={composer} className={`input flex-1 ${bang ? 'mono' : ''}`} rows={3} value={text} placeholder="Message Claude. Enter sends, Shift+Enter for a new line, / for commands, ! for your shell." onChange={e => { setText(e.target.value); setCmdIndex(0); setCmdDismissed(false); setHistIdx(-1); }}
-          onKeyDown={onComposerKey} disabled={state.status === 'ended'} />
-        <button className="btn primary self-end" type="submit" disabled={state.status === 'ended' || !text.trim()}><Send size={13} aria-hidden="true" /> Send</button>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {attachments.length > 0 && <AttachmentChips items={attachments} onRemove={id => setAttachments(a => a.filter(x => x.id !== id))} />}
+          <textarea ref={composer} className={`input ${bang ? 'mono' : ''}`} rows={3} value={text} placeholder="Message Claude. Enter sends, Shift+Enter for a new line, / for commands, ! for your shell. Drop files or paste images to attach." onChange={e => { setText(e.target.value); setCmdIndex(0); setCmdDismissed(false); setHistIdx(-1); }}
+            onKeyDown={onComposerKey} onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); attach(files); } }} disabled={state.status === 'ended'} />
+        </div>
+        <button className="btn primary self-end" type="submit" disabled={state.status === 'ended' || (!text.trim() && !attachments.length)}><Send size={13} aria-hidden="true" /> Send</button>
       </form>
 
       {forward && <ForwardDialog chatId={chatId} lastReply={[...state.entries].reverse().find(e => e.k === 'assistant')?.text || ''} onClose={() => setForward(false)} />}
     </div>
   );
 }
+
+/** An attachment waiting in the composer. `preview` is a data URL for images, so the chip can show a thumbnail. */
+type Pending = Attachment & { id: number; size: number; preview: string | null };
+const MAX_ATTACHMENT = 30 * 1024 * 1024;
+let attachSeq = 0;
+
+function readAttachment(file: File): Promise<Pending> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(r.error);
+    r.onload = () => {
+      const url = String(r.result);
+      const mediaType = file.type || 'application/octet-stream';
+      resolve({ id: ++attachSeq, name: file.name || 'pasted file', mediaType, size: file.size, data: url.slice(url.indexOf(',') + 1), preview: mediaType.startsWith('image/') ? url : null });
+    };
+    r.readAsDataURL(file);
+  });
+}
+
+function AttachmentChips({ items, onRemove }: { items: Pending[]; onRemove: (id: number) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5" aria-label="Attachments">
+      {items.map(a => (
+        <span key={a.id} className="inline-flex max-w-[260px] items-center gap-1.5 rounded border border-line bg-raised py-0.5 pl-1 pr-0.5 text-[11px]" title={`${a.name} · ${fmtBytes(a.size)}`}>
+          {a.preview ? <img src={a.preview} alt="" className="h-6 w-6 rounded-sm object-cover" /> : <FileText size={14} className="shrink-0 text-fg-faint" aria-hidden="true" />}
+          <span className="truncate">{a.name}</span>
+          <span className="shrink-0 text-fg-faint">{fmtBytes(a.size)}</span>
+          <button type="button" className="btn sm ghost h-5 px-1" onClick={() => onRemove(a.id)} aria-label={`Remove ${a.name}`}><X size={11} aria-hidden="true" /></button>
+        </span>
+      ))}
+    </div>
+  );
+}
+const fmtBytes = (n: number) => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 /** The chat's current model, and a dropdown to switch it. The list comes from the chat's own process, so it matches the account.
  *  The current model may be an alias ("opus") or the full id the process reported, so options match on either. */
@@ -423,7 +491,8 @@ function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
     case 'user': {
       const o = e.origin;
       const label = o?.kind === 'manual' ? 'forwarded from' : o?.kind === 'dialogue' ? 'dialogue · relayed from' : 'from';
-      return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{label} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{e.text}</div>;
+      return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{label} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{e.text}
+        {e.attachments?.length ? <span className={`flex flex-wrap gap-1 ${e.text ? 'mt-1.5' : ''}`}>{e.attachments.map((n, i) => <span key={i} className="inline-flex items-center gap-1 rounded bg-surface/60 px-1.5 text-[11px] text-fg-muted"><Paperclip size={10} aria-hidden="true" />{n}</span>)}</span> : null}</div>;
     }
     case 'assistant': return <div className={`msg assistant ${e.streaming ? 'opacity-90' : ''}`} dangerouslySetInnerHTML={{ __html: md(e.text) }} />;
     case 'tool': return <ToolRow e={e} />;

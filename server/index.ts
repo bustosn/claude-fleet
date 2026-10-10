@@ -28,7 +28,7 @@ chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title
 const aws = new AwsCreds(config.aws, stateDir);
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
-chats.terminals = terminals; chats.shellDir = path.join(stateDir, 'shell');
+chats.terminals = terminals; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
 collector.dialogues = dialogues;
@@ -38,7 +38,9 @@ const scratchDir = path.join(stateDir, 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+// Sending a message can carry attachments (base64 images and files), so that one route takes a larger body.
+const smallJson = express.json({ limit: '1mb' }), sendJson = express.json({ limit: '60mb' });
+app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/send$/.test(req.path) ? sendJson : smallJson)(req, res, next));
 
 function sse(res: Response) {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -138,10 +140,15 @@ app.get('/api/chats/:id/events', (req, res) => {
 });
 app.post('/api/chats/:id/send', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
-  const text = String(req.body?.text || '').trim(); if (!text) return res.status(400).json({ error: 'empty' });
+  const text = String(req.body?.text || '').trim();
+  const raw = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+  if (raw.length > 20) return res.status(400).json({ error: 'at most 20 attachments per message' });
+  const attachments = raw.map((a: any) => ({ name: String(a?.name || 'file'), mediaType: String(a?.mediaType || 'application/octet-stream'), data: String(a?.data || '') }));
+  if (attachments.some((a: { data: string }) => !a.data || !/^[A-Za-z0-9+/]*={0,2}$/.test(a.data))) return res.status(400).json({ error: 'attachment data must be base64' });
+  if (!text && !attachments.length) return res.status(400).json({ error: 'empty' });
   const from = req.body?.fromChatId ? chats.get(String(req.body.fromChatId)) : null;
   const origin = from && from.id !== c.id ? { kind: 'manual' as const, fromChatId: from.id, fromTitle: from.title } : undefined;
-  try { c.send(text, origin); res.json({ ok: true }); } catch (err: any) { res.status(409).json({ error: err.message }); }
+  try { c.send(text, origin, attachments); res.json({ ok: true }); } catch (err: any) { res.status(409).json({ error: err.message }); }
 });
 app.post('/api/chats/:id/permission', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
