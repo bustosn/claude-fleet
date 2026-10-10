@@ -222,7 +222,7 @@ export class Chat extends EventEmitter {
         }
         case 'assistant': {
           const blocks: ContentBlock[] = (msg.message?.content || []).map((b: any) => b.type === 'text' ? { type: 'text', text: b.text }
-            : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input) }
+            : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input), description: typeof b.input?.description === 'string' ? b.input.description : undefined }
             : b.type === 'thinking' ? { type: 'thinking' } : { type: b.type });
           for (const b of blocks) if (b.type === 'text') this.turnText += (this.turnText ? '\n\n' : '') + (b as any).text;
           if (blocks.length) this.emitEvent({ t: 'assistant', uuid: msg.uuid, blocks });
@@ -232,7 +232,8 @@ export class Chat extends EventEmitter {
           const c = msg.message?.content;
           if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result') {
             const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n') : '';
-            this.emitEvent({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 1500), length: text.length });
+            // Enough to read a command's output in the chat, like the terminal shows it. The view previews a few lines and expands on click.
+            this.emitEvent({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 8000), length: text.length });
           }
           break;
         }

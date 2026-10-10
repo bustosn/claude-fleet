@@ -32,12 +32,12 @@ export async function conversationHistory(sessionId: string, keep = 300): Promis
         if (b.type === 'text') out.push({ t: 'user', text: b.text, origin: null, at });
         else if (b.type === 'tool_result') {
           const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n') : '';
-          out.push({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 800), length: text.length, at });
+          out.push({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 4000), length: text.length, at });
         }
       }
     } else if (m.type === 'assistant' && Array.isArray(c)) {
       const blocks: ContentBlock[] = c.map((b: any) => b.type === 'text' ? { type: 'text', text: b.text }
-        : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input) }
+        : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input), description: typeof b.input?.description === 'string' ? b.input.description : undefined }
         : { type: b.type }).filter((b: ContentBlock) => b.type !== 'thinking');
       if (blocks.length) out.push({ t: 'assistant', uuid: m.uuid, blocks, at });
     }

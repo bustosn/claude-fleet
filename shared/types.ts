@@ -75,7 +75,8 @@ export type MessageOrigin = { kind: 'peer' | 'manual'; fromChatId: string; fromT
 
 export type ContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: string }
+  /** `input` is the one field that matters (the command, the path, the pattern); `description` is the model's own note on a shell command. */
+  | { type: 'tool_use'; id: string; name: string; input: string; description?: string }
   | { type: 'thinking' }
   | { type: string };
 

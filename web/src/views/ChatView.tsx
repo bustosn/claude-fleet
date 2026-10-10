@@ -10,7 +10,7 @@ import type { TokenUsage } from '../../../shared/types';
 type Entry =
   | { k: 'user'; id: number; text: string; origin: MessageOrigin }
   | { k: 'assistant'; id: number; text: string; streaming: boolean }
-  | { k: 'tool'; id: number; toolId: string; name: string; input: string; result?: { text: string; length: number; isError: boolean } }
+  | { k: 'tool'; id: number; toolId: string; name: string; input: string; description?: string; result?: { text: string; length: number; isError: boolean } }
   | { k: 'sys'; id: number; text: string; err?: boolean }
   | { k: 'perm'; id: number; permId: string; toolName: string; input: string; resolved?: 'allow' | 'deny' };
 
@@ -50,7 +50,7 @@ function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
         if (b.type === 'text' && (b as any).text.trim()) {
           if (streaming) { const s = streaming; entries = entries.map(e => e === s ? { ...e, text: (b as any).text, streaming: false } : e); streaming = null; }
           else push({ k: 'assistant', text: (b as any).text, streaming: false });
-        } else if (b.type === 'tool_use') push({ k: 'tool', toolId: (b as any).id, name: (b as any).name, input: (b as any).input });
+        } else if (b.type === 'tool_use') push({ k: 'tool', toolId: (b as any).id, name: (b as any).name, input: (b as any).input, description: (b as any).description });
       }
       if (streaming) { const s = streaming; entries = entries.map(e => e === s ? { ...e, streaming: false } : e); }
       break;
@@ -164,12 +164,13 @@ export function ChatView({ chatId }: { chatId: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-11 items-center gap-2 border-b border-line bg-surface px-4">
+      <header className="flex min-h-11 items-center gap-2 border-b border-line bg-surface px-4 py-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold">{title}</div>
-          <div className="flex items-center gap-2 truncate text-[11px] text-fg-faint mono">
-            {s && s.sessionId && s.locatedBy !== 'cwd' ? <WorktreePicker sessionId={s.sessionId} worktree={s.worktree} locatedBy={s.locatedBy} /> : <span>{s ? (s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)) : ''}</span>}
-            <span>{s ? `${s.model}  ${s.permissionMode}${s.forked ? '  forked copy' : ''}` : ''}</span>
+          <div className="truncate text-[13px] font-semibold leading-5">{title}</div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-fg-faint mono">
+            {s && s.sessionId && s.locatedBy !== 'cwd' ? <WorktreePicker sessionId={s.sessionId} worktree={s.worktree} locatedBy={s.locatedBy} /> : <span className="truncate">{s ? (s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)) : ''}</span>}
+            {s && <><span aria-hidden="true">·</span><span className="shrink-0">{s.model}</span><span aria-hidden="true">·</span><span className="shrink-0">{s.permissionMode}</span></>}
+            {s?.forked && <><span aria-hidden="true">·</span><span className="shrink-0">forked copy</span></>}
           </div>
         </div>
         <Status state={state.status} />
@@ -285,6 +286,44 @@ function ToolGroup({ tools, chatId }: { tools: ToolEntry[]; chatId: string }) {
   );
 }
 
+const SHELL_TOOLS = /^(Bash|PowerShell)$/;
+const PREVIEW_LINES = 6;
+
+/** One tool call, laid out like the terminal: a shell call shows its description, the command on a `$` line, and the first lines of
+ *  output with "… +N lines" to see the rest. Other tools show their one meaningful input and the output the same way. */
+function ToolRow({ e }: { e: ToolEntry }) {
+  const [open, setOpen] = useState(false);
+  const fleet = e.name.startsWith('mcp__fleet__');
+  const shell = SHELL_TOOLS.test(e.name);
+  const r = e.result;
+  const text = r ? r.text.replace(/\s+$/, '') : '';
+  const lines = text ? text.split('\n') : [];
+  const hidden = Math.max(0, lines.length - PREVIEW_LINES);
+  const cut = !!r && r.length > r.text.length;
+  return (
+    <div className="msg tool">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className={`shrink-0 font-semibold ${fleet ? 'text-warn' : 'text-info'}`}>{toolLabel(e.name)}</span>
+        {shell ? <span className="min-w-0 truncate text-fg-muted">{e.description || ''}</span> : <span className="mono min-w-0 truncate">{e.input}</span>}
+        {r && !shell && <span className={`ml-auto shrink-0 text-[11px] ${r.isError ? 'text-crit' : 'text-fg-faint'}`}>{r.isError ? 'error' : ''}</span>}
+      </div>
+      {shell && <pre className="cmd">{(e.name === 'PowerShell' ? 'PS> ' : '$ ') + e.input}</pre>}
+      {r && (
+        <div className={`mt-1 border-l-2 pl-2 ${r.isError ? 'border-crit' : 'border-line'}`}>
+          {lines.length === 0
+            ? <span className="text-[11px] text-fg-faint">(no output)</span>
+            : <pre className={`out ${r.isError ? 'text-crit' : ''}`}>{(open ? lines : lines.slice(0, PREVIEW_LINES)).join('\n')}</pre>}
+          {(hidden > 0 || cut) && (
+            <button className="mt-0.5 text-[11px] text-fg-faint hover:text-fg" onClick={() => setOpen(o => !o)}>
+              {hidden > 0 ? (open ? 'show less' : `… +${hidden} lines`) : ''}{cut ? `${hidden > 0 ? ' · ' : ''}output cut at ${r.text.length} of ${r.length} chars` : ''}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
   switch (e.k) {
     case 'user': {
@@ -292,20 +331,7 @@ function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
       return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{o.kind === 'manual' ? 'forwarded from' : 'from'} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{e.text}</div>;
     }
     case 'assistant': return <div className={`msg assistant ${e.streaming ? 'opacity-90' : ''}`} dangerouslySetInnerHTML={{ __html: md(e.text) }} />;
-    case 'tool': {
-      const fleet = e.name.startsWith('mcp__fleet__');
-      return (
-        <div className="msg tool">
-          <span className={`font-semibold ${fleet ? 'text-warn' : 'text-info'}`}>{e.name.replace(/^mcp__fleet__/, 'fleet: ')}</span> <span className="mono">{e.input}</span>
-          {e.result && (
-            <details className="mt-1">
-              <summary className={`cursor-pointer text-[11px] ${e.result.isError ? 'text-crit' : 'text-fg-faint'}`}>{e.result.isError ? 'error' : 'result'} · {e.result.length} chars</summary>
-              <pre>{e.result.text}</pre>
-            </details>
-          )}
-        </div>
-      );
-    }
+    case 'tool': return <ToolRow e={e} />;
     case 'sys': return <div className={`msg sys ${e.err ? 'err' : ''}`}>{e.text}</div>;
     case 'perm': return (
       <div className={`msg perm ${e.resolved ? 'resolved' : ''}`}>
