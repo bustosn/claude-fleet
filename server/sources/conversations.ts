@@ -18,6 +18,16 @@ export async function listConversations(limit = 200): Promise<SavedConversation[
 
 export type HistoryEvent = Extract<ChatEvent, { t: 'user' | 'assistant' | 'tool_result' }>;
 
+/** The transcript records a slash command as tagged XML and follows it with a caveat and the command's local output; neither is
+ *  something the person typed. The command comes back as typed ("/model opus"); the rest is dropped. Null means skip the message. */
+function userText(raw: string): string | null {
+  const cmd = /<command-name>([^<]*)<\/command-name>[\s\S]*?<command-args>([^<]*)<\/command-args>/.exec(raw);
+  if (cmd) { const args = cmd[2].trim(); return `${cmd[1].trim()}${args ? ' ' + args : ''}`; }
+  if (/^\s*<local-command-(caveat|stdout|stderr)>/.test(raw)) return null;
+  const text = raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  return text || null;
+}
+
 // Transcript trimmed to what a chat view needs: text, tool names, short tool results. Subagent traffic excluded.
 export async function conversationHistory(sessionId: string, keep = 300): Promise<HistoryEvent[]> {
   const msgs = await getSessionMessages(sessionId);
@@ -27,9 +37,9 @@ export async function conversationHistory(sessionId: string, keep = 300): Promis
     const c = m.message?.content;
     const at = 0;
     if (m.type === 'user') {
-      if (typeof c === 'string') out.push({ t: 'user', text: c, origin: null, at });
+      if (typeof c === 'string') { const text = userText(c); if (text) out.push({ t: 'user', text, origin: null, at }); }
       else if (Array.isArray(c)) for (const b of c) {
-        if (b.type === 'text') out.push({ t: 'user', text: b.text, origin: null, at });
+        if (b.type === 'text') { const text = userText(b.text); if (text) out.push({ t: 'user', text, origin: null, at }); }
         else if (b.type === 'tool_result') {
           const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n') : '';
           out.push({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 4000), length: text.length, at });
