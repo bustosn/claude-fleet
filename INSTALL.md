@@ -18,7 +18,7 @@ The installer:
 2. asks where your git repos live (Enter takes the folder you cloned into)
 3. installs packages and builds the app
 4. signs you in to Claude Code if you are not already
-5. starts Fleet, sets it to start again when you log in, and opens http://127.0.0.1:7777
+5. starts Fleet, sets it to start again when you log in (and to restart itself within seconds if it ever crashes), and opens http://127.0.0.1:7777
 
 Running it again is safe. To update later: `git pull`, then run the installer again.
 

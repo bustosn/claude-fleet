@@ -6,7 +6,8 @@ Keeps the daily Fleet instance running without a terminal.
   .\scripts\autostart.ps1 -Stop      stop it
   .\scripts\autostart.ps1 -Remove    delete the logon task
 
-The task runs scripts\run.ps1 under a headless conhost, which starts `npm start` in this folder and logs to state\fleet.log.
+The task runs scripts\run.ps1 under a headless conhost, which starts `npm start` in this folder, logs to state\fleet.log,
+and starts it again within seconds if it crashes. -Stop and -Restart tell it the stop is deliberate.
 Headless matters: when Windows Terminal is the default console host it ignores -WindowStyle Hidden and shows an empty window
 that kills the server if closed. -Restart re-registers the task each time, so a changed definition takes effect on the next ship.
 No admin rights needed. If your shell refuses to run scripts: powershell -ExecutionPolicy Bypass -File .\scripts\autostart.ps1
@@ -20,11 +21,26 @@ $log = Join-Path $root 'state\fleet.log'
 $port = (Get-Content (Join-Path $root 'fleet.config.json') | ConvertFrom-Json).port
 if (-not $port) { $port = 7777 }
 
+$stopFlag = Join-Path $root 'state\fleet.stop'
+
+$runnerFile = Join-Path $root 'state\fleet.runner'
+
+# run.ps1 restarts Fleet whenever it exits. A stop raises the flag it checks, ends the loop itself (its pid is in
+# state\fleet.runner) so an old loop cannot outlive a restart, then ends the task and the server.
 function Stop-Fleet {
+  New-Item -ItemType Directory -Force (Join-Path $root 'state') | Out-Null
+  Set-Content $stopFlag (Get-Date -Format s)
+  if (Test-Path $runnerFile) {
+    $runner = Get-Process -Id ([int](Get-Content $runnerFile)) -ErrorAction SilentlyContinue
+    if ($runner -and $runner.ProcessName -eq 'powershell') { Stop-Process -Id $runner.Id -Force; Write-Host "stopped runner pid $($runner.Id)" }
+    Remove-Item $runnerFile -ErrorAction SilentlyContinue
+  }
+  Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
   $pids = netstat -ano | Select-String ":$port\s+.*LISTENING\s+(\d+)" | ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique
   foreach ($p in $pids) { if ($p -ne '0') { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue; Write-Host "stopped pid $p on :$port" } }
 }
 function Start-Fleet {
+  Remove-Item $stopFlag -ErrorAction SilentlyContinue
   Start-ScheduledTask -TaskName $task
   Write-Host "started: http://127.0.0.1:$port (log: $log)"
 }
