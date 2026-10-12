@@ -8,7 +8,7 @@ export function WorktreeView({ path }: { path: string }) {
   const snap = useStore(s => s.snapshot);
   const found = snap?.repos.flatMap(r => r.worktrees.map(w => ({ repo: r, wt: w }))).find(x => x.wt.path.toLowerCase() === path.toLowerCase());
   if (!snap) return null;
-  if (!found) return <Empty title="Worktree not found">It may have been removed. The tree refreshes every ten seconds.</Empty>;
+  if (!found) return <Empty title="Worktree not found">It may have been removed. The tree picks up added and removed worktrees within a few seconds.</Empty>;
   const { repo, wt } = found;
   const sessions = snap.sessions.filter(s => s.worktree && s.worktree.toLowerCase() === wt.path.toLowerCase());
   const lower = wt.path.toLowerCase();
@@ -28,9 +28,6 @@ export function WorktreeView({ path }: { path: string }) {
       </header>
 
       <dl className="kv panel p-4">
-        <dt>Changes</dt><dd>{wt.dirty + wt.untracked ? <span className="text-warn">{wt.dirty} modified, {wt.untracked} untracked</span> : 'clean'}</dd>
-        <dt>Upstream</dt><dd>{wt.upstream ? <>{wt.upstream} <span className="num text-fg-muted">+{wt.ahead} / −{wt.behind}</span></> : <span className="text-fg-faint">no upstream</span>}</dd>
-        <dt>Last commit</dt><dd>{wt.lastCommit ? <><span className="mono text-fg-muted">{wt.lastCommit.hash}</span> {wt.lastCommit.subject} <span className="text-fg-faint">{age(wt.lastCommit.at)} ago</span></> : <span className="text-crit">{wt.error}</span>}</dd>
         <dt>Kind</dt><dd>{wt.isMain ? 'main checkout' : wt.managed ? 'Claude-managed worktree' : 'worktree'}{wt.locked ? ', locked' : ''}</dd>
       </dl>
 

@@ -39,7 +39,6 @@ function RepoNode({ repo, open }: { repo: Repo; open: boolean }) {
   const main = repo.worktrees[0];
   // A repo with only its main checkout is one row: the repo opens the checkout directly.
   if (repo.worktrees.length === 1 && main) {
-    const dirty = main.dirty + main.untracked;
     const selected = view.kind === 'worktree' && view.path === main.path;
     const sessions = snap.sessions.filter(s => s.worktree && s.worktree.toLowerCase() === main.path.toLowerCase());
     return (
@@ -50,9 +49,7 @@ function RepoNode({ repo, open }: { repo: Repo; open: boolean }) {
           <FolderGit2 size={14} className="text-fg-muted" aria-hidden="true" />
           <span className="grow font-medium">{repo.name}</span>
           {attention > 0 && <span className="chip warn num">{attention}</span>}
-          {dirty > 0 && <span className="num text-[11px] text-warn" title={`${main.dirty} modified, ${main.untracked} untracked`}>●{dirty}</span>}
           <span className="mono truncate max-w-[40%] text-fg-faint">{main.branch || ''}</span>
-          {main.behind > 0 && <span className="num text-[11px] text-fg-faint">↓{main.behind}</span>}
         </button>
         {sessions.map(s => <SessionRow key={s.id} session={s} indent={34} />)}
       </div>
@@ -79,7 +76,6 @@ function WorktreeNode({ repo, wt }: { repo: Repo; wt: Worktree }) {
   const [menu, openMenu] = useContextMenu();
   const snap = useStore(s => s.snapshot)!;
   const selected = view.kind === 'worktree' && view.path === wt.path;
-  const dirty = wt.dirty + wt.untracked;
   const key = ticketKey(wt.branch) || ticketKey(wt.path);
   const sessions = snap.sessions.filter(s => s.worktree && s.worktree.toLowerCase() === wt.path.toLowerCase());
   return (
@@ -88,10 +84,7 @@ function WorktreeNode({ repo, wt }: { repo: Repo; wt: Worktree }) {
       <button className="row pl-6" aria-current={selected ? 'true' : undefined} onClick={() => actions.go({ kind: 'worktree', path: wt.path })} onContextMenu={e => openMenu(e, worktreeItems(wt))} title={`${wt.path}\n${wt.branch || ''}`}>
         <GitBranch size={13} className={wt.isMain ? 'text-fg-faint' : 'text-accent'} aria-hidden="true" />
         <span className="grow mono">{wt.branch || (wt.detached ? `detached ${wt.head}` : shortPath(wt.path))}</span>
-        {key && !wt.isMain && <span className="chip ticket">{key}</span>}
-        {dirty > 0 && <span className="num text-[11px] text-warn" title={`${wt.dirty} modified, ${wt.untracked} untracked`}>●{dirty}</span>}
-        {(wt.ahead > 0 || wt.behind > 0) && <span className="num text-[11px] text-fg-faint">{wt.ahead > 0 ? `↑${wt.ahead}` : ''}{wt.behind > 0 ? ` ↓${wt.behind}` : ''}</span>}
-      </button>
+        {key && !wt.isMain && <span className="chip ticket">{key}</span>}      </button>
       {sessions.map(s => <SessionRow key={s.id} session={s} indent={34} />)}
     </div>
   );

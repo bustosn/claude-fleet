@@ -28,8 +28,6 @@ export interface Session {
 export interface Worktree {
   path: string; head: string; branch: string | null; detached: boolean; locked: boolean; prunable: boolean;
   isMain: boolean; managed: boolean;
-  dirty: number; untracked: number; ahead: number; behind: number; upstream: string | null;
-  lastCommit: { hash: string; subject: string; at: number } | null; error: string | null;
   sessions: { id: string; name: string; kind: SessionKind; state: string; column: Column }[];
 }
 

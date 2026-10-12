@@ -18,22 +18,41 @@ export async function listRepos(reposRoot: string): Promise<{ name: string; path
   return repos;
 }
 
-export async function scanRepos(reposRoot: string, extraRepos: string[] = []): Promise<RepoScan[]> {
+async function allRepos(reposRoot: string, extraRepos: string[]) {
   const repos = await listRepos(reposRoot);
   for (const p of extraRepos) {
     const norm = p.replace(/\\/g, '/').replace(/\/+$/, '');
     if (!repos.some(r => r.path.toLowerCase() === norm.toLowerCase())) repos.push({ name: path.basename(norm), path: norm });
   }
-  return mapLimit(repos, 4, async repo => {
+  return repos;
+}
+
+// One `git worktree list` per repo. No per-worktree status: keeping branches pulled and clean is the user's job, and
+// running git status on every checkout every few seconds kept the CPU (and the antivirus scanning each git.exe) busy.
+export async function scanRepos(reposRoot: string, extraRepos: string[] = []): Promise<RepoScan[]> {
+  return mapLimit(await allRepos(reposRoot, extraRepos), 4, async repo => {
     let base: ReturnType<typeof parsePorcelain>;
     try { base = parsePorcelain(await run('git', ['-C', repo.path, 'worktree', 'list', '--porcelain'])); }
     catch (err) { return { ...repo, error: errText(err), worktrees: [] }; }
-    const worktrees = await mapLimit(base, 3, async (wt, i) => ({
-      ...wt, ...(await describe(wt.path)), isMain: i === 0, managed: /\/\.claude\/worktrees\//i.test(wt.path),
-    }));
+    const worktrees = base.map((wt, i) => ({ ...wt, isMain: i === 0, managed: /\/\.claude\/worktrees\//i.test(wt.path) }));
     return { ...repo, worktrees };
   });
 }
+
+/** File timestamps only, no git: changes when a repo appears or goes, a worktree is added or removed, or a checkout switches branch. */
+export async function layoutStamp(reposRoot: string, extraRepos: string[] = []): Promise<string> {
+  const parts = await mapLimit(await allRepos(reposRoot, extraRepos), 8, async repo => {
+    const git = path.join(repo.path, '.git');
+    const out = [repo.path, await mtime(path.join(git, 'HEAD')), await mtime(path.join(git, 'worktrees'))];
+    let linked: string[] = [];
+    try { linked = (await fs.readdir(path.join(git, 'worktrees'))).sort(); } catch {}
+    for (const n of linked) out.push(n, await mtime(path.join(git, 'worktrees', n, 'HEAD')));
+    return out.join('|');
+  });
+  return parts.join('\n');
+}
+
+const mtime = (p: string) => fs.stat(p).then(s => String(s.mtimeMs), () => '-');
 
 function parsePorcelain(out: string) {
   const blocks = out.trim().split(/\n\s*\n/).filter(Boolean);
@@ -50,24 +69,4 @@ function parsePorcelain(out: string) {
     }
     return wt;
   });
-}
-
-async function describe(wtPath: string) {
-  const d = { dirty: 0, untracked: 0, ahead: 0, behind: 0, upstream: null as string | null, lastCommit: null as Worktree['lastCommit'], error: null as string | null };
-  try {
-    const st = await run('git', ['-C', wtPath, 'status', '--porcelain', '--branch']);
-    const lines = st.split('\n');
-    const head = lines.shift() || '';
-    const m = head.match(/^## \S+?(?:\.\.\.(\S+))?(?: \[(.*)\])?$/);
-    if (m) {
-      d.upstream = m[1] || null;
-      const a = /ahead (\d+)/.exec(m[2] || ''); const b = /behind (\d+)/.exec(m[2] || '');
-      d.ahead = a ? +a[1] : 0; d.behind = b ? +b[1] : 0;
-    }
-    for (const l of lines) { if (!l) continue; if (l.startsWith('??')) d.untracked++; else d.dirty++; }
-    const log = await run('git', ['-C', wtPath, 'log', '-1', '--format=%h%x1f%s%x1f%ct']);
-    const [hash, subject, ct] = log.trim().split('\x1f');
-    if (hash) d.lastCommit = { hash, subject, at: (+ct) * 1000 };
-  } catch (err) { d.error = errText(err).slice(0, 200); }
-  return d;
 }

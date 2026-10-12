@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { listAgents, type AgentRow } from './sources/agents.js';
 import { readJobs, type JobRecord } from './sources/jobs.js';
-import { scanRepos, type RepoScan } from './sources/worktrees.js';
+import { scanRepos, layoutStamp, type RepoScan } from './sources/worktrees.js';
 import { listConversations, type SavedConversation } from './sources/conversations.js';
 import { normPath, errText, mapLimit } from './util.js';
 import { SessionHomes, type WorktreeRef, type Placement } from './sources/homes.js';
@@ -54,7 +54,14 @@ export class Collector extends EventEmitter {
     this.agents = agents; this.jobs = jobs;
     await this.scanHomes(agents.map(a => ({ sessionId: a.sessionId, cwd: (a.bgId && jobs[a.bgId]?.cwd) || a.cwd, title: this.titleOf(a.sessionId) || a.name || '' })));
   }
-  async pollGit() { this.repos = await scanRepos(this.config.reposRoot, this.config.extraRepos); }
+  // Git runs only when the repo layout on disk moved, plus once a day as a backstop.
+  private gitStamp = ''; private gitScannedAt = 0;
+  async pollGit() {
+    const stamp = await layoutStamp(this.config.reposRoot, this.config.extraRepos);
+    if (stamp === this.gitStamp && Date.now() - this.gitScannedAt < 24 * 3600000) return;
+    this.repos = await scanRepos(this.config.reposRoot, this.config.extraRepos);
+    this.gitStamp = stamp; this.gitScannedAt = Date.now();
+  }
   async pollConversations() {
     this.conversations = await listConversations(this.config.poll.conversationsLimit);
     await this.scanHomes(this.conversations.map(c => ({ sessionId: c.sessionId, cwd: c.cwd, title: c.title })));
