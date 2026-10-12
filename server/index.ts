@@ -173,6 +173,25 @@ app.post('/api/chats/:id/model', async (req, res) => {
   const model = String(req.body?.model || '').trim(); if (!model) return res.status(400).json({ error: 'no model given' });
   try { await c.setModel(model); res.json(c.summary()); } catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
 });
+// MCP servers per chat: status, reconnect, on/off. Signing in to a server that needs it happens in a terminal running `claude` (`/mcp`), which the SDK cannot do for us.
+app.get('/api/chats/:id/mcp', async (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  try { res.json(await c.mcpList()); } catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
+});
+app.post('/api/chats/:id/mcp/login', (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  try { const t = terminals.open({ cwd: c.cwd }); t.write('claude\r'); res.json(t.summary()); }
+  catch (err) { res.status(500).json({ error: `could not start a shell: ${errText(err)}` }); }
+});
+app.post('/api/chats/:id/mcp/:name/:action', async (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  const { name, action } = req.params;
+  if (!['reconnect', 'enable', 'disable'].includes(action)) return res.status(400).json({ error: `unknown action: ${action}` });
+  try {
+    if (action === 'reconnect') await c.mcpReconnect(name); else await c.mcpToggle(name, action === 'enable');
+    res.json(await c.mcpList());
+  } catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
+});
 // Files named in a chat: which exist (so only real ones become links), a preview, and opening them outside Fleet. Paths resolve from the chat's folder.
 app.post('/api/chats/:id/files/resolve', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });

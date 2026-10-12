@@ -8,7 +8,7 @@ import { summarizeInput } from './sources/conversations.js';
 import type { FleetConfig } from './config.js';
 import { ShellRunner } from './shellRunner.js';
 import type { TerminalManager } from './terminals.js';
-import type { Attachment, ChatEvent, ChatStatus, ChatSummary, ContentBlock, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
+import type { Attachment, ChatEvent, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
 class Inbox implements AsyncIterable<SDKUserMessage> {
@@ -237,6 +237,16 @@ export class Chat extends EventEmitter {
     }
     return this.models.map(m => ({ value: m.value, displayName: m.displayName || m.value, description: m.description || '', resolvedModel: m.resolvedModel || null }));
   }
+  /** MCP servers as this chat's process sees them. Fleet's own in-process server is left out; it is not something to manage. */
+  async mcpList(): Promise<McpServerView[]> {
+    if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
+    const list = await Promise.race([this.q.mcpServerStatus(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timed out asking the chat for its MCP servers')), 8000))]);
+    return list.filter(m => m.name !== 'fleet').map(m => ({
+      name: m.name, status: m.status, scope: m.scope ?? null, url: (m.config as any)?.url ?? null, tools: m.tools?.length ?? 0, error: m.error ?? null,
+    }));
+  }
+  async mcpReconnect(name: string) { if (!this.q) throw new Error('chat is not running'); await this.q.reconnectMcpServer(name); }
+  async mcpToggle(name: string, enabled: boolean) { if (!this.q) throw new Error('chat is not running'); await this.q.toggleMcpServer(name, enabled); }
   /** Switches the live process; the turn in flight finishes on the old model and the next one uses the new. */
   async setModel(model: string) {
     if (this.status === 'ended' || !this.q) throw new Error('chat is not running');

@@ -1,4 +1,4 @@
-import type { Attachment, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, ModelOption, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
+import type { Attachment, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -31,6 +31,9 @@ export const api = {
   openFile: (id: string, path: string, how: 'editor' | 'default' | 'reveal', line?: number) => post<{ ok: true }>(`/api/chats/${id}/file/open`, { path, how, line }),
   models: (id: string) => j<ModelOption[]>(`/api/chats/${id}/models`),
   setModel: (id: string, model: string) => post<ChatSummary>(`/api/chats/${id}/model`, { model }),
+  mcp: (id: string) => j<McpServerView[]>(`/api/chats/${id}/mcp`),
+  mcpAction: (id: string, name: string, action: 'reconnect' | 'enable' | 'disable') => post<McpServerView[]>(`/api/chats/${id}/mcp/${encodeURIComponent(name)}/${action}`),
+  mcpLogin: (id: string) => post<TerminalSummary>(`/api/chats/${id}/mcp/login`),
   send: (id: string, text: string, fromChatId?: string, attachments?: Attachment[]) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId, attachments }),
   /** Forwarded text: from a live chat (`chatId`), or from a saved conversation, which only has a title. */
   forward: (id: string, text: string, from: { chatId?: string; title?: string }) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId: from.chatId, fromTitle: from.title }),
