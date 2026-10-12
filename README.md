@@ -4,14 +4,20 @@ A local control room for running many Claude Code sessions at once across git wo
 
 Node + TypeScript server, React + TypeScript + Vite + Tailwind web app. No framework beyond that, no build step for the server.
 
-## Run
+## Install
+
+On Windows, from a clone: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`. It installs Git, Node.js and Claude Code if missing, writes the config, builds, and starts Fleet at logon. Step by step, including a version to hand to Claude Code: [INSTALL.md](INSTALL.md).
+
+By hand, on any OS (Node 20+, git, and a signed-in Claude Code):
 
 ```
-cp fleet.config.example.json fleet.config.json   # once, then set reposRoot and claudeHome
+cp fleet.config.example.json fleet.config.json   # once, then set reposRoot
 npm install
 npm run build      # once, builds the web app into dist/web
 npm start          # daily instance: http://127.0.0.1:7777
 ```
+
+## Working on Fleet
 
 Development happens in a second checkout so the daily instance never restarts mid-chat:
 
@@ -69,4 +75,4 @@ Design and roadmap: [`docs/plans/`](docs/plans/). If you are an agent working on
 
 `fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), the `aws` section, and `terminal.shell` (null picks PowerShell on Windows, `$SHELL` elsewhere).
 
-It is not tracked: each machine (and each worktree) keeps its own copy, made from `fleet.config.example.json`. `reposRoot` and `claudeHome` are the only values that have to change. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.
+It is not tracked: each machine (and each worktree) keeps its own copy, made from `fleet.config.example.json`. `reposRoot` is the only value that has to change; `claudeHome` defaults to `~/.claude`. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.
