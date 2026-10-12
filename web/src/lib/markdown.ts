@@ -37,18 +37,45 @@ function linkify(prose: string, isFile?: (path: string) => boolean): string {
   });
 }
 
-/** Minimal markdown for chat replies: fenced code, inline code, links, bold, bullets, paragraphs. Everything is escaped first. */
+const SEP_ROW = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const splitRow = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
+const NUMERIC = /^[\d,.\s%$+-]+$/;
+
+/** GitHub-style pipe tables: a header row, a separator row of dashes, then body rows. Alignment follows the separator's colons; plain numbers right-align. */
+function tables(text: string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i + 1 < lines.length && lines[i].includes('|') && SEP_ROW.test(lines[i + 1])) {
+      const head = splitRow(lines[i]);
+      const align = splitRow(lines[i + 1]).map(c => c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : c.startsWith(':') ? 'left' : '');
+      const rows: string[][] = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes('|') && lines[j].trim()) rows.push(splitRow(lines[j++]));
+      const cell = (tag: string, c: string, k: number) => {
+        const a = align[k] || (tag === 'td' && c && NUMERIC.test(c) ? 'right' : '');
+        return `<${tag}${a ? ` style="text-align:${a}"` : ''}${a === 'right' ? ' class="num"' : ''}>${c}</${tag}>`;
+      };
+      out.push(`<table><thead><tr>${head.map((c, k) => cell('th', c, k)).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${head.map((_, k) => cell('td', r[k] ?? '', k)).join('')}</tr>`).join('')}</tbody></table>`);
+      i = j - 1;
+    } else out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
+/** Minimal markdown for chat replies: fenced code, inline code, links, bold, bullets, tables, paragraphs. Everything is escaped first. */
 export function md(src: string, isFile?: (path: string) => boolean): string {
   const parts = src.split(/```/);
   return parts.map((p, i) => i % 2
     ? `<pre><code>${esc(p.replace(/^\w*\n/, ''))}</code></pre>`
-    : linkify(esc(p), isFile)
-      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    : tables(linkify(esc(p), isFile)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>'))
       .replace(/^(#{1,4}) (.*)$/gm, (_, h: string, t: string) => `<h${h.length}>${t}</h${h.length}>`)
       .replace(/^(?:- |\* )(.*)$/gm, '<li>$1</li>')
       // Newlines between items or after a heading would each become a <br> and open gaps in the block.
       .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m.replace(/\n/g, '')}</ul>`)
-      .replace(/(<\/h\d>|<\/ul>)\n+/g, '$1')
+      .replace(/(<\/h\d>|<\/ul>|<\/table>)\n+/g, '$1')
+      .replace(/\n+(<table>)/g, '$1')
       .replace(/\n{2,}/g, '</p><p>')
       .replace(/\n/g, '<br>')).join('');
 }

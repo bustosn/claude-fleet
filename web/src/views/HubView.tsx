@@ -52,7 +52,7 @@ function AwsTile() {
       </header>
       <dl className="kv">
         <dt>Role keys</dt><dd><b className={`num ${tone(role.level)}`}>{s ? role.text : '…'}</b> <span className="text-fg-faint">{s?.expiration ? `until ${new Date(s.expiration).toLocaleString()}` : s?.error || ''}</span></dd>
-        <dt>SSO session</dt><dd><b className={`num ${tone(sso.level)}`}>{s ? sso.text : '…'}</b> <span className="text-fg-faint">{!s ? '' : s.ssoExpiresAt ? `token until ${new Date(s.ssoExpiresAt).toLocaleTimeString()}${s.ssoHasRefresh ? ', refresh token present' : ''}` : 'no SSO token cached'}</span></dd>
+        <dt>SSO token</dt><dd><b className={`num ${s?.ssoHasRefresh ? 'text-fg' : tone(sso.level)}`}>{s ? sso.text : '…'}</b> <span className="text-fg-faint">{!s ? '' : s.ssoExpiresAt ? (s.ssoHasRefresh ? `until ${new Date(s.ssoExpiresAt).toLocaleTimeString()}; renews itself from the refresh token, no browser` : `until ${new Date(s.ssoExpiresAt).toLocaleTimeString()}; no refresh token, the next refresh needs a sign-in`) : 'no SSO token cached'}</span></dd>
         <dt>Identity</dt><dd className="mono text-[11px]">{s?.arn || (s?.error ? `not working: ${s.error}` : '…')}</dd>
       </dl>
       <div className="flex flex-wrap gap-2">
@@ -62,7 +62,7 @@ function AwsTile() {
         {running && <button className="btn" onClick={() => api.awsCancel()}>Cancel</button>}
       </div>
       {s?.needsLogin && <p className="m-0 text-[12px] text-crit">The SSO session has expired, so the timer stopped. Click Refresh credentials to log in once; the timer takes over again after that.</p>}
-      <p className="m-0 text-[11px] text-fg-faint">Refresh uses the cached SSO session and needs no browser while that session is alive. When it has expired, a device-code login opens in your browser with the code filled in: two clicks. A timer checks every 10 minutes and refreshes silently an hour before the keys expire, around the clock while Fleet is running.</p>
+      <p className="m-0 text-[11px] text-fg-faint">Refresh needs no browser while a refresh token is cached; the one-hour SSO token above renews from it. After days away the refresh token itself lapses and a device-code login opens in your browser with the code filled in: two clicks. A timer checks every 10 minutes and refreshes silently an hour before the keys expire, around the clock while Fleet is running.</p>
       {s?.run && <pre className="logs">{s.run.log.map(l => `${new Date(l.at).toLocaleTimeString()}  ${l.line}`).join('\n')}</pre>}
     </section>
   );
