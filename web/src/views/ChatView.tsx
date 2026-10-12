@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { ArrowRight, Code2, ExternalLink, FileText, FolderOpen, Paperclip, Pencil, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
-import { api, subscribe, type Attachment, type ChatEvent, type FilePreview, type ChatSummary, type ChatStatus, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
+import { ArrowRight, Code2, ExternalLink, FileText, FolderOpen, Paperclip, Pencil, Plug, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
+import { api, subscribe, type Attachment, type ChatEvent, type FilePreview, type ChatSummary, type ChatStatus, type McpServerView, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
 import { rankCommands } from '../lib/commands';
 import { md, esc, fileRefs } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
@@ -250,7 +250,7 @@ export function ChatView({ chatId }: { chatId: string }) {
           <div className="truncate text-[13px] font-semibold leading-5">{title}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-fg-faint mono">
             {s && s.sessionId && s.locatedBy !== 'cwd' ? <WorktreePicker sessionId={s.sessionId} worktree={s.worktree} locatedBy={s.locatedBy} /> : <span className="truncate">{s ? (s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)) : ''}</span>}
-            {s && <><span aria-hidden="true">·</span><ModelPicker chatId={chatId} model={s.model} ready={initDone && state.status !== 'ended'} onError={msg => dispatch({ type: 'sys', text: msg, err: true })} /><span aria-hidden="true">·</span><span className="shrink-0">{s.permissionMode}</span></>}
+            {s && <><span aria-hidden="true">·</span><ModelPicker chatId={chatId} model={s.model} ready={initDone && state.status !== 'ended'} onError={msg => dispatch({ type: 'sys', text: msg, err: true })} /><span aria-hidden="true">·</span><span className="shrink-0">{s.permissionMode}</span><span aria-hidden="true">·</span><McpPicker chatId={chatId} ready={initDone && state.status !== 'ended'} onError={msg => dispatch({ type: 'sys', text: msg, err: true })} /></>}
             {s?.forked && <><span aria-hidden="true">·</span><span className="shrink-0">forked copy</span></>}
           </div>
         </div>
@@ -359,6 +359,67 @@ function ModelPicker({ chatId, model, ready, onError }: { chatId: string; model:
       title={`${options.find(m => m.value === current)?.description || model}. Takes effect from the next turn.`}>
       {options.map(m => <option key={m.value} value={m.value} title={m.description}>{m.displayName}</option>)}
     </select>
+  );
+}
+
+const MCP_DOT: Record<McpServerView['status'], string> = { connected: 'bg-green-500', pending: 'bg-amber-400', 'needs-auth': 'bg-amber-400', failed: 'bg-red-500', disabled: 'bg-fg-faint' };
+const MCP_LABEL: Record<McpServerView['status'], string> = { connected: 'connected', pending: 'connecting', 'needs-auth': 'needs sign-in', failed: 'failed', disabled: 'off' };
+
+/** MCP servers this chat's process loaded, with reconnect and on/off. A server that needs sign-in opens a terminal running `claude`, where `/mcp` does the browser login;
+ *  the SDK has no call for that. The list is read when the popover opens, so a server added after the chat started does not appear until a new chat. */
+function McpPicker({ chatId, ready, onError }: { chatId: string; ready: boolean; onError: (msg: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [servers, setServers] = useState<McpServerView[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const box = useRef<HTMLSpanElement>(null);
+  const load = () => api.mcp(chatId).then(setServers).catch(err => { setServers([]); onError(`Could not read MCP servers: ${err.message}`); });
+  useEffect(() => { if (ready) load(); }, [chatId, ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: globalThis.MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away); document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  const act = async (name: string, action: 'reconnect' | 'enable' | 'disable') => {
+    setBusy(name);
+    try { setServers(await api.mcpAction(chatId, name, action)); } catch (err: any) { onError(`MCP ${action} failed for ${name}: ${err.message}`); } finally { setBusy(null); }
+  };
+  const login = async () => {
+    try { const t = await api.mcpLogin(chatId); setOpen(false); actions.go({ kind: 'terminal', id: t.id }); actions.toast('Type /mcp, pick the server, finish the browser sign-in, then Reconnect here'); }
+    catch (err: any) { onError(`Could not open a terminal: ${err.message}`); }
+  };
+  const list = servers || [];
+  const attention = list.some(m => m.status === 'needs-auth' || m.status === 'failed');
+  return (
+    <span ref={box} className="relative inline-flex shrink-0">
+      <button className="inline-flex h-5 items-center gap-1 rounded px-0.5 hover:bg-hover disabled:opacity-60" disabled={!ready} aria-expanded={open} aria-label="MCP servers for this chat"
+        title="MCP servers for this chat" onClick={() => { setOpen(o => !o); if (!open) load(); }}>
+        <Plug size={11} aria-hidden="true" />MCP{servers && <span className={attention ? 'text-amber-500' : ''}>{list.filter(m => m.status === 'connected').length}/{list.length}</span>}
+      </button>
+      {open && (
+        <div role="dialog" aria-label="MCP servers" className="panel absolute left-0 top-full z-30 mt-1 w-[360px] py-1 text-[12px] text-fg shadow-[var(--shadow)]">
+          {servers === null && <div className="px-3 py-2 text-fg-muted">Loading…</div>}
+          {servers && !list.length && <div className="px-3 py-2 text-fg-muted">No MCP servers in this chat. Add one with <span className="mono">claude mcp add -s user</span>, then start a new chat.</div>}
+          {list.map(m => (
+            <div key={m.name} className="px-3 py-1.5 hover:bg-hover">
+              <div className="flex items-center gap-2">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${MCP_DOT[m.status]}`} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate font-semibold" title={m.url || m.name}>{m.name}</span>
+                <span className="shrink-0 text-fg-muted">{MCP_LABEL[m.status]}{m.status === 'connected' ? ` · ${m.tools} tools` : ''}</span>
+              </div>
+              {m.error && <div className="mt-0.5 break-words text-red-500">{m.error}</div>}
+              <div className="mt-1 flex gap-1.5">
+                {m.status === 'needs-auth' && <button className="btn sm" onClick={login}>Sign in…</button>}
+                {m.status !== 'disabled' && m.status !== 'needs-auth' && <button className="btn sm ghost" disabled={busy === m.name} onClick={() => act(m.name, 'reconnect')}>Reconnect</button>}
+                <button className="btn sm ghost" disabled={busy === m.name} onClick={() => act(m.name, m.status === 'disabled' ? 'enable' : 'disable')}>{m.status === 'disabled' ? 'Turn on' : 'Turn off'}</button>
+                {m.scope && <span className="ml-auto self-center text-fg-faint">{m.scope}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
   );
 }
 

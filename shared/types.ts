@@ -60,6 +60,9 @@ export interface FilePreview {
 /** A model the chat's Claude process can switch to. `value` may be an alias ("opus"); `resolvedModel` is the full id it stands for. */
 export interface ModelOption { value: string; displayName: string; description: string; resolvedModel: string | null }
 
+/** An MCP server as one chat's process sees it. `needs-auth` means a browser sign-in is due; that happens in a terminal, not through the SDK. */
+export interface McpServerView { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; scope: string | null; url: string | null; tools: number; error: string | null }
+
 export interface PermissionView { id: string; toolName: string; input: string; suggestions: number }
 
 /** Token counts. `input` is uncached prompt tokens; cacheRead and cacheWrite are the cached parts of the same prompt. */
