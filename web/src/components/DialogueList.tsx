@@ -12,15 +12,15 @@ export function DialogueList() {
   const active = view.kind === 'dialogue' ? view.id : null;
   const remove = (id: string) => api.removeDialogue(id).then(() => actions.closeTab(tabKey({ kind: 'dialogue', id }))).catch(e => actions.toast(e.message, 'error'));
   return (
-    <section className="mt-3">
+    <section className="mb-3">
       <div className="section-title">Dialogues <span className="count num">{list.length}</span>
-        <button className="iconbtn" style={{ width: 20, height: 20 }} title="New dialogue" aria-label="New dialogue" onClick={() => actions.go({ kind: 'new-dialogue' })}><Plus size={12} aria-hidden="true" /></button>
+        <button className="iconbtn" style={{ width: 22, height: 22 }} title="New dialogue" aria-label="New dialogue" onClick={() => actions.go({ kind: 'new-dialogue' })}><Plus size={14} aria-hidden="true" /></button>
       </div>
       {list.length === 0 && <div className="px-2 pb-1 text-[11px] text-fg-faint">No dialogues. Start one to have two chats talk a topic through while you moderate.</div>}
       {list.map(d => {
         const live = d.status === 'running' || d.status === 'paused';
         return (
-          <div key={d.id} className={`row group ${active === d.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
+          <div key={d.id} className={`row tall group ${active === d.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
             onClick={() => actions.go({ kind: 'dialogue', id: d.id })} onKeyDown={e => { if (e.key === 'Enter') actions.go({ kind: 'dialogue', id: d.id }); }}>
             <Users size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />
             <span className="min-w-0 grow">

@@ -13,13 +13,13 @@ export function TerminalList() {
   const active = view.kind === 'terminal' ? view.id : null;
   const kill = (id: string) => api.closeTerminal(id).then(() => actions.closeTab(tabKey({ kind: 'terminal', id }))).catch(e => actions.toast(e.message, 'error'));
   return (
-    <section className="mt-3">
+    <section className="mb-3">
       <div className="section-title">Terminals <span className="count num">{terms.length}</span>
-        <button className="iconbtn" style={{ width: 20, height: 20 }} title="New terminal" aria-label="New terminal" onClick={() => openTerminal()}><Plus size={12} aria-hidden="true" /></button>
+        <button className="iconbtn" style={{ width: 22, height: 22 }} title="New terminal" aria-label="New terminal" onClick={() => openTerminal()}><Plus size={14} aria-hidden="true" /></button>
       </div>
       {terms.length === 0 && <div className="px-2 pb-1 text-[11px] text-fg-faint">No shells open. The terminal button on the tab strip starts one in the folder you are looking at.</div>}
       {terms.map(t => (
-        <div key={t.id} className={`row group ${active === t.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
+        <div key={t.id} className={`row tall group ${active === t.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
           onClick={() => actions.go({ kind: 'terminal', id: t.id })} onKeyDown={e => { if (e.key === 'Enter') actions.go({ kind: 'terminal', id: t.id }); }}>
           {t.exitCode == null ? <Terminal size={13} className="shrink-0 text-fg-faint" aria-hidden="true" /> : <span className="dot shrink-0" data-s="ended" aria-hidden="true" />}
           <span className="min-w-0 grow">
