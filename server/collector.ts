@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { listAgents, type AgentRow } from './sources/agents.js';
 import { readJobs, type JobRecord } from './sources/jobs.js';
@@ -21,10 +23,14 @@ export class Collector extends EventEmitter {
   errors: Record<string, string> = {};
   snapshot: Snapshot; private lastSig = '';
 
-  constructor(config: FleetConfig, chats: ChatManager | null, homesFile: string) {
+  /** Session ids the user archived. Fleet's own list; the transcripts are untouched. */
+  private archived: Set<string>;
+
+  constructor(config: FleetConfig, chats: ChatManager | null, homesFile: string, private archivedFile: string) {
     super();
     this.config = config; this.chats = chats;
     this.homes = new SessionHomes(homesFile, config.claudeHome);
+    try { this.archived = new Set(JSON.parse(fs.readFileSync(archivedFile, 'utf8'))); } catch { this.archived = new Set(); }
     this.snapshot = this.build();
     chats?.on('change', () => this.publish());
   }
@@ -75,6 +81,12 @@ export class Collector extends EventEmitter {
     return null;
   }
   pin(sessionId: string, worktree: string | null) { this.homes.pin(sessionId, worktree); this.publish(); }
+  archive(sessionId: string, on: boolean) {
+    if (on) this.archived.add(sessionId); else this.archived.delete(sessionId);
+    fs.mkdirSync(path.dirname(this.archivedFile), { recursive: true });
+    fs.writeFileSync(this.archivedFile, JSON.stringify([...this.archived], null, 2));
+    this.publish();
+  }
 
   publish() {
     const next = this.build();
@@ -127,7 +139,7 @@ export class Collector extends EventEmitter {
       const a = running.get(c.sessionId); const wt = this.locate(c.cwd, c.sessionId, c.title); const chat = chatBySession.get(c.sessionId);
       return { ...c, repo: wt?.repo || null, branch: wt?.branch || null, worktree: wt?.path || null, locatedBy: wt?.by || null,
         running: a ? { id: a.id, kind: a.kind, name: a.name, state: a.state } : null,
-        chat: chat ? { id: chat.id, status: chat.status } : null };
+        chat: chat ? { id: chat.id, status: chat.status } : null, archived: this.archived.has(c.sessionId) };
     });
 
     const byWorktree = new Map<string, Worktree['sessions']>();

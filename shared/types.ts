@@ -41,6 +41,8 @@ export interface Conversation {
   repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null;
   running: { id: string; kind: SessionKind; name: string; state: string } | null;
   chat: { id: string; status: ChatStatus } | null;
+  /** Put away by the user: listed under Archived, collapsed, instead of with the recent ones. */
+  archived: boolean;
 }
 
 /** A slash command the chat's Claude process accepts: built-in, or a skill/command from the user, project, or a plugin. */

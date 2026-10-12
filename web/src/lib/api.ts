@@ -16,6 +16,8 @@ export const api = {
   history: (sessionId: string) => j<{ history: ChatEvent[] }>(`/api/conversations/${sessionId}/history`).then(r => r.history),
   setHome: (sessionId: string, worktree: string | null) => post<{ ok: true }>(`/api/conversations/${sessionId}/home`, { worktree }),
   rename: (sessionId: string, title: string) => post<{ ok: true; title: string }>(`/api/conversations/${sessionId}/rename`, { title }),
+  archive: (sessionId: string, archived: boolean) => post<{ ok: true }>(`/api/conversations/${sessionId}/archive`, { archived }),
+  deleteConversation: (sessionId: string) => j<{ ok: true }>(`/api/conversations/${sessionId}`, { method: 'DELETE' }),
   logs: (bgId: string) => j<{ logs: string }>(`/api/sessions/${encodeURIComponent(bgId)}/logs`).then(r => r.logs),
   removeSession: (bgId: string) => post<{ ok: true }>(`/api/sessions/${encodeURIComponent(bgId)}/remove`),
   openChat: (opts: { sessionId?: string; cwd: string; model?: string; permissionMode?: string }) => post<ChatSummary>('/api/chats', opts),

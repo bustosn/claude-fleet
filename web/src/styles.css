@@ -118,6 +118,14 @@ select.inline-select:disabled { cursor: default; opacity: 0.6; }
 .section-title { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; color: var(--fg-muted); font-size: 12px; font-weight: 600; }
 .section-title .count { margin-left: auto; color: var(--fg-faint); font-weight: 400; }
 
+/* Right-click menu on sidebar rows. */
+.menu { position: fixed; z-index: 50; min-width: 180px; padding: 4px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow); }
+.menu-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px; border-radius: 4px; font-size: 12px; text-align: left; color: var(--fg); }
+.menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--hover); outline: none; }
+.menu-item:disabled { color: var(--fg-faint); }
+.menu-item.danger { color: var(--crit); }
+.menu-sep { height: 1px; margin: 4px 2px; background: var(--line); }
+
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 12px; font-size: 12px; }
 .kv dt { color: var(--fg-faint); } .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

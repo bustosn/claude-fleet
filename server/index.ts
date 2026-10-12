@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { deleteSession, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { loadConfig, root } from './config.js';
 import { Collector } from './collector.js';
 import { ChatManager } from './chat.js';
@@ -23,7 +23,7 @@ const stateDir = path.join(root, 'state');
 fs.mkdirSync(stateDir, { recursive: true });
 
 const chats = new ChatManager(config);
-const collector = new Collector(config, chats, path.join(stateDir, `homes-${config.port}.json`));
+const collector = new Collector(config, chats, path.join(stateDir, `homes-${config.port}.json`), path.join(stateDir, `archived-${config.port}.json`));
 chats.titleFor = id => collector.titleOf(id);
 chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title);
 const aws = new AwsCreds(config.aws, stateDir);
@@ -101,6 +101,24 @@ app.post('/api/conversations/:sessionId/rename', async (req, res) => {
   if (!title) return res.status(400).json({ error: 'empty title' });
   try { await renameSession(req.params.sessionId, title); await collector.pollConversations(); collector.publish(); res.json({ ok: true, title }); }
   catch (err) { res.status(500).json({ error: errText(err) }); }
+});
+app.post('/api/conversations/:sessionId/archive', (req, res) => {
+  if (!UUID.test(req.params.sessionId)) return res.status(400).json({ error: 'bad session id' });
+  collector.archive(req.params.sessionId, req.body?.archived !== false);
+  res.json({ ok: true });
+});
+// Deletes the transcript for good (and its subagent transcripts). A conversation that is running somewhere is refused.
+app.delete('/api/conversations/:sessionId', async (req, res) => {
+  const id = req.params.sessionId;
+  if (!UUID.test(id)) return res.status(400).json({ error: 'bad session id' });
+  const live = collector.snapshot.conversations.find(c => c.sessionId === id);
+  if (live?.running || live?.chat) return res.status(409).json({ error: 'this conversation is running; close it first' });
+  try {
+    await deleteSession(id);
+    collector.archive(id, false); collector.pin(id, null);
+    await collector.pollConversations(); collector.publish();
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: errText(err) }); }
 });
 
 // Pin a session to a worktree (or clear the pin) when the automatic placement is wrong.

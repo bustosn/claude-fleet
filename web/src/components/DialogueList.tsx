@@ -1,8 +1,9 @@
-import { Plus, Users, X } from 'lucide-react';
+import { MessageSquare, Plus, Users, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { actions, tabKey, useStore } from '../lib/store';
 import { Status } from './ui';
 import { dialogueDot } from '../views/DialogueView';
+import { useContextMenu, type MenuItem } from './ContextMenu';
 
 /** Sidebar section: every dialogue Fleet knows about, live ones first. Finished ones can be removed here. */
 export function DialogueList() {
@@ -10,6 +11,7 @@ export function DialogueList() {
   const list = useStore(s => s.snapshot?.dialogues) || [];
   const view = useStore(s => s.view);
   const active = view.kind === 'dialogue' ? view.id : null;
+  const [menu, openMenu] = useContextMenu();
   const remove = (id: string) => api.removeDialogue(id).then(() => actions.closeTab(tabKey({ kind: 'dialogue', id }))).catch(e => actions.toast(e.message, 'error'));
   return (
     <section className="mb-3">
@@ -21,7 +23,13 @@ export function DialogueList() {
         const live = d.status === 'running' || d.status === 'paused';
         return (
           <div key={d.id} className={`row tall group ${active === d.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
-            onClick={() => actions.go({ kind: 'dialogue', id: d.id })} onKeyDown={e => { if (e.key === 'Enter') actions.go({ kind: 'dialogue', id: d.id }); }}>
+            onClick={() => actions.go({ kind: 'dialogue', id: d.id })}
+            onContextMenu={e => openMenu(e, [
+              { label: 'Open', icon: Users, onSelect: () => actions.go({ kind: 'dialogue', id: d.id }) },
+              ...d.participants.filter(p => p.chatId).map((p): MenuItem => ({ label: `Open ${p.name}'s chat`, icon: MessageSquare, onSelect: () => actions.go({ kind: 'chat', chatId: p.chatId!, title: p.name }) })),
+              'separator',
+              { label: live ? 'Remove (stop it first)' : 'Remove', icon: X, danger: !live, disabled: live, onSelect: () => remove(d.id) },
+            ])} onKeyDown={e => { if (e.key === 'Enter') actions.go({ kind: 'dialogue', id: d.id }); }}>
             <Users size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />
             <span className="min-w-0 grow">
               <span className="block truncate text-fg" title={d.topic}>{d.topic}</span>
@@ -32,6 +40,7 @@ export function DialogueList() {
           </div>
         );
       })}
+      {menu}
     </section>
   );
 }

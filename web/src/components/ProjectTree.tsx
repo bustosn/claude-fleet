@@ -1,7 +1,10 @@
-import { ChevronDown, ChevronRight, FolderGit2, GitBranch, MessageSquare, Terminal, Bot } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderGit2, GitBranch, MessageSquare, Terminal, Bot, SquareTerminal, X } from 'lucide-react';
+import { api } from '../lib/api';
 import type { Repo, Session, Worktree } from '../lib/api';
 import { shortPath, ticketKey } from '../lib/format';
 import { actions, useStore } from '../lib/store';
+import { openTerminal } from '../lib/terminal';
+import { useContextMenu, type MenuItem } from './ContextMenu';
 
 /** Repos → worktrees → the sessions living in each. The spine of the app. */
 export function ProjectTree() {
@@ -93,12 +96,21 @@ export function SessionRow({ session: s, indent }: { session: Session; indent: n
   const selected = (view.kind === 'chat' && s.chatId === view.chatId) || (view.kind === 'session' && view.id === s.id);
   const Icon = s.kind === 'dashboard' ? MessageSquare : s.kind === 'background' ? Bot : Terminal;
   const open = () => s.kind === 'dashboard' && s.chatId ? actions.go({ kind: 'chat', chatId: s.chatId, title: s.title }) : actions.go({ kind: 'session', id: s.id });
+  const [menu, openMenu] = useContextMenu();
+  const items: MenuItem[] = [
+    { label: 'Open', icon: Icon, onSelect: open },
+    { label: 'Open a terminal here', icon: SquareTerminal, onSelect: () => openTerminal(s.cwd), disabled: !s.cwd },
+    ...(s.chatId ? ['separator' as const, { label: 'End chat', icon: X, danger: true, onSelect: () => api.endChat(s.chatId!).then(() => actions.toast('Chat ended')).catch(e => actions.toast(e.message, 'error')) }] : []),
+  ];
   return (
-    <button className="row" style={{ paddingLeft: indent }} aria-current={selected ? 'true' : undefined} onClick={open} title={`${s.title}\n${s.state}${s.locatedBy && s.locatedBy !== 'cwd' ? `\nplaced here by ${s.locatedBy}` : ''}`}>
-      <span className="dot" data-s={s.state} aria-hidden="true" />
-      <Icon size={13} className="text-fg-faint" aria-hidden="true" />
-      <span className="grow">{s.title || s.name || s.id}</span>
-      <span className="text-[10px] text-fg-faint">{s.kind === 'dashboard' ? 'chat' : s.kind === 'background' ? 'bg' : 'tty'}</span>
-    </button>
+    <>
+      <button className="row" style={{ paddingLeft: indent }} aria-current={selected ? 'true' : undefined} onClick={open} onContextMenu={e => openMenu(e, items)} title={`${s.title}\n${s.state}${s.locatedBy && s.locatedBy !== 'cwd' ? `\nplaced here by ${s.locatedBy}` : ''}`}>
+        <span className="dot" data-s={s.state} aria-hidden="true" />
+        <Icon size={13} className="text-fg-faint" aria-hidden="true" />
+        <span className="grow">{s.title || s.name || s.id}</span>
+        <span className="text-[10px] text-fg-faint">{s.kind === 'dashboard' ? 'chat' : s.kind === 'background' ? 'bg' : 'tty'}</span>
+      </button>
+      {menu}
+    </>
   );
 }
