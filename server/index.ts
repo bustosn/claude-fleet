@@ -12,6 +12,7 @@ import { AwsCreds } from './aws.js';
 import { TerminalManager, type Terminal } from './terminals.js';
 import { DialogueManager } from './dialogue.js';
 import { conversationHistory } from './sources/conversations.js';
+import { openFile, preview, rawImage, statRefs } from './files.js';
 import { run, errText } from './util.js';
 
 // Fleet tools are deliberately auto-approved via allowedTools; the SDK warns about that on every chat start.
@@ -127,6 +128,29 @@ app.post('/api/chats/:id/model', async (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
   const model = String(req.body?.model || '').trim(); if (!model) return res.status(400).json({ error: 'no model given' });
   try { await c.setModel(model); res.json(c.summary()); } catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
+});
+// Files named in a chat: which exist (so only real ones become links), a preview, and opening them outside Fleet. Paths resolve from the chat's folder.
+app.post('/api/chats/:id/files/resolve', (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  const paths = Array.isArray(req.body?.paths) ? req.body.paths.slice(0, 200).map(String) : [];
+  res.json(statRefs(c.cwd, paths));
+});
+app.get('/api/chats/:id/file', (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  try { res.json(preview(c.cwd, String(req.query.path || ''))); } catch (err) { res.status(404).json({ error: errText(err) }); }
+});
+app.get('/api/chats/:id/file/raw', (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).end();
+  try {
+    const { abs, type } = rawImage(c.cwd, String(req.query.path || ''));
+    res.set({ 'Content-Type': type, 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox", 'X-Content-Type-Options': 'nosniff' }).sendFile(abs);
+  } catch { res.status(404).end(); }
+});
+app.post('/api/chats/:id/file/open', (req, res) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  const how = req.body?.how === 'editor' || req.body?.how === 'reveal' ? req.body.how : 'default';
+  try { openFile(c.cwd, String(req.body?.path || ''), how, Number(req.body?.line) || undefined); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: errText(err) }); }
 });
 app.get('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); c ? res.json(c.summary()) : res.status(404).json({ error: 'no such chat' }); });
 app.get('/api/chats/:id/events', (req, res) => {

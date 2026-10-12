@@ -1,8 +1,8 @@
-import { useEffect, useReducer, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
-import { ArrowRight, FileText, Paperclip, Pencil, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
-import { api, subscribe, type Attachment, type ChatEvent, type ChatSummary, type ChatStatus, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
+import { useEffect, useReducer, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { ArrowRight, Code2, ExternalLink, FileText, FolderOpen, Paperclip, Pencil, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
+import { api, subscribe, type Attachment, type ChatEvent, type FilePreview, type ChatSummary, type ChatStatus, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
 import { rankCommands } from '../lib/commands';
-import { md, esc } from '../lib/markdown';
+import { md, esc, fileRefs } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Status, WorktreePicker } from '../components/ui';
@@ -210,6 +210,27 @@ export function ChatView({ chatId }: { chatId: string }) {
     api.send(chatId, t, undefined, sent.map(({ name, mediaType, data }) => ({ name, mediaType, data })))
       .catch(err => { dispatch({ type: 'sys', text: err.message, err: true }); setAttachments(a => [...sent, ...a]); });
   };
+  // Paths in finished replies are checked once against the chat's folder; only files that exist become links.
+  const [, setRefsVersion] = useState(0); // bumped when an answer arrives, to re-render with the new links
+  const isFile = (p: string) => knownFiles.get(`${chatId}\n${p}`) === true;
+  useEffect(() => {
+    const unknown = [...new Set(state.entries.flatMap(e => e.k === 'assistant' && !e.streaming ? fileRefs(e.text) : []))].filter(p => !knownFiles.has(`${chatId}\n${p}`));
+    if (!unknown.length) return;
+    for (const p of unknown) knownFiles.set(`${chatId}\n${p}`, false); // asked once, even if the request fails
+    api.resolveFiles(chatId, unknown).then(refs => {
+      for (const r of refs) knownFiles.set(`${chatId}\n${r.path}`, r.kind === 'file');
+      if (refs.some(r => r.kind === 'file')) setRefsVersion(v => v + 1);
+    }).catch(() => {});
+  }, [chatId, state.entries]);
+  const [viewing, setViewing] = useState<{ path: string; line: number | null } | null>(null);
+  const openFileLink = (e: MouseEvent<HTMLDivElement>) => {
+    const a = (e.target as HTMLElement).closest<HTMLElement>('a.file-link'); if (!a?.dataset.path) return;
+    e.preventDefault();
+    const path = a.dataset.path, line = a.dataset.line ? Number(a.dataset.line) : null;
+    if (e.ctrlKey || e.metaKey) api.openFile(chatId, path, 'editor', line ?? undefined).catch(err => actions.toast(err.message, 'error'));
+    else setViewing({ path, line });
+  };
+
   const rename = async () => {
     if (!s?.sessionId) { dispatch({ type: 'sys', text: 'Send a first message before renaming; the session id does not exist yet.', err: true }); return; }
     const next = window.prompt('Rename conversation', title);
@@ -243,9 +264,9 @@ export function ChatView({ chatId }: { chatId: string }) {
       {s?.dialogueId && <div className="flex items-center gap-2 border-b border-line bg-accent-soft px-4 py-1.5 text-[11px] text-fg-muted">This chat is a participant in a dialogue; Fleet is delivering its turns. Anything you type here goes to it as well.
         <button className="btn sm ghost ml-auto" onClick={() => actions.go({ kind: 'dialogue', id: s.dialogueId! })}>Open the dialogue</button></div>}
 
-      <div ref={log} className="grid min-h-0 flex-1 auto-rows-max content-start gap-2 overflow-y-auto px-4 py-3" onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
+      <div ref={log} className="grid min-h-0 flex-1 auto-rows-max content-start gap-2 overflow-y-auto px-4 py-3" onScroll={e => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }} onClick={openFileLink}>
         {state.entries.length === 0 && <div className="msg sys">Say what you need. Replies stream in here, and tool calls show as they run.</div>}
-        {groupTools(state.entries).map(e => e.k === 'group' ? <ToolGroup key={e.id} tools={e.tools} chatId={chatId} /> : <EntryView key={e.id} e={e} chatId={chatId} />)}
+        {groupTools(state.entries).map(e => e.k === 'group' ? <ToolGroup key={e.id} tools={e.tools} chatId={chatId} /> : <EntryView key={e.id} e={e} chatId={chatId} isFile={isFile} />)}
         {state.activity && <ActivityRow activity={state.activity} />}
       </div>
 
@@ -262,8 +283,58 @@ export function ChatView({ chatId }: { chatId: string }) {
         <button className="btn primary self-end" type="submit" disabled={state.status === 'ended' || (!text.trim() && !attachments.length)}><Send size={13} aria-hidden="true" /> Send</button>
       </form>
 
+      {viewing && <FileViewer key={`${viewing.path}:${viewing.line}`} chatId={chatId} path={viewing.path} line={viewing.line} onClose={() => setViewing(null)} />}
       {forward && <ForwardDialog chatId={chatId} lastReply={[...state.entries].reverse().find(e => e.k === 'assistant')?.text || ''} onClose={() => setForward(false)} />}
     </div>
+  );
+}
+
+/** Which paths named in a chat are files, keyed `chatId\npath`. Kept across tab switches so a reopened chat does not ask again. */
+const knownFiles = new Map<string, boolean>();
+const VIEW_LINES = 5000;
+
+/** A file Claude named, previewed without leaving the chat: markdown rendered, images shown, text with line numbers and the cited line marked.
+ *  Buttons hand it to VS Code (at the line), the default app, or the file manager. */
+function FileViewer({ chatId, path, line, onClose }: { chatId: string; path: string; line: number | null; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [f, setF] = useState<FilePreview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const isMd = /\.(md|markdown)$/i.test(path);
+  const [raw, setRaw] = useState(!isMd || line != null);
+  useEffect(() => { ref.current?.showModal(); api.file(chatId, path).then(setF).catch(e => setErr(e.message)); }, [chatId, path]);
+  useEffect(() => { ref.current?.querySelector('[data-hl]')?.scrollIntoView({ block: 'center' }); }, [f, raw]);
+  const open = (how: 'editor' | 'default' | 'reveal') =>
+    api.openFile(chatId, path, how, line ?? undefined).then(() => ref.current?.close()).catch(e => actions.toast(e.message, 'error'));
+
+  const lines = f?.kind === 'text' ? f.text!.split(/\r?\n/) : [];
+  const from = line && line > VIEW_LINES ? line - VIEW_LINES / 2 : 0; // a long file shows the stretch around the cited line
+  return (
+    <dialog ref={ref} className="file-viewer" onClose={onClose} onClick={e => { if (e.target === ref.current) ref.current.close(); }}>
+      <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+        <FileText size={15} className="shrink-0 text-fg-faint" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-semibold">{f?.name || path.split(/[\\/]/).pop()}{line ? <span className="font-normal text-fg-faint">, line {line}</span> : null}</div>
+          <div className="truncate text-[11px] text-fg-faint mono" title={f?.abs}>{f?.abs || path}{f ? ` · ${fmtBytes(f.size)}` : ''}</div>
+        </div>
+        {isMd && f?.kind === 'text' && <button className="btn sm ghost" onClick={() => setRaw(r => !r)}>{raw ? 'Rendered' : 'Source'}</button>}
+        {f?.editor && <button className="btn sm" onClick={() => open('editor')} title={`Open in VS Code${line ? ` at line ${line}` : ''}`}><Code2 size={13} aria-hidden="true" /> VS Code</button>}
+        <button className="btn sm" disabled={!f || f.runnable} onClick={() => open('default')} title={f?.runnable ? 'This would run the file, not open it' : 'Open with the default app'}><ExternalLink size={13} aria-hidden="true" /> Open</button>
+        <button className="btn sm" disabled={!f} onClick={() => open('reveal')} title="Show in the file manager"><FolderOpen size={13} aria-hidden="true" /> Show in folder</button>
+        <button className="btn sm ghost" onClick={() => ref.current?.close()} aria-label="Close"><X size={14} aria-hidden="true" /></button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {err ? <div className="p-4 text-[12px] text-crit">{err}</div>
+          : !f ? <div className="p-4 text-[12px] text-fg-faint">Loading…</div>
+          : f.kind === 'image' ? <div className="grid h-full place-items-center p-4"><img src={api.fileRawUrl(chatId, path)} alt={f.name} className="max-h-full max-w-full object-contain" /></div>
+          : f.kind === 'binary' ? <div className="p-4 text-[12px] text-fg-muted">Binary file; no preview. Open it with one of the buttons above.</div>
+          : f.kind === 'too-large' ? <div className="p-4 text-[12px] text-fg-muted">Too large to preview ({fmtBytes(f.size)}). Open it with one of the buttons above.</div>
+          : !raw ? <div className="msg assistant m-4" dangerouslySetInnerHTML={{ __html: md(f.text!) }} />
+          : <pre className="file-lines">{lines.slice(from, from + VIEW_LINES).map((l, i) => {
+              const n = from + i + 1;
+              return <div key={n} data-hl={n === line ? '' : undefined}><span className="ln">{n}</span>{l || ' '}</div>;
+            })}{lines.length > from + VIEW_LINES && <div className="text-fg-faint">… {lines.length - from - VIEW_LINES} more lines; open the file to see them</div>}</pre>}
+      </div>
+    </dialog>
   );
 }
 
@@ -411,6 +482,8 @@ function ToolGroup({ tools, chatId }: { tools: ToolEntry[]; chatId: string }) {
 }
 
 const SHELL_TOOLS = /^(Bash|PowerShell)$/;
+/** Tools whose input is a file path, shown as a link to it. */
+const FILE_TOOLS = /^(Read|Write|Edit|MultiEdit|NotebookEdit)$/;
 const PREVIEW_LINES = 6;
 
 /** One tool call, laid out like the terminal: a shell call shows its description, the command on a `$` line, and the first lines of
@@ -428,7 +501,9 @@ function ToolRow({ e }: { e: ToolEntry }) {
     <div className="msg tool">
       <div className="flex min-w-0 items-baseline gap-2">
         <span className={`shrink-0 font-semibold ${fleet ? 'text-warn' : 'text-info'}`}>{toolLabel(e.name)}</span>
-        {shell ? <span className="min-w-0 truncate text-fg-muted">{e.description || ''}</span> : <span className="mono min-w-0 truncate">{e.input}</span>}
+        {shell ? <span className="min-w-0 truncate text-fg-muted">{e.description || ''}</span>
+          : FILE_TOOLS.test(e.name) && e.input ? <a className="file-link mono min-w-0 truncate" href="#" data-path={e.input} title={`Open ${e.input} (Ctrl+click: VS Code)`}>{e.input}</a>
+          : <span className="mono min-w-0 truncate">{e.input}</span>}
         {r && !shell && <span className={`ml-auto shrink-0 text-[11px] ${r.isError ? 'text-crit' : 'text-fg-faint'}`}>{r.isError ? 'error' : ''}</span>}
       </div>
       {shell && <pre className="cmd">{(e.name === 'PowerShell' ? 'PS> ' : '$ ') + e.input}</pre>}
@@ -486,7 +561,7 @@ function ShellRow({ e, chatId }: { e: Extract<Entry, { k: 'shell' }>; chatId: st
   );
 }
 
-function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
+function EntryView({ e, chatId, isFile }: { e: Entry; chatId: string; isFile?: (path: string) => boolean }) {
   switch (e.k) {
     case 'user': {
       const o = e.origin;
@@ -494,7 +569,7 @@ function EntryView({ e, chatId }: { e: Entry; chatId: string }) {
       return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{label} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{e.text}
         {e.attachments?.length ? <span className={`flex flex-wrap gap-1 ${e.text ? 'mt-1.5' : ''}`}>{e.attachments.map((n, i) => <span key={i} className="inline-flex items-center gap-1 rounded bg-surface/60 px-1.5 text-[11px] text-fg-muted"><Paperclip size={10} aria-hidden="true" />{n}</span>)}</span> : null}</div>;
     }
-    case 'assistant': return <div className={`msg assistant ${e.streaming ? 'opacity-90' : ''}`} dangerouslySetInnerHTML={{ __html: md(e.text) }} />;
+    case 'assistant': return <div className={`msg assistant ${e.streaming ? 'opacity-90' : ''}`} dangerouslySetInnerHTML={{ __html: md(e.text, isFile) }} />;
     case 'tool': return <ToolRow e={e} />;
     case 'shell': return <ShellRow e={e} chatId={chatId} />;
     case 'sys': return <div className={`msg sys ${e.err ? 'err' : ''}`}>{e.text}</div>;

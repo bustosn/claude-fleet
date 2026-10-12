@@ -47,6 +47,14 @@ export interface Conversation {
 export interface SlashCommandView { name: string; description: string; argumentHint: string; aliases: string[]; builtin: boolean }
 /** A file pasted or dropped into the composer, base64. Images go to the model inline; other files are saved for it to read. */
 export interface Attachment { name: string; mediaType: string; data: string }
+/** A path named in a chat, resolved against the chat's folder. `kind` is null when nothing is there. */
+export interface FileRef { path: string; abs: string; kind: 'file' | 'dir' | null }
+/** What the file viewer shows. `text` is set for text files; images load from the raw route. */
+export interface FilePreview {
+  abs: string; name: string; size: number; kind: 'text' | 'image' | 'binary' | 'too-large'; text?: string;
+  /** VS Code is on the PATH. */ editor: boolean;
+  /** Opening it with the default app would run it, so that button is off. */ runnable: boolean;
+}
 /** A model the chat's Claude process can switch to. `value` may be an alias ("opus"); `resolvedModel` is the full id it stands for. */
 export interface ModelOption { value: string; displayName: string; description: string; resolvedModel: string | null }
 

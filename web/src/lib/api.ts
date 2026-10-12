@@ -1,4 +1,4 @@
-import type { Attachment, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, ModelOption, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
+import type { Attachment, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, ModelOption, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -21,6 +21,10 @@ export const api = {
   openChat: (opts: { sessionId?: string; cwd: string; model?: string; permissionMode?: string }) => post<ChatSummary>('/api/chats', opts),
   chat: (id: string) => j<ChatSummary>(`/api/chats/${id}`),
   commands: (id: string) => j<SlashCommandView[]>(`/api/chats/${id}/commands`),
+  resolveFiles: (id: string, paths: string[]) => post<FileRef[]>(`/api/chats/${id}/files/resolve`, { paths }),
+  file: (id: string, path: string) => j<FilePreview>(`/api/chats/${id}/file?path=${encodeURIComponent(path)}`),
+  fileRawUrl: (id: string, path: string) => `/api/chats/${id}/file/raw?path=${encodeURIComponent(path)}`,
+  openFile: (id: string, path: string, how: 'editor' | 'default' | 'reveal', line?: number) => post<{ ok: true }>(`/api/chats/${id}/file/open`, { path, how, line }),
   models: (id: string) => j<ModelOption[]>(`/api/chats/${id}/models`),
   setModel: (id: string, model: string) => post<ChatSummary>(`/api/chats/${id}/model`, { model }),
   send: (id: string, text: string, fromChatId?: string, attachments?: Attachment[]) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId, attachments }),
