@@ -18,7 +18,7 @@ export function Main() {
       {view.kind === 'overview' && <OverviewView />}
       {view.kind === 'chat' && <ChatView key={view.chatId} chatId={view.chatId} />}
       {view.kind === 'resume' && <ResumeView key={view.sessionId} sessionId={view.sessionId} cwd={view.cwd} title={view.title} />}
-      {view.kind === 'new-chat' && <NewChatView cwd={view.cwd} />}
+      {view.kind === 'new-chat' && <NewChatView key={view.cwd || ''} cwd={view.cwd} />}
       {view.kind === 'worktree' && <WorktreeView path={view.path} />}
       {view.kind === 'session' && <SessionView id={view.id} />}
       {view.kind === 'terminal' && <TerminalView key={view.id} id={view.id} />}

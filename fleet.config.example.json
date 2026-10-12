@@ -8,6 +8,9 @@
     "gitMs": 10000,
     "timelineLines": 30
   },
+  "conversations": {
+    "archiveAfterDays": 14
+  },
   "dispatch": {
     "permissionMode": "auto",
     "defaultModel": "fable",

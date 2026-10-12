@@ -11,8 +11,8 @@ import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
 import { TerminalManager, type Terminal } from './terminals.js';
 import { DialogueManager } from './dialogue.js';
-import { conversationHistory } from './sources/conversations.js';
-import { openFile, preview, rawImage, statRefs } from './files.js';
+import { conversationHistory, exportMarkdown } from './sources/conversations.js';
+import { openFile, openFolder, preview, rawImage, statRefs } from './files.js';
 import { run, errText } from './util.js';
 
 // Fleet tools are deliberately auto-approved via allowedTools; the SDK warns about that on every chat start.
@@ -23,7 +23,7 @@ const stateDir = path.join(root, 'state');
 fs.mkdirSync(stateDir, { recursive: true });
 
 const chats = new ChatManager(config);
-const collector = new Collector(config, chats, path.join(stateDir, `homes-${config.port}.json`), path.join(stateDir, `archived-${config.port}.json`));
+const collector = new Collector(config, chats, path.join(stateDir, `homes-${config.port}.json`), path.join(stateDir, `conversation-marks-${config.port}.json`));
 chats.titleFor = id => collector.titleOf(id);
 chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title);
 const aws = new AwsCreds(config.aws, stateDir);
@@ -107,6 +107,23 @@ app.post('/api/conversations/:sessionId/archive', (req, res) => {
   collector.archive(req.params.sessionId, req.body?.archived !== false);
   res.json({ ok: true });
 });
+app.post('/api/conversations/:sessionId/pin', (req, res) => {
+  if (!UUID.test(req.params.sessionId)) return res.status(400).json({ error: 'bad session id' });
+  collector.pinToTop(req.params.sessionId, req.body?.pinned !== false);
+  res.json({ ok: true });
+});
+// The whole transcript as markdown, downloaded as a file.
+app.get('/api/conversations/:sessionId/export', async (req, res) => {
+  const id = req.params.sessionId;
+  if (!UUID.test(id)) return res.status(400).json({ error: 'bad session id' });
+  const c = collector.snapshot.conversations.find(c => c.sessionId === id);
+  const title = c?.title || id;
+  try {
+    const md = await exportMarkdown(id, { title, cwd: c?.cwd || null, branch: c?.branch || (c?.gitBranch !== 'HEAD' && c?.gitBranch) || null, createdAt: c?.createdAt || null, lastModified: c?.lastModified || null });
+    const name = `${title.replace(/[^\w .-]+/g, '').trim().slice(0, 80) || id}.md`;
+    res.set({ 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="${name.replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(name)}` }).send(md);
+  } catch (err) { res.status(500).json({ error: errText(err) }); }
+});
 // Deletes the transcript for good (and its subagent transcripts). A conversation that is running somewhere is refused.
 app.delete('/api/conversations/:sessionId', async (req, res) => {
   const id = req.params.sessionId;
@@ -115,10 +132,19 @@ app.delete('/api/conversations/:sessionId', async (req, res) => {
   if (live?.running || live?.chat) return res.status(409).json({ error: 'this conversation is running; close it first' });
   try {
     await deleteSession(id);
-    collector.archive(id, false); collector.pin(id, null);
+    collector.marks.forget(id); collector.pin(id, null);
     await collector.pollConversations(); collector.publish();
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: errText(err) }); }
+});
+
+// A worktree opened in VS Code or the file manager. Only paths Fleet tracks.
+app.post('/api/worktrees/open', (req, res) => {
+  const p = String(req.body?.path || '');
+  const wt = collector.repos.flatMap(r => r.worktrees).find(w => w.path.toLowerCase() === p.toLowerCase());
+  if (!wt) return res.status(400).json({ error: 'not a tracked worktree' });
+  try { openFolder(wt.path, req.body?.how === 'editor' ? 'editor' : 'folder'); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: errText(err) }); }
 });
 
 // Pin a session to a worktree (or clear the pin) when the automatic placement is wrong.
@@ -189,7 +215,10 @@ app.post('/api/chats/:id/send', (req, res) => {
   if (attachments.some((a: { data: string }) => !a.data || !/^[A-Za-z0-9+/]*={0,2}$/.test(a.data))) return res.status(400).json({ error: 'attachment data must be base64' });
   if (!text && !attachments.length) return res.status(400).json({ error: 'empty' });
   const from = req.body?.fromChatId ? chats.get(String(req.body.fromChatId)) : null;
-  const origin = from && from.id !== c.id ? { kind: 'manual' as const, fromChatId: from.id, fromTitle: from.title } : undefined;
+  // A saved conversation has no chat to name, only its title.
+  const fromTitle = req.body?.fromTitle ? String(req.body.fromTitle).slice(0, 120) : '';
+  const origin = from && from.id !== c.id ? { kind: 'manual' as const, fromChatId: from.id, fromTitle: from.title }
+    : fromTitle ? { kind: 'manual' as const, fromChatId: '', fromTitle } : undefined;
   try { c.send(text, origin, attachments); res.json({ ok: true }); } catch (err: any) { res.status(409).json({ error: err.message }); }
 });
 app.post('/api/chats/:id/permission', (req, res) => {

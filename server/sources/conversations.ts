@@ -68,3 +68,28 @@ export function summarizeInput(input: unknown, max = 400): string {
   const s = typeof pick === 'string' ? pick : JSON.stringify(input);
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
+
+/** The transcript as a markdown document: what was said, with each tool call as one line under the reply that made it. Tool output is left out. */
+export async function exportMarkdown(sessionId: string, meta: { title: string; cwd: string | null; branch: string | null; createdAt: number | null; lastModified: number | null }): Promise<string> {
+  const history = await conversationHistory(sessionId, Infinity);
+  const date = (ms: number | null) => ms ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) : null;
+  const facts = [meta.cwd && `Folder: \`${meta.cwd}\``, meta.branch && `Branch: \`${meta.branch}\``, date(meta.createdAt) && `Started: ${date(meta.createdAt)}`,
+    date(meta.lastModified) && `Last message: ${date(meta.lastModified)}`, `Session: \`${sessionId}\``].filter(Boolean);
+  const out = [`# ${meta.title}`, '', facts.join('  \n'), ''];
+  let last: 'user' | 'assistant' | null = null;
+  for (const e of history) {
+    if (e.t === 'user') {
+      out.push('## You', '', e.text || '', ...(e.attachments?.length ? ['', `_Attached: ${e.attachments.join(', ')}_`] : []), '');
+      last = 'user';
+    } else if (e.t === 'assistant') {
+      if (last !== 'assistant') out.push('## Claude', '');
+      for (const b of e.blocks) {
+        // The open `{ type: string }` member keeps `type` from narrowing the union; `in` does.
+        if ('text' in b && b.text?.trim()) out.push(b.text.trim(), '');
+        else if ('name' in b) out.push(`> **${b.name}**${b.input ? ` \`${b.input.replace(/`/g, "'").replace(/\s+/g, ' ')}\`` : ''}`, '');
+      }
+      last = 'assistant';
+    }
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n');
+}

@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, MessageSquare, Pencil, Plus, SquareTerminal, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, Download, FolderInput, MessageSquare, Pencil, Pin, PinOff, Plus, Send, SquareTerminal, Trash2 } from 'lucide-react';
 import { api, type Conversation } from '../lib/api';
 import { age, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu, type MenuItem } from './ContextMenu';
+import { exportConversation, forwardLastReply, openMove } from './SidebarDialogs';
 
-/** Saved conversations, newest first, that are not currently running anywhere. Running ones live under their worktree in the tree.
- *  Archived ones sit in a collapsed group at the bottom; right-click a row to archive, rename, or delete it. */
+/** Saved conversations, pinned first then newest, that are not currently running anywhere. Running ones live under their worktree in the tree.
+ *  Archived ones (by hand, or idle for two weeks) sit in a collapsed group at the bottom. Right-click a row for everything else. */
 export function ConversationList() {
   const snap = useStore(s => s.snapshot);
   const filter = useStore(s => s.convoFilter);
@@ -18,13 +19,14 @@ export function ConversationList() {
   if (!snap) return null;
   const q = filter.toLowerCase();
   const all = snap.conversations.filter(c => !c.running && !c.chat).filter(c => !q || `${c.title} ${c.repo || ''} ${c.branch || ''} ${c.cwd}`.toLowerCase().includes(q));
-  const saved = all.filter(c => !c.archived), archived = all.filter(c => c.archived);
+  const saved = all.filter(c => !c.archived).sort((a, b) => Number(b.pinned) - Number(a.pinned)), archived = all.filter(c => c.archived);
 
   const rename = async (sessionId: string, current: string) => {
     const next = window.prompt('Rename conversation', current);
     if (!next?.trim() || next.trim() === current) return;
     try { await api.rename(sessionId, next.trim()); actions.toast('Renamed'); } catch (err: any) { actions.toast(err.message, 'error'); }
   };
+  const pin = (c: Conversation, on: boolean) => api.pin(c.sessionId, on).catch(err => actions.toast(err.message, 'error'));
   const archive = (c: Conversation, on: boolean) => api.archive(c.sessionId, on).then(() => actions.toast(on ? `Archived "${c.title}"` : `Restored "${c.title}"`)).catch(err => actions.toast(err.message, 'error'));
   const remove = async (c: Conversation) => {
     if (!window.confirm(`Delete "${c.title}"?\n\nThe transcript is removed from disk, so it can no longer be resumed here or in Claude Code. Archive it instead to keep it out of the way.`)) return;
@@ -36,8 +38,12 @@ export function ConversationList() {
   const items = (c: Conversation): MenuItem[] => [
     { label: 'Open', icon: MessageSquare, onSelect: () => resume(c) },
     { label: 'Rename…', icon: Pencil, onSelect: () => rename(c.sessionId, c.title) },
+    c.pinned ? { label: 'Unpin', icon: PinOff, onSelect: () => pin(c, false) } : { label: 'Pin to top', icon: Pin, onSelect: () => pin(c, true) },
     c.archived ? { label: 'Restore from archive', icon: ArchiveRestore, onSelect: () => archive(c, false) } : { label: 'Archive', icon: Archive, onSelect: () => archive(c, true) },
+    { label: 'Move to project…', icon: FolderInput, onSelect: () => openMove(c.sessionId, c.title, c.locatedBy === 'pinned' ? c.worktree : null) },
     'separator',
+    { label: 'Send last reply to a chat…', icon: Send, onSelect: () => forwardLastReply(c.sessionId, { title: c.title }) },
+    { label: 'Export as markdown', icon: Download, onSelect: () => exportConversation(c.sessionId) },
     { label: 'Open a terminal here', icon: SquareTerminal, onSelect: () => openTerminal(c.cwd), disabled: !c.cwd },
     { label: 'Copy resume command', icon: Copy, onSelect: () => copy(`cd "${c.cwd}"; claude --resume ${c.sessionId}`, 'the resume command') },
     'separator',
@@ -48,7 +54,8 @@ export function ConversationList() {
     const selected = view.kind === 'resume' && view.sessionId === c.sessionId;
     return (
       <div key={c.sessionId} className="group flex items-center" onContextMenu={e => openMenu(e, items(c))}>
-        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}`} onClick={() => resume(c)}>
+        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}${c.autoArchived ? '\n(archived after two weeks idle)' : ''}`} onClick={() => resume(c)}>
+          {c.pinned && <Pin size={11} className="shrink-0 text-fg-faint" aria-label="Pinned" />}
           <span className={`grow ${c.archived ? 'text-fg-muted' : ''}`}>{c.title}</span>
           <span className="text-[10px] text-fg-faint truncate max-w-[35%] mono">{c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}</span>
           <span className="num text-[10px] text-fg-faint">{age(c.lastModified)}</span>

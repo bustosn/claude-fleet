@@ -4,6 +4,7 @@ import { ProjectTree } from './ProjectTree';
 import { ConversationList } from './ConversationList';
 import { TerminalList } from './TerminalList';
 import { DialogueList } from './DialogueList';
+import { SidebarDialogs } from './SidebarDialogs';
 
 export function Sidebar() {
   const width = useStore(s => s.sidebarWidth);
@@ -22,6 +23,7 @@ export function Sidebar() {
         <DialogueList />
         <ConversationList />
       </div>
+      <SidebarDialogs />
       <div
         role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabIndex={0}
         className="absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize"

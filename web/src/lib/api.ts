@@ -16,6 +16,8 @@ export const api = {
   history: (sessionId: string) => j<{ history: ChatEvent[] }>(`/api/conversations/${sessionId}/history`).then(r => r.history),
   setHome: (sessionId: string, worktree: string | null) => post<{ ok: true }>(`/api/conversations/${sessionId}/home`, { worktree }),
   rename: (sessionId: string, title: string) => post<{ ok: true; title: string }>(`/api/conversations/${sessionId}/rename`, { title }),
+  pin: (sessionId: string, pinned: boolean) => post<{ ok: true }>(`/api/conversations/${sessionId}/pin`, { pinned }),
+  openWorktree: (path: string, how: 'editor' | 'folder') => post<{ ok: true }>('/api/worktrees/open', { path, how }),
   archive: (sessionId: string, archived: boolean) => post<{ ok: true }>(`/api/conversations/${sessionId}/archive`, { archived }),
   deleteConversation: (sessionId: string) => j<{ ok: true }>(`/api/conversations/${sessionId}`, { method: 'DELETE' }),
   logs: (bgId: string) => j<{ logs: string }>(`/api/sessions/${encodeURIComponent(bgId)}/logs`).then(r => r.logs),
@@ -30,6 +32,8 @@ export const api = {
   models: (id: string) => j<ModelOption[]>(`/api/chats/${id}/models`),
   setModel: (id: string, model: string) => post<ChatSummary>(`/api/chats/${id}/model`, { model }),
   send: (id: string, text: string, fromChatId?: string, attachments?: Attachment[]) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId, attachments }),
+  /** Forwarded text: from a live chat (`chatId`), or from a saved conversation, which only has a title. */
+  forward: (id: string, text: string, from: { chatId?: string; title?: string }) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId: from.chatId, fromTitle: from.title }),
   permission: (id: string, permId: string, behavior: 'allow' | 'deny') => post<{ ok: boolean }>(`/api/chats/${id}/permission`, { id: permId, behavior }),
   interrupt: (id: string) => post<{ ok: true }>(`/api/chats/${id}/interrupt`),
   shell: (id: string, cmd: string) => post<{ id: string; terminalId: string }>(`/api/chats/${id}/shell`, { cmd }),

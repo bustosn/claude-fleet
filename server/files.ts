@@ -56,6 +56,15 @@ function shellOpen(target: string) {
   else detached(process.platform === 'darwin' ? 'open' : 'xdg-open', [target]);
 }
 
+/** A folder in VS Code (a new window) or the file manager. */
+export function openFolder(abs: string, how: 'editor' | 'folder') {
+  if (!fs.statSync(abs).isDirectory()) throw new Error('not a folder');
+  if (how === 'editor') {
+    if (!hasVSCode()) throw new Error('VS Code is not on the PATH');
+    shellOpen(`vscode://file/${encodeURI(abs.replace(/\\/g, '/')).replace(/[#?]/g, encodeURIComponent)}/`);
+  } else shellOpen(abs);
+}
+
 export function openFile(cwd: string, p: string, how: 'editor' | 'default' | 'reveal', line?: number) {
   const abs = resolvePath(cwd, p);
   const st = fs.statSync(abs);

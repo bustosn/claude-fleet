@@ -6,6 +6,7 @@ import { md, esc, fileRefs } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Status, WorktreePicker } from '../components/ui';
+import { ForwardDialog } from '../components/SidebarDialogs';
 import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, fmtBytes, readAttachment, toSend, type Pending } from '../components/Attachments';
 import type { TokenUsage } from '../../../shared/types';
 
@@ -283,7 +284,7 @@ export function ChatView({ chatId }: { chatId: string }) {
       </form>
 
       {viewing && <FileViewer key={`${viewing.path}:${viewing.line}`} chatId={chatId} path={viewing.path} line={viewing.line} onClose={() => setViewing(null)} />}
-      {forward && <ForwardDialog chatId={chatId} lastReply={[...state.entries].reverse().find(e => e.k === 'assistant')?.text || ''} onClose={() => setForward(false)} />}
+      {forward && <ForwardDialog fromChatId={chatId} text={[...state.entries].reverse().find(e => e.k === 'assistant')?.text || ''} onClose={() => setForward(false)} />}
     </div>
   );
 }
@@ -552,42 +553,6 @@ function EntryView({ e, chatId, isFile }: { e: Entry; chatId: string; isFile?: (
       </div>
     );
   }
-}
-
-function ForwardDialog({ chatId, lastReply, onClose }: { chatId: string; lastReply: string; onClose: () => void }) {
-  const snap = useStore(s => s.snapshot);
-  const targets = (snap?.chats || []).filter(c => c.id !== chatId && c.status !== 'ended');
-  const [target, setTarget] = useState(targets[0]?.id || '');
-  const [text, setText] = useState(lastReply);
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => { ref.current?.showModal(); }, []);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    try { await api.send(target, text.trim(), chatId); actions.toast(`Sent to ${targets.find(t => t.id === target)?.title}`); onClose(); }
-    catch (err: any) { actions.toast(err.message, 'error'); }
-  };
-  return (
-    <dialog ref={ref} onClose={onClose}>
-      <form onSubmit={submit}>
-        <h2>Send to another chat</h2>
-        {targets.length === 0 ? <p className="text-[12px] text-fg-muted">No other live chat to send to. Open or start another chat first.</p> : (
-          <>
-            <label>Target chat
-              <select className="input" value={target} onChange={e => setTarget(e.target.value)}>
-                {targets.map(c => <option key={c.id} value={c.id}>{c.title} ({c.repo ? `${c.repo} / ${c.branch || ''}` : shortPath(c.cwd)}, {c.status})</option>)}
-              </select>
-            </label>
-            <label>Message<textarea className="input" rows={8} value={text} onChange={e => setText(e.target.value)} /></label>
-            <p className="text-[11px] text-fg-faint">The target sees it as a forwarded message from this chat. Agents can also message each other on their own with the fleet tools.</p>
-          </>
-        )}
-        <div className="flex justify-end gap-2">
-          <button type="button" className="btn" onClick={() => ref.current?.close()}>Cancel</button>
-          {targets.length > 0 && <button type="submit" className="btn primary" disabled={!text.trim()}>Send</button>}
-        </div>
-      </form>
-    </dialog>
-  );
 }
 
 export const escapeHtml = esc;

@@ -14,6 +14,8 @@ export interface FleetConfig {
   dispatch: DispatchDefaults; roles: Record<string, Role>; aws: Partial<AwsConfig>;
   /** Shell for terminal tabs. Null picks powershell.exe on Windows, $SHELL elsewhere. */
   terminal: { shell: string | null };
+  /** Saved conversations idle this many days move to Archived on their own. 0 turns it off. */
+  conversations: { archiveAfterDays: number };
 }
 
 export const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -29,6 +31,7 @@ export function loadConfig(): FleetConfig {
     dispatch: { permissionMode: 'auto', defaultModel: 'fable', maxConcurrent: 4, ...(raw.dispatch || {}) },
     roles: raw.roles || {}, aws: raw.aws || {},
     terminal: { shell: raw.terminal?.shell ? String(raw.terminal.shell) : null },
+    conversations: { archiveAfterDays: Number(raw.conversations?.archiveAfterDays ?? 14) || 0 },
   };
   return cfg;
 }
