@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react';
 import { api } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Empty } from '../components/ui';
+import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, readAttachment, toSend, type Pending } from '../components/Attachments';
 
 /** Opens (or reuses) a live chat for a saved session, then hands off to the chat view. */
 export function ResumeView({ sessionId, cwd, title }: { sessionId: string; cwd: string; title: string }) {
@@ -23,19 +24,40 @@ export function NewChatView({ cwd }: { cwd?: string }) {
   const [perm, setPerm] = useState(snap?.dispatch.permissionMode || 'auto');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [attachments, setAttachments] = useState<Pending[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+
+  // Same as the chat composer: files dropped or pasted (Ctrl+V, or Alt+V for a clipboard image) go with the first message.
+  const attach = async (files: File[]) => {
+    const tooBig = files.filter(f => f.size > MAX_ATTACHMENT);
+    if (tooBig.length) actions.toast(`Too large to attach (over ${MAX_ATTACHMENT / 1024 / 1024} MB): ${tooBig.map(f => f.name).join(', ')}`, 'error');
+    const read = await Promise.all(files.filter(f => f.size <= MAX_ATTACHMENT).map(readAttachment));
+    if (read.length) setAttachments(a => [...a, ...read]);
+  };
+  const pasteImage = async () => {
+    try { const files = await clipboardImages(); if (files.length) attach(files); else actions.toast('No image on the clipboard.'); }
+    catch { actions.toast('The browser blocked clipboard access. Ctrl+V pastes images too.', 'error'); }
+  };
+  const isFileDrag = (e: DragEvent) => e.dataTransfer.types.includes('Files');
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     try {
       const c = await api.openChat({ cwd: dir, model, permissionMode: perm });
-      if (text.trim()) await api.send(c.id, text.trim());
-      actions.go({ kind: 'chat', chatId: c.id, title: text.trim().slice(0, 60) || 'New chat' }, { replace: 'new-chat' });
+      if (text.trim() || attachments.length) await api.send(c.id, text.trim(), undefined, attachments.length ? toSend(attachments) : undefined);
+      actions.go({ kind: 'chat', chatId: c.id, title: text.trim().slice(0, 60) || attachments[0]?.name || 'New chat' }, { replace: 'new-chat' });
     } catch (err: any) { actions.toast(err.message, 'error'); setBusy(false); }
   };
 
   return (
-    <form className="m-auto w-[560px] max-w-[94%] panel p-5" onSubmit={submit}>
+    <form className="relative m-auto w-[560px] max-w-[94%] panel p-5" onSubmit={submit}
+      onDragEnter={e => { if (!isFileDrag(e)) return; e.preventDefault(); dragDepth.current++; setDragging(true); }}
+      onDragOver={e => { if (isFileDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+      onDragLeave={e => { if (isFileDrag(e) && --dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }}
+      onDrop={e => { if (!isFileDrag(e)) return; e.preventDefault(); dragDepth.current = 0; setDragging(false); attach([...e.dataTransfer.files]); }}>
+      {dragging && <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-lg border-2 border-dashed border-accent bg-accent-soft/80 text-[13px] font-semibold">Drop to attach to the first message</div>}
       <h2 className="mb-3 text-[14px] font-semibold">New chat</h2>
       <label className="mb-3 grid gap-1 text-[12px] text-fg-muted">Working directory
         <select className="input" value={dir} onChange={e => setDir(e.target.value)}>{dirs.map(d => <option key={d} value={d}>{shortPath(d)}</option>)}</select>
@@ -51,7 +73,10 @@ export function NewChatView({ cwd }: { cwd?: string }) {
         </label>
       </div>
       <label className="mb-4 grid gap-1 text-[12px] text-fg-muted">First message
-        <textarea className="input" rows={5} value={text} onChange={e => setText(e.target.value)} placeholder="What should this chat work on?" />
+        {attachments.length > 0 && <AttachmentChips items={attachments} onRemove={id => setAttachments(a => a.filter(x => x.id !== id))} />}
+        <textarea className="input" rows={5} value={text} onChange={e => setText(e.target.value)} placeholder="What should this chat work on? Drop files or paste images to attach."
+          onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); attach(files); } }}
+          onKeyDown={e => { if (e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteImage(); } }} />
       </label>
       <div className="flex justify-end gap-2">
         <button type="button" className="btn" onClick={() => actions.go({ kind: 'overview' })}>Cancel</button>

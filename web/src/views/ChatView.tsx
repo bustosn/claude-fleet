@@ -6,6 +6,7 @@ import { md, esc, fileRefs } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Status, WorktreePicker } from '../components/ui';
+import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, fmtBytes, readAttachment, toSend, type Pending } from '../components/Attachments';
 import type { TokenUsage } from '../../../shared/types';
 
 type Entry =
@@ -129,9 +130,7 @@ export function ChatView({ chatId }: { chatId: string }) {
   // Alt+V, as in Claude Code on Windows. The browser asks once for clipboard access; Ctrl+V needs no permission and works too.
   const pasteImage = async () => {
     try {
-      const items = await navigator.clipboard.read();
-      const files: File[] = [];
-      for (const item of items) for (const type of item.types) if (type.startsWith('image/')) files.push(new File([await item.getType(type)], `pasted image.${type.split('/')[1]}`, { type }));
+      const files = await clipboardImages();
       if (files.length) attach(files); else dispatch({ type: 'sys', text: 'No image on the clipboard.' });
     } catch { dispatch({ type: 'sys', text: 'The browser blocked clipboard access. Ctrl+V pastes images too.', err: true }); }
   };
@@ -207,7 +206,7 @@ export function ChatView({ chatId }: { chatId: string }) {
     if (!t && !attachments.length) return;
     const sent = attachments;
     setText(''); setHistIdx(-1); setAttachments([]);
-    api.send(chatId, t, undefined, sent.map(({ name, mediaType, data }) => ({ name, mediaType, data })))
+    api.send(chatId, t, undefined, toSend(sent))
       .catch(err => { dispatch({ type: 'sys', text: err.message, err: true }); setAttachments(a => [...sent, ...a]); });
   };
   // Paths in finished replies are checked once against the chat's folder; only files that exist become links.
@@ -338,39 +337,6 @@ function FileViewer({ chatId, path, line, onClose }: { chatId: string; path: str
   );
 }
 
-/** An attachment waiting in the composer. `preview` is a data URL for images, so the chip can show a thumbnail. */
-type Pending = Attachment & { id: number; size: number; preview: string | null };
-const MAX_ATTACHMENT = 30 * 1024 * 1024;
-let attachSeq = 0;
-
-function readAttachment(file: File): Promise<Pending> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onerror = () => reject(r.error);
-    r.onload = () => {
-      const url = String(r.result);
-      const mediaType = file.type || 'application/octet-stream';
-      resolve({ id: ++attachSeq, name: file.name || 'pasted file', mediaType, size: file.size, data: url.slice(url.indexOf(',') + 1), preview: mediaType.startsWith('image/') ? url : null });
-    };
-    r.readAsDataURL(file);
-  });
-}
-
-function AttachmentChips({ items, onRemove }: { items: Pending[]; onRemove: (id: number) => void }) {
-  return (
-    <div className="flex flex-wrap gap-1.5" aria-label="Attachments">
-      {items.map(a => (
-        <span key={a.id} className="inline-flex max-w-[260px] items-center gap-1.5 rounded border border-line bg-raised py-0.5 pl-1 pr-0.5 text-[11px]" title={`${a.name} · ${fmtBytes(a.size)}`}>
-          {a.preview ? <img src={a.preview} alt="" className="h-6 w-6 rounded-sm object-cover" /> : <FileText size={14} className="shrink-0 text-fg-faint" aria-hidden="true" />}
-          <span className="truncate">{a.name}</span>
-          <span className="shrink-0 text-fg-faint">{fmtBytes(a.size)}</span>
-          <button type="button" className="btn sm ghost h-5 px-1" onClick={() => onRemove(a.id)} aria-label={`Remove ${a.name}`}><X size={11} aria-hidden="true" /></button>
-        </span>
-      ))}
-    </div>
-  );
-}
-const fmtBytes = (n: number) => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 /** The chat's current model, and a dropdown to switch it. The list comes from the chat's own process, so it matches the account.
  *  The current model may be an alias ("opus") or the full id the process reported, so options match on either. */
