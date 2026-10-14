@@ -27,7 +27,7 @@ export function StatusStrip() {
   const needs = snap?.sessions.filter(s => s.column === 'needs-you') || [];
   const working = snap?.sessions.filter(s => s.column === 'working').length || 0;
   const left = timeLeft(aws?.expiration || null);
-  const active = !!aws && !aws.needsLogin && !!aws.expiration && Date.parse(aws.expiration) > Date.now();
+  const active = !!aws && !aws.needsLogin && !!aws.arn && !!aws.expiration && Date.parse(aws.expiration) > Date.now();
   const errors = Object.entries(snap?.errors || {});
 
   return (

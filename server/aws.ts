@@ -47,7 +47,19 @@ export class AwsCreds {
     catch (err) { out.arn = null; out.error = out.error || short(err); }
     Object.assign(out, await this.ssoCache());
     this.cached = out; this.cachedAt = Date.now();
+    this.fillMissingKeys(out);
     return { ...out, run: this.run, needsLogin: this.needsLogin };
+  }
+
+  // A live SSO session but a credential profile that cannot call AWS (a fresh machine, or reset.sh just logged in): write the keys from the SSO cache.
+  // Silent path only, at most once a minute, and no Teleport step, so it never opens a browser or drops open tunnels.
+  private lastFill = 0;
+  private fillMissingKeys(s: Omit<AwsStatus, 'run' | 'needsLogin'>) {
+    const ssoLive = !!s.expiration && Date.parse(s.expiration) > Date.now();
+    if (s.arn || !ssoLive || this.needsLogin || (this.run && !this.run.done) || Date.now() - this.lastFill < 60000) return;
+    this.lastFill = Date.now();
+    this.start({ auto: true });
+    this.log('credential profile has no working keys; writing them from the SSO session');
   }
 
   // The user's own reset.sh (AWS login, Teleport, DB tunnels) needs a real console for winpty and the browser prompts, and the server has none,
