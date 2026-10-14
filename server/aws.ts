@@ -15,7 +15,7 @@ export class AwsCreds {
   login: ChildProcess | null = null; private loginDone: Promise<void> | null = null;
 
   constructor(cfg: Partial<AwsConfig>, stateDir: string) {
-    this.cfg = { profile: '', credProfile: 'default', resetScript: '', teleportScript: '', ssoRegion: 'us-east-1', chromePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    this.cfg = { profile: '', credProfile: 'default', resetScript: '', resetSh: path.join(os.homedir(), 'reset.sh'), teleportScript: '', ssoRegion: 'us-east-1', chromePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
       autoApprove: false, autoRefresh: true, autoRefreshMinutesBefore: 60, ...cfg };
     this.stateDir = stateDir; this.profileDir = path.join(stateDir, 'chrome-aws-profile');
     if (this.cfg.autoRefresh && this.enabled) setInterval(() => this.autoRefreshTick().catch(() => {}), 10 * 60000);
@@ -48,6 +48,16 @@ export class AwsCreds {
     Object.assign(out, await this.ssoCache());
     this.cached = out; this.cachedAt = Date.now();
     return { ...out, run: this.run, needsLogin: this.needsLogin };
+  }
+
+  // The user's own reset.sh (AWS login, Teleport, DB tunnels) needs a real console for winpty and the browser prompts, and the server has none,
+  // so it gets its own visible Git Bash window. The window stays open at the end so the output can be read.
+  openReset() {
+    const script = this.cfg.resetSh.replace(/\\/g, '/');
+    const bash = BASH.replace(/\//g, '\\');
+    const line = `/d /s /c "start "Fleet reset" "${bash}" -l -c "bash '${script}'; echo; read -p 'Finished. Press Enter to close. '""`;
+    spawn('cmd.exe', [line], { cwd: os.homedir(), windowsVerbatimArguments: true, detached: true, stdio: 'ignore' }).unref();
+    this.cachedAt = 0;
   }
 
   // Only expiry metadata is read from the SSO cache; tokens never leave this function.

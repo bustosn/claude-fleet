@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { Role, DispatchDefaults } from '../shared/types.js';
 
 export interface AwsConfig {
-  profile: string; credProfile: string; resetScript: string; teleportScript: string; ssoRegion: string; chromePath: string;
+  profile: string; credProfile: string; resetScript: string; resetSh: string; teleportScript: string; ssoRegion: string; chromePath: string;
   autoApprove: boolean; autoRefresh: boolean; autoRefreshMinutesBefore: number;
 }
 

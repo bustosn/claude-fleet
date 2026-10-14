@@ -64,6 +64,7 @@ app.get('/api/events', (req, res) => {
 // AWS credentials (Hub)
 app.get('/api/aws/status', async (req, res) => res.json(await aws.status(req.query.force === '1')));
 app.post('/api/aws/refresh', (req, res) => res.json(aws.start({ forceLogin: !!req.body?.forceLogin })));
+app.post('/api/aws/reset', (_req, res) => { aws.openReset(); res.json({ ok: true }); });
 app.post('/api/aws/cancel', (_req, res) => { aws.login?.kill(); res.json({ ok: true }); });
 
 // Background sessions
