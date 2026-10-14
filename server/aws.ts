@@ -15,7 +15,7 @@ export class AwsCreds {
   login: ChildProcess | null = null; private loginDone: Promise<void> | null = null;
 
   constructor(cfg: Partial<AwsConfig>, stateDir: string) {
-    this.cfg = { profile: '', credProfile: 'default', resetScript: '', ssoRegion: 'us-east-1', chromePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    this.cfg = { profile: '', credProfile: 'default', resetScript: '', teleportScript: '', ssoRegion: 'us-east-1', chromePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
       autoApprove: false, autoRefresh: true, autoRefreshMinutesBefore: 60, ...cfg };
     this.stateDir = stateDir; this.profileDir = path.join(stateDir, 'chrome-aws-profile');
     if (this.cfg.autoRefresh && this.enabled) setInterval(() => this.autoRefreshTick().catch(() => {}), 10 * 60000);
@@ -110,6 +110,18 @@ export class AwsCreds {
     this.setState('export');
     if (await this.writeCreds()) return this.finish(true);
     this.finish(false, 'login finished but exporting credentials still failed');
+  }
+
+  // Same as reset.sh: rebuild the Teleport login and DB tunnels once AWS is good. Skipped for timer runs, since it kills the open tunnels and needs a GitHub click.
+  private async afterCreds(auto: boolean) {
+    if (auto || !this.cfg.teleportScript) return this.finish(true);
+    this.setState('teleport');
+    this.log('Resetting Teleport and the DB tunnels. Click "Github" if a Teleport sign-in page opens.');
+    try {
+      const out = await exec(BASH, [this.cfg.teleportScript, '--no-aws'], { timeout: 300000, cwd: os.homedir() });
+      for (const l of out.split('\n')) if (l.trim()) this.log(l);
+      this.finish(true);
+    } catch (err) { this.finish(false, `AWS is refreshed but the Teleport reset failed: ${short(err)}`); }
   }
 
   // awsreset --no-login: export from the SSO cache, back up and rewrite ~/.aws files, verify with STS.

@@ -47,6 +47,7 @@
     "profile": "",
     "credProfile": "default",
     "resetScript": "C:/Users/you/bin/awsreset",
+    "teleportScript": "",
     "ssoRegion": "us-east-1",
     "chromePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "autoApprove": false,

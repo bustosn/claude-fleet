@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run build",
     "setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1",
+    "restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1 -Restart",
     "ship": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ship.ps1"
   },
   "dependencies": {
