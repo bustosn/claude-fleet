@@ -83,7 +83,7 @@ export class AwsCreds {
     if (!forceLogin) {
       this.setState('silent');
       this.log('Trying to refresh from the cached SSO session (no browser)');
-      if (await this.writeCreds()) return this.finish(true);
+      if (await this.writeCreds()) return this.afterCreds(auto);
       if (auto) { this.needsLogin = true; return this.finish(false, 'SSO session expired. Click Refresh credentials to log in; the timer will not open a browser on its own.'); }
     }
     this.setState('login');
@@ -108,7 +108,7 @@ export class AwsCreds {
     }
     await this.loginDone;
     this.setState('export');
-    if (await this.writeCreds()) return this.finish(true);
+    if (await this.writeCreds()) return this.afterCreds(auto);
     this.finish(false, 'login finished but exporting credentials still failed');
   }
 
