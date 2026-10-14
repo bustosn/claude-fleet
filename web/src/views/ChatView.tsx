@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState, type DragEvent, type FormEvent
 import { ArrowRight, Code2, ExternalLink, FileText, FolderOpen, Paperclip, Pencil, Plug, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
 import { api, subscribe, type Attachment, type ChatEvent, type FilePreview, type ChatSummary, type ChatStatus, type McpServerView, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
 import { rankCommands } from '../lib/commands';
-import { md, esc, fileRefs } from '../lib/markdown';
+import { md, esc, fileRefs, csvToMarkdownTable, userTables } from '../lib/markdown';
 import { fmtTokens, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Status, WorktreePicker } from '../components/ui';
@@ -286,7 +286,13 @@ export function ChatView({ chatId }: { chatId: string }) {
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           {attachments.length > 0 && <AttachmentChips items={attachments} onRemove={id => setAttachments(a => a.filter(x => x.id !== id))} />}
           <textarea ref={composer} className={`input ${bang ? 'mono' : ''}`} rows={3} value={text} placeholder="Message Claude. Enter sends, Shift+Enter for a new line, / for commands, ! for your shell. Drop files or paste images to attach." onChange={e => { setText(e.target.value); setCmdIndex(0); setCmdDismissed(false); setHistIdx(-1); }}
-            onKeyDown={onComposerKey} onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); attach(files); } }} disabled={state.status === 'ended'} />
+            onKeyDown={onComposerKey} onPaste={e => {
+              const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); attach(files); return; }
+              // A pasted CSV or spreadsheet range becomes a markdown table. execCommand keeps Ctrl+Z working to get the raw paste back.
+              if (bang || text.startsWith('/')) return;
+              const table = csvToMarkdownTable(e.clipboardData.getData('text/plain'));
+              if (table) { e.preventDefault(); document.execCommand('insertText', false, table + '\n'); }
+            }} disabled={state.status === 'ended'} />
         </div>
         <button className="btn primary self-end" type="submit" disabled={state.status === 'ended' || (!text.trim() && !attachments.length)}><Send size={13} aria-hidden="true" /> Send</button>
       </form>
@@ -602,7 +608,8 @@ function EntryView({ e, chatId, isFile }: { e: Entry; chatId: string; isFile?: (
     case 'user': {
       const o = e.origin;
       const label = o?.kind === 'manual' ? 'forwarded from' : o?.kind === 'dialogue' ? 'dialogue · relayed from' : 'from';
-      return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{label} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{e.text}
+      const tableHtml = userTables(e.text);
+      return <div className={`msg user ${o ? o.kind : ''}`}>{o && <span className="origin">{label} {o.fromTitle || o.fromChatId}{o.askId ? ` (ask ${o.askId})` : ''}</span>}{tableHtml ? <span dangerouslySetInnerHTML={{ __html: tableHtml }} /> : e.text}
         {e.attachments?.length ? <span className={`flex flex-wrap gap-1 ${e.text ? 'mt-1.5' : ''}`}>{e.attachments.map((n, i) => <span key={i} className="inline-flex items-center gap-1 rounded bg-surface/60 px-1.5 text-[11px] text-fg-muted"><Paperclip size={10} aria-hidden="true" />{n}</span>)}</span> : null}</div>;
     }
     case 'assistant': return <div className={`msg assistant ${e.streaming ? 'opacity-90' : ''}`} dangerouslySetInnerHTML={{ __html: md(e.text, isFile) }} />;
