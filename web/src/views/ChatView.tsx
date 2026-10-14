@@ -224,6 +224,14 @@ export function ChatView({ chatId }: { chatId: string }) {
   }, [chatId, state.entries]);
   const [viewing, setViewing] = useState<{ path: string; line: number | null } | null>(null);
   const openFileLink = (e: MouseEvent<HTMLDivElement>) => {
+    const copy = (e.target as HTMLElement).closest<HTMLElement>('button.copy-btn');
+    if (copy) {
+      const text = copy.parentElement?.querySelector('pre')?.textContent ?? '';
+      navigator.clipboard.writeText(text.replace(/\n$/, '')).then(
+        () => { copy.textContent = 'Copied'; copy.classList.add('done'); setTimeout(() => { copy.textContent = 'Copy'; copy.classList.remove('done'); }, 1500); },
+        () => actions.toast('The browser blocked clipboard access.', 'error'));
+      return;
+    }
     const a = (e.target as HTMLElement).closest<HTMLElement>('a.file-link'); if (!a?.dataset.path) return;
     e.preventDefault();
     const path = a.dataset.path, line = a.dataset.line ? Number(a.dataset.line) : null;
