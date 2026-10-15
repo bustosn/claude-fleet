@@ -34,7 +34,7 @@ npm run check      # typecheck both sides and build
 
 ```
 powershell -ExecutionPolicy Bypass -File .\scripts\autostart.ps1            # once: logon task "ClaudeFleet" runs npm start hidden, logs to state\fleet.log
-powershell -ExecutionPolicy Bypass -File .\scripts\autostart.ps1 -Restart   # after shipping a change: stop + start the daily instance
+npm run restart                                                             # stop + start the daily instance (runs autostart.ps1 -Restart)
 ```
 
 Shipping a change, once it is committed on `dev`:
