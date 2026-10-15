@@ -45,6 +45,7 @@ export const api = {
   endChat: (id: string) => j<{ ok: true }>(`/api/chats/${id}`, { method: 'DELETE' }),
   awsStatus: (force = false) => j<AwsStatus>(`/api/aws/status${force ? '?force=1' : ''}`),
   awsRefresh: (forceLogin = false) => post<AwsRun>('/api/aws/refresh', { forceLogin }),
+  awsReset: () => post<{ ok: true }>('/api/aws/reset'),
   awsCancel: () => post<{ ok: true }>('/api/aws/cancel'),
   terminals: () => j<TerminalSummary[]>('/api/terminals'),
   openTerminal: (cwd?: string) => post<TerminalSummary>('/api/terminals', { cwd }),

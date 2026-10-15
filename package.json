@@ -14,8 +14,8 @@
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run build",
     "setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1",
-    "ship": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ship.ps1",
-    "restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1 -Restart"
+    "restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1 -Restart",
+    "ship": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ship.ps1"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.295",

@@ -67,7 +67,7 @@ function tables(text: string): string {
 export function md(src: string, isFile?: (path: string) => boolean): string {
   const parts = src.split(/```/);
   return parts.map((p, i) => i % 2
-    ? `<pre><code>${esc(p.replace(/^\w*\n/, ''))}</code></pre>`
+    ? `<div class="codeblock"><button type="button" class="copy-btn" title="Copy to clipboard">Copy</button><pre><code>${esc(p.replace(/^\w*\n/, ''))}</code></pre></div>`
     : tables(linkify(esc(p), isFile)
       .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>'))
       .replace(/^(#{1,4}) (.*)$/gm, (_, h: string, t: string) => `<h${h.length}>${t}</h${h.length}>`)

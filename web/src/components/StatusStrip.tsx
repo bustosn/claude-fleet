@@ -9,18 +9,25 @@ export function StatusStrip() {
   const snap = useStore(s => s.snapshot);
   const [aws, setAws] = useState<AwsStatus | null>(null);
   const [open, setOpen] = useState(false);
+  // After a click, check every few seconds (for up to 10 minutes) so the pill turns green as soon as the login lands.
+  const [watchUntil, setWatchUntil] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    const load = () => api.awsStatus().then(s => { if (alive) setAws(s); }).catch(() => {});
+    const watching = watchUntil > Date.now();
+    const load = () => api.awsStatus(watching).then(s => { if (alive) setAws(s); }).catch(() => {});
     load();
-    const t = setInterval(load, 60000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
+    const t = setInterval(load, watching ? 5000 : 60000);
+    const stop = watching ? setTimeout(() => setWatchUntil(0), watchUntil - Date.now()) : undefined;
+    return () => { alive = false; clearInterval(t); clearTimeout(stop); };
+  }, [watchUntil]);
+
+  const runReset = () => { api.awsReset().then(() => setWatchUntil(Date.now() + 600000)).catch(() => {}); };
 
   const needs = snap?.sessions.filter(s => s.column === 'needs-you') || [];
   const working = snap?.sessions.filter(s => s.column === 'working').length || 0;
   const left = timeLeft(aws?.expiration || null);
+  const active = !!aws && !aws.needsLogin && !!aws.arn && !!aws.expiration && Date.parse(aws.expiration) > Date.now();
   const errors = Object.entries(snap?.errors || {});
 
   return (
@@ -30,9 +37,9 @@ export function StatusStrip() {
       {errors.length > 0 && <span className="truncate text-serious" title={errors.map(([k, v]) => `${k}: ${v}`).join('\n')}>{errors.length} collector error{errors.length > 1 ? 's' : ''}</span>}
 
       {aws?.enabled !== false && (
-        <button className={`ml-auto chip ${aws?.run && !aws.run.done ? 'warn' : aws?.needsLogin ? 'crit' : left.level === 'ok' ? 'good' : left.level === 'warn' ? 'warn' : 'crit'}`} onClick={() => actions.go({ kind: 'hub' })} title={aws?.needsLogin ? 'SSO session expired. Open the Hub and click Refresh credentials.' : aws?.arn || 'AWS credentials'}>
+        <button className={`ml-auto chip ${aws ? (active ? 'good' : 'crit') : ''}`} onClick={runReset} title={`Click to run reset.sh in a new window (AWS login, Teleport, DB tunnels).\n${active ? 'AWS credentials are active.' : aws?.needsLogin ? 'SSO session expired.' : 'AWS credentials are not active.'}${aws?.arn ? `\n${aws.arn}` : ''}`}>
           <KeyRound size={11} aria-hidden="true" />
-          {aws?.run && !aws.run.done ? `AWS: ${aws.run.state}` : aws?.needsLogin ? 'AWS: login needed' : aws ? `AWS ${left.text}` : 'AWS …'}
+          {aws ? (active ? `AWS ${left.text}` : aws.needsLogin ? 'AWS: login needed' : 'AWS: off') : 'AWS …'}
         </button>
       )}
 

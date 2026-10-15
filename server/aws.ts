@@ -15,7 +15,7 @@ export class AwsCreds {
   login: ChildProcess | null = null; private loginDone: Promise<void> | null = null;
 
   constructor(cfg: Partial<AwsConfig>, stateDir: string) {
-    this.cfg = { profile: '', credProfile: 'default', resetScript: '', ssoRegion: 'us-east-1', chromePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    this.cfg = { profile: '', credProfile: 'default', resetScript: '', resetSh: path.join(os.homedir(), 'reset.sh'), teleportScript: '', ssoRegion: 'us-east-1', chromePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
       autoApprove: false, autoRefresh: true, autoRefreshMinutesBefore: 60, ...cfg };
     this.stateDir = stateDir; this.profileDir = path.join(stateDir, 'chrome-aws-profile');
     if (this.cfg.autoRefresh && this.enabled) setInterval(() => this.autoRefreshTick().catch(() => {}), 10 * 60000);
@@ -47,7 +47,29 @@ export class AwsCreds {
     catch (err) { out.arn = null; out.error = out.error || short(err); }
     Object.assign(out, await this.ssoCache());
     this.cached = out; this.cachedAt = Date.now();
+    this.fillMissingKeys(out);
     return { ...out, run: this.run, needsLogin: this.needsLogin };
+  }
+
+  // A live SSO session but a credential profile that cannot call AWS (a fresh machine, or reset.sh just logged in): write the keys from the SSO cache.
+  // Silent path only, at most once a minute, and no Teleport step, so it never opens a browser or drops open tunnels.
+  private lastFill = 0;
+  private fillMissingKeys(s: Omit<AwsStatus, 'run' | 'needsLogin'>) {
+    const ssoLive = !!s.expiration && Date.parse(s.expiration) > Date.now();
+    if (s.arn || !ssoLive || this.needsLogin || (this.run && !this.run.done) || Date.now() - this.lastFill < 60000) return;
+    this.lastFill = Date.now();
+    this.start({ auto: true });
+    this.log('credential profile has no working keys; writing them from the SSO session');
+  }
+
+  // The user's own reset.sh (AWS login, Teleport, DB tunnels) needs a real console for winpty and the browser prompts, and the server has none,
+  // so it gets its own visible Git Bash window. The window stays open at the end so the output can be read.
+  openReset() {
+    const script = this.cfg.resetSh.replace(/\\/g, '/');
+    const bash = BASH.replace(/\//g, '\\');
+    const line = `/d /s /c "start "Fleet reset" "${bash}" -l -c "bash '${script}'; echo; read -p 'Finished. Press Enter to close. '""`;
+    spawn('cmd.exe', [line], { cwd: os.homedir(), windowsVerbatimArguments: true, detached: true, stdio: 'ignore' }).unref();
+    this.cachedAt = 0;
   }
 
   // Only expiry metadata is read from the SSO cache; tokens never leave this function.
@@ -83,7 +105,7 @@ export class AwsCreds {
     if (!forceLogin) {
       this.setState('silent');
       this.log('Trying to refresh from the cached SSO session (no browser)');
-      if (await this.writeCreds()) return this.finish(true);
+      if (await this.writeCreds()) return this.afterCreds(auto);
       if (auto) { this.needsLogin = true; return this.finish(false, 'SSO session expired. Click Refresh credentials to log in; the timer will not open a browser on its own.'); }
     }
     this.setState('login');
@@ -108,8 +130,20 @@ export class AwsCreds {
     }
     await this.loginDone;
     this.setState('export');
-    if (await this.writeCreds()) return this.finish(true);
+    if (await this.writeCreds()) return this.afterCreds(auto);
     this.finish(false, 'login finished but exporting credentials still failed');
+  }
+
+  // Same as reset.sh: rebuild the Teleport login and DB tunnels once AWS is good. Skipped for timer runs, since it kills the open tunnels and needs a GitHub click.
+  private async afterCreds(auto: boolean) {
+    if (auto || !this.cfg.teleportScript) return this.finish(true);
+    this.setState('teleport');
+    this.log('Resetting Teleport and the DB tunnels. Click "Github" if a Teleport sign-in page opens.');
+    try {
+      const out = await exec(BASH, [this.cfg.teleportScript, '--no-aws'], { timeout: 300000, cwd: os.homedir() });
+      for (const l of out.split('\n')) if (l.trim()) this.log(l);
+      this.finish(true);
+    } catch (err) { this.finish(false, `AWS is refreshed but the Teleport reset failed: ${short(err)}`); }
   }
 
   // awsreset --no-login: export from the SSO cache, back up and rewrite ~/.aws files, verify with STS.

@@ -37,6 +37,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\autostart.ps1            # on
 npm run restart                                                             # stop + start the daily instance (runs autostart.ps1 -Restart)
 ```
 
+If the daily instance drops or hangs, `npm run restart` (same as the `-Restart` line above) stops it and starts it again without a rebuild.
+
 Shipping a change, once it is committed on `dev`:
 
 ```
