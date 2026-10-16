@@ -3,6 +3,7 @@ import { api } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Empty } from '../components/ui';
+import { CodeTextarea } from '../components/CodeTextarea';
 import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, readAttachment, toSend, type Pending } from '../components/Attachments';
 
 /** Opens (or reuses) a live chat for a saved session, then hands off to the chat view. */
@@ -74,9 +75,12 @@ export function NewChatView({ cwd }: { cwd?: string }) {
       </div>
       <label className="mb-4 grid gap-1 text-[12px] text-fg-muted">First message
         {attachments.length > 0 && <AttachmentChips items={attachments} onRemove={id => setAttachments(a => a.filter(x => x.id !== id))} />}
-        <textarea className="input" rows={5} value={text} onChange={e => setText(e.target.value)} placeholder="What should this chat work on? Drop files or paste images to attach."
+        <CodeTextarea className="input" wrapClass="rich-boxed" rows={5} value={text} onChange={setText} placeholder="What should this chat work on? Enter starts the chat, Shift+Enter adds a line. Drop files or paste images to attach."
           onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); attach(files); } }}
-          onKeyDown={e => { if (e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteImage(); } }} />
+          onKeyDown={e => {
+            if (e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteImage(); return; }
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey || e.currentTarget.dataset.code !== 'true')) { e.preventDefault(); if (!busy && dir) e.currentTarget.form?.requestSubmit(); }
+          }} />
       </label>
       <div className="flex justify-end gap-2">
         <button type="button" className="btn" onClick={() => actions.go({ kind: 'overview' })}>Cancel</button>

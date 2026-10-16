@@ -6,7 +6,7 @@ const unesc = (s: string) => s.replace(/&(amp|lt|gt|quot);/g, (_, e) => ({ amp: 
 /** A path in running text: a drive path, or something with a slash and an extension. Not inside a URL or a longer word. */
 const PATH = String.raw`(?<![\w/\\:.@-])(?:[A-Za-z]:[\\/][^\s\x60<>"'|*?()\[\]&]+|(?:~|\.{1,2})?[\\/]?(?:[\w.@-]+[\\/])+[\w@-][\w.@-]*\.[A-Za-z0-9]{1,8})(?::\d+(?::\d+)?)?`;
 // One pass over prose: inline code, a markdown link, or a bare path. Matching all three together keeps a link from being linked twice.
-const TOKEN = new RegExp(String.raw`\x60([^\x60]+)\x60|\[([^\]\n]+)\]\(([^)\s]+)\)|(${PATH})`, 'g');
+const TOKEN = new RegExp(String.raw`\x60{3,}|\x60([^\x60]+)\x60|\[([^\]\n]+)\]\(([^)\s]+)\)|(${PATH})`, 'g');
 /** Inline code that names a file: no spaces, and a slash, a drive, or a file name with an extension. */
 const CODE_PATH = /^(?:[A-Za-z]:[\\/]\S*|\S*[\\/]\S*|[\w@-][\w.@-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?)$/;
 
@@ -24,8 +24,9 @@ function linkify(prose: string, isFile?: (path: string) => boolean): string {
     return `<a class="file-link" href="#" data-path="${esc(path)}"${line ? ` data-line="${line}"` : ''} title="Open ${esc(path)}${line ? `, line ${line}` : ''} (Ctrl+click: VS Code)">${inner}</a>`;
   };
   return prose.replace(TOKEN, (all, code?: string, text?: string, target?: string, bare?: string) => {
+    if (code == null && text == null && bare == null) return all; // a run of ``` mid-sentence stays as typed
     if (code != null) {
-      const c = `<code>${code}</code>`;
+      const c =`<code>${code}</code>`;
       return code.length < 300 && !/^[a-z][a-z+.-]*:\/\//i.test(code) && CODE_PATH.test(code) ? fileLink(code, c) ?? c : c;
     }
     if (text != null) {
@@ -75,19 +76,26 @@ function codeBlock(raw: string): string {
 
 /** Minimal markdown for chat replies: fenced code, inline code, links, bold, bullets, tables, paragraphs. Everything is escaped first. */
 export function md(src: string, isFile?: (path: string) => boolean): string {
-  const parts = src.split(/```/);
-  return parts.map((p, i) => i % 2
-    ? codeBlock(p)
-    : tables(linkify(esc(p), isFile)
-      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>'))
-      .replace(/^(#{1,4}) (.*)$/gm, (_, h: string, t: string) => `<h${h.length}>${t}</h${h.length}>`)
-      .replace(/^(?:- |\* )(.*)$/gm, '<li>$1</li>')
-      // Newlines between items or after a heading would each become a <br> and open gaps in the block.
-      .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m.replace(/\n/g, '')}</ul>`)
-      .replace(/(<\/h\d>|<\/ul>|<\/table>)\n+/g, '$1')
-      .replace(/\n+(<table>)/g, '$1')
-      .replace(/\n{2,}/g, '</p><p>')
-      .replace(/\n/g, '<br>')).join('');
+  const prose = (p: string) => tables(linkify(esc(p), isFile)
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>'))
+    .replace(/^(#{1,4}) (.*)$/gm, (_, h: string, t: string) => `<h${h.length}>${t}</h${h.length}>`)
+    .replace(/^(?:- |\* )(.*)$/gm, '<li>$1</li>')
+    // Newlines between items or after a heading would each become a <br> and open gaps in the block.
+    .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m.replace(/\n/g, '')}</ul>`)
+    .replace(/(<\/h\d>|<\/ul>|<\/table>)\n+/g, '$1')
+    .replace(/\n+(<table>)/g, '$1')
+    .replace(/\n{2,}/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+  // A fence is ``` at the start of a line (indent allowed); ``` in the middle of a sentence is just text.
+  // An unclosed fence runs to the end, as while a reply streams.
+  const out: string[] = [];
+  let last = 0;
+  for (const m of src.matchAll(/^[ \t]*```([^\n`]*)\n?([\s\S]*?)(?:^[ \t]*```[ \t]*$|(?![\s\S]))/gm)) {
+    out.push(prose(src.slice(last, m.index)), codeBlock(`${m[1].trim()}\n${m[2]}`));
+    last = m.index! + m[0].length;
+  }
+  out.push(prose(src.slice(last)));
+  return out.join('');
 }
 
 /** Every path `md` would consider linking, so the caller can check which exist before rendering. */

@@ -30,11 +30,13 @@ function TabButton({ tab, active, label }: { tab: Tab; active: boolean; label: {
   const Icon = iconFor(tab.view, label.state);
   const close = (e: MouseEvent) => { e.stopPropagation(); actions.closeTab(tab.key); };
   const onAux = (e: MouseEvent) => { if (e.button === 1) { e.preventDefault(); actions.closeTab(tab.key); } };
+  // Middle mousedown would start the browser's autoscroll on an overflowing strip; cancel it so auxclick can close.
+  const onDown = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
   return (
     <div
       role="tab" aria-selected={active} tabIndex={0} title={label.hint}
       className="group tab"
-      onClick={() => actions.go(tab.view)} onAuxClick={onAux}
+      onClick={() => actions.go(tab.view)} onMouseDown={onDown} onAuxClick={onAux}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.go(tab.view); } if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); actions.closeTab(tab.key); } }}
     >
       {label.state ? <span className="dot shrink-0" data-s={label.state} aria-hidden="true" /> : <Icon size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />}

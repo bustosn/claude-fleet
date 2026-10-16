@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useReducer, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { ArrowRight, Brain, Code2, ExternalLink, FileText, FolderOpen, Paperclip, Pencil, Plug, Send, Square, Terminal as TerminalIcon, X } from 'lucide-react';
 import { api, subscribe, type Attachment, type ChatEvent, type FilePreview, type ChatSummary, type ChatStatus, type McpServerView, type MessageOrigin, type ModelOption, type SlashCommandView } from '../lib/api';
 import { rankCommands } from '../lib/commands';
@@ -9,6 +9,7 @@ import { Status, WorktreePicker } from '../components/ui';
 import { ForwardDialog } from '../components/SidebarDialogs';
 import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, fmtBytes, readAttachment, toSend, type Pending } from '../components/Attachments';
 import type { AskQuestion, EditPreview, TodoItem, TokenUsage } from '../../../shared/types';
+import { CodeTextarea, type CodeTextareaHandle } from '../components/CodeTextarea';
 import { ContextPopover, DiffView, EFFORTS, FileMenu, MODES, PermissionCard, RewindButton, TaskRow, TodoPanel, type TaskEntry } from './chatParts';
 
 type Entry =
@@ -128,7 +129,7 @@ export function ChatView({ chatId }: { chatId: string }) {
   const [cmdIndex, setCmdIndex] = useState(0);
   const [cmdDismissed, setCmdDismissed] = useState(false);
   const [histIdx, setHistIdx] = useState(-1);
-  const composer = useRef<HTMLTextAreaElement>(null);
+  const composer = useRef<CodeTextareaHandle>(null);
   const [attachments, setAttachments] = useState<Pending[]>([]);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
@@ -203,7 +204,8 @@ export function ChatView({ chatId }: { chatId: string }) {
       e.preventDefault(); setHistIdx(next); setText(next < 0 ? '' : '!' + bangHistory[next]);
       return;
     }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    // Inside a ``` block Enter is a new line; Ctrl+Enter sends from there.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey || e.currentTarget.dataset.code !== 'true')) { e.preventDefault(); send(); }
   };
 
   useEffect(() => {
@@ -326,7 +328,7 @@ export function ChatView({ chatId }: { chatId: string }) {
           Runs in this chat's shell{s ? ` (${shortPath(s.cwd)})` : ''}. Enter runs, Esc interrupts, Up recalls. The output is yours until you send it to Claude.</div>}
         <div className="composer-box">
           {attachments.length > 0 && <div className="px-3 pt-3"><AttachmentChips items={attachments} onRemove={id => setAttachments(a => a.filter(x => x.id !== id))} /></div>}
-          <textarea ref={composer} className={`input ${bang ? 'mono' : ''}`} rows={3} value={text} placeholder={state.status === 'ended' ? 'This chat has ended.' : 'Message Claude…'} onChange={e => { setText(e.target.value); setCmdIndex(0); setCmdDismissed(false); setAtDismissed(false); setHistIdx(-1); }}
+          <CodeTextarea ref={composer} className={`input ${bang ? 'mono' : ''}`} rows={3} value={text} placeholder={state.status === 'ended' ? 'This chat has ended.' : 'Message Claude…'} onChange={v => { setText(v); setCmdIndex(0); setCmdDismissed(false); setAtDismissed(false); setHistIdx(-1); }}
             onKeyDown={onComposerKey} onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); attach(files); } }} disabled={state.status === 'ended'} />
           <div className="composer-bar">
             <span className="truncate"><span className="kbd">Enter</span> send · <span className="kbd">Shift</span>+<span className="kbd">Enter</span> new line · <span className="kbd">/</span> commands · <span className="kbd">@</span> files · <span className="kbd">!</span> shell · <span className="kbd">Shift</span>+<span className="kbd">Tab</span> mode</span>
