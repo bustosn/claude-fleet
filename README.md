@@ -71,6 +71,19 @@ A restart ends the daily instance's live chat processes; they reopen from their 
 | AWS credentials | `~/bin/awsreset` for the silent path; `aws sso login --use-device-code` with the approval page opened in your browser as the fallback |
 | Terminals | `node-pty` shells in the server, `xterm.js` in a tab, a WebSocket between them. Closing the tab keeps the shell; Kill ends it. A `claude` started in one shows up as a session like any other |
 
+## What a chat does like Claude Code
+
+- **Questions:** Claude's `AskUserQuestion` shows as a checklist card (radio or checkbox options plus an Other box); Skip tells Claude to carry on.
+- **Plans:** `ExitPlanMode` shows the plan as markdown with Approve (auto-accept edits / ask per edit) or Keep planning.
+- **Permissions:** edits show a diff before you allow them; Always allow applies the SDK's suggested rule for the session.
+- **Modes and effort:** the header switches permission mode (Shift+Tab in the composer cycles it) and thinking effort.
+- **Tasks:** the model's task list pins above the composer; subagents and background tasks get live rows with Stop.
+- **Composer:** `/` commands, `@` file completion, `!` shell, pasted or dropped files.
+- **Context:** click the context figure for the `/context` breakdown. "Restore files" on a message puts files back to before it (this run only; the conversation is kept).
+- **Away from the tab:** a count in the tab title, plus a desktop notification when a chat needs you (the browser asks once).
+
+Task-list tools are only offered to the model families Claude Code offers them to, so the panel appears when the model uses them.
+
 Design and roadmap: [`docs/plans/`](docs/plans/). If you are an agent working on this repo, start at [`docs/agents/`](docs/agents/).
 
 ## Config

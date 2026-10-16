@@ -16,7 +16,7 @@ export function Sidebar() {
   const onUp = () => { start.current = null; setDragging(false); };
 
   return (
-    <aside className="relative flex min-h-0 flex-col border-r border-line bg-surface" style={{ width }}>
+    <aside className="sidebar relative flex min-h-0 flex-col" style={{ width }}>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         <ProjectTree />
         <TerminalList />

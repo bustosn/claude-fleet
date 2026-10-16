@@ -26,7 +26,7 @@ export function OverviewView() {
               <div className="grid gap-1.5">
                 {list.length === 0 && <div className="px-2 py-3 text-[11px] text-fg-faint">{col.blurb}</div>}
                 {list.map(s => (
-                  <button key={s.id} className="rounded-md border border-line bg-raised p-2 text-left hover:border-line-strong" onClick={() => open(s)}>
+                  <button key={s.id} className="rounded-xl border border-line bg-raised p-2.5 text-left shadow-[var(--shadow-sm)] transition hover:-translate-y-px hover:border-line-strong hover:shadow-[var(--shadow)]" onClick={() => open(s)}>
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] uppercase tracking-wide text-fg-faint">{s.kind === 'dashboard' ? 'chat' : s.kind === 'background' ? 'bg' : 'tty'}</span>
                       <span className="truncate font-medium">{s.title || s.name || s.id}</span>

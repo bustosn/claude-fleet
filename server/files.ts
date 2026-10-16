@@ -25,6 +25,50 @@ export function statRefs(cwd: string, paths: string[]): FileRef[] {
   });
 }
 
+// @-mention completion: the files under a chat's folder, from git when it is a repo (so ignored folders stay out), else a bounded walk.
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.venv', '__pycache__', 'target', 'vendor', '.cache']);
+const fileLists = new Map<string, { at: number; files: string[] }>();
+function listFiles(cwd: string): string[] {
+  const hit = fileLists.get(cwd);
+  if (hit && Date.now() - hit.at < 30_000) return hit.files;
+  let files: string[] = [];
+  const git = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+  if (git.status === 0 && git.stdout) files = git.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+  else {
+    const walk = (dir: string, rel: string, depth: number) => {
+      if (files.length >= 8000 || depth > 6) return;
+      let entries: fs.Dirent[] = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) walk(path.join(dir, e.name), `${rel}${e.name}/`, depth + 1); }
+        else if (e.isFile()) files.push(rel + e.name);
+      }
+    };
+    walk(cwd, '', 0);
+  }
+  fileLists.set(cwd, { at: Date.now(), files });
+  return files;
+}
+
+/** Best matches for what follows an `@`: a name prefix beats a name substring beats the letters appearing in order. Shorter paths win ties. */
+export function suggestFiles(cwd: string, query: string, limit = 12): string[] {
+  const q = query.toLowerCase().replace(/\\/g, '/');
+  const files = listFiles(cwd);
+  if (!q) return files.slice().sort((a, b) => a.length - b.length).slice(0, limit);
+  const scored: [number, string][] = [];
+  for (const f of files) {
+    const low = f.toLowerCase(), base = low.slice(low.lastIndexOf('/') + 1);
+    let score = -1;
+    if (base.startsWith(q)) score = 0;
+    else if (low.startsWith(q)) score = 1;
+    else if (base.includes(q)) score = 2;
+    else if (low.includes(q)) score = 3;
+    else { let i = 0; for (const ch of low) if (ch === q[i]) i++; if (i === q.length) score = 4; }
+    if (score >= 0) scored.push([score * 1000 + f.length, f]);
+  }
+  return scored.sort((a, b) => a[0] - b[0]).slice(0, limit).map(s => s[1]);
+}
+
 let vscode: boolean | null = null;
 const hasVSCode = () => vscode ??= spawnSync(process.platform === 'win32' ? 'where' : 'which', ['code'], { windowsHide: true }).status === 0;
 

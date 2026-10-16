@@ -1,3 +1,5 @@
+import { highlight } from './highlight';
+
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const unesc = (s: string) => s.replace(/&(amp|lt|gt|quot);/g, (_, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"' }[e as 'amp']));
 
@@ -63,11 +65,19 @@ function tables(text: string): string {
   return out.join('\n');
 }
 
+/** A fenced block: the first line after the fence names the language, which picks the highlighting. */
+function codeBlock(raw: string): string {
+  const m = /^([\w+#-]*)\n/.exec(raw);
+  const lang = m?.[1] || '', code = m ? raw.slice(m[0].length) : raw;
+  const html = highlight(code.replace(/\n$/, ''), lang);
+  return `<div class="codeblock">${lang ? `<span class="code-lang">${esc(lang)}</span>` : ''}<button type="button" class="copy-btn" title="Copy to clipboard">Copy</button><pre><code${html ? ' class="hljs"' : ''}>${html ?? esc(code)}</code></pre></div>`;
+}
+
 /** Minimal markdown for chat replies: fenced code, inline code, links, bold, bullets, tables, paragraphs. Everything is escaped first. */
 export function md(src: string, isFile?: (path: string) => boolean): string {
   const parts = src.split(/```/);
   return parts.map((p, i) => i % 2
-    ? `<div class="codeblock"><button type="button" class="copy-btn" title="Copy to clipboard">Copy</button><pre><code>${esc(p.replace(/^\w*\n/, ''))}</code></pre></div>`
+    ? codeBlock(p)
     : tables(linkify(esc(p), isFile)
       .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>'))
       .replace(/^(#{1,4}) (.*)$/gm, (_, h: string, t: string) => `<h${h.length}>${t}</h${h.length}>`)

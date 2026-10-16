@@ -7,6 +7,7 @@ import { Main } from './components/Main';
 import { StatusStrip } from './components/StatusStrip';
 import { CommandPalette } from './components/CommandPalette';
 import { Toast } from './components/ui';
+import { Notifier } from './components/Notifier';
 
 export function App() {
   const collapsed = useStore(s => s.sidebarCollapsed);
@@ -32,6 +33,7 @@ export function App() {
       <StatusStrip />
       <CommandPalette />
       <Toast />
+      <Notifier />
     </div>
   );
 }

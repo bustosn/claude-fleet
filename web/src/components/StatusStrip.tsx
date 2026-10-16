@@ -31,7 +31,7 @@ export function StatusStrip() {
   const errors = Object.entries(snap?.errors || {});
 
   return (
-    <footer className="relative flex items-center gap-3 border-t border-line bg-surface px-3 text-[11px] text-fg-muted">
+    <footer className="statusbar relative">
       <span className="num"><b className="text-fg">{snap?.sessions.length ?? 0}</b> sessions</span>
       <span className="num"><b className="text-fg">{working}</b> working</span>
       {errors.length > 0 && <span className="truncate text-serious" title={errors.map(([k, v]) => `${k}: ${v}`).join('\n')}>{errors.length} collector error{errors.length > 1 ? 's' : ''}</span>}

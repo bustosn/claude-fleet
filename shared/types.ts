@@ -63,14 +63,23 @@ export interface ModelOption { value: string; displayName: string; description: 
 /** An MCP server as one chat's process sees it. `needs-auth` means a browser sign-in is due; that happens in a terminal, not through the SDK. */
 export interface McpServerView { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; scope: string | null; url: string | null; tools: number; error: string | null }
 
-export interface PermissionView { id: string; toolName: string; input: string; suggestions: number }
+/** One question Claude asks through its AskUserQuestion tool. The answer is an option label, several joined with ", ", or free text. */
+export interface AskQuestion { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }
+
+/** `questions` is set when the tool is AskUserQuestion: the card shows the choices instead of Allow/Deny. */
+/** What an Edit, MultiEdit or Write changes in one file. Each hunk is old text replaced by new text; a Write is one hunk with no old text. Long text is cut. */
+export interface EditPreview { path: string; write: boolean; hunks: { old: string; new: string }[] }
+export type TodoItem = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string };
+/** `plan` is set for ExitPlanMode (the card shows the plan and the way to approve it), `edit` for file edits (the card shows the diff). */
+export interface PermissionView { id: string; toolName: string; input: string; suggestions: number; questions?: AskQuestion[]; plan?: string; edit?: EditPreview }
+export type PermissionChoice = { behavior: 'allow' | 'deny'; message?: string; answers?: Record<string, string>; always?: boolean; mode?: string };
 
 /** Token counts. `input` is uncached prompt tokens; cacheRead and cacheWrite are the cached parts of the same prompt. */
 export interface TokenUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
 
 export interface ChatSummary {
   id: string; sessionId: string | null; resumeId: string | null; forked: boolean; cwd: string; model: string; title: string;
-  repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null; permissionMode: string; status: ChatStatus; startedAt: number;
+  repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null; permissionMode: string; effort: string | null; status: ChatStatus; startedAt: number;
   pending: PermissionView[]; error: string | null;
   asksIn: { id: string; from: string }[]; asksOut: { id: string; to: string }[];
   /** Set while a dialogue orchestrates this chat: its turns arrive from Fleet, not from the person typing. */
@@ -78,6 +87,11 @@ export interface ChatSummary {
   /** Session totals from the latest result (the SDK reports them cumulatively), plus the size of the prompt the model last saw. Null until the first turn ends. */
   tokens: { total: TokenUsage; context: number; contextWindow: number | null } | null;
 }
+
+/** The context window by category, as `/context` shows it. */
+export interface ContextUsage { total: number; max: number; percentage: number; model: string; categories: { name: string; tokens: number; kind: string; color: string }[]; memoryFiles: { path: string; tokens: number }[] }
+/** A user message the chat can restore files to, with what that would change. */
+export interface RewindPreview { canRewind: boolean; error?: string; files: string[]; insertions: number; deletions: number }
 
 export interface Role { model: string; effort: string; purpose: string }
 export interface DispatchDefaults { permissionMode: string; defaultModel: string; maxConcurrent: number }
@@ -119,8 +133,8 @@ export type DialogueEvent =
 export type ContentBlock =
   | { type: 'text'; text: string }
   /** `input` is the one field that matters (the command, the path, the pattern); `description` is the model's own note on a shell command. */
-  | { type: 'tool_use'; id: string; name: string; input: string; description?: string }
-  | { type: 'thinking' }
+  | { type: 'tool_use'; id: string; name: string; input: string; description?: string; edit?: EditPreview }
+  | { type: 'thinking'; text?: string }
   | { type: string };
 
 export type ChatEvent =
@@ -129,14 +143,20 @@ export type ChatEvent =
   /** The person switched models mid-chat; the next turn uses it. */
   | { t: 'model'; model: string; at: number }
   /** `attachments` names what came with the message: pasted or dropped images and files. */
-  | { t: 'user'; text: string; origin: MessageOrigin; attachments?: string[]; at: number }
+  | { t: 'user'; text: string; origin: MessageOrigin; attachments?: string[]; uuid?: string; at: number }
   | { t: 'delta'; text: string; at: number }
   | { t: 'tool_start'; name: string; at: number }
   | { t: 'thinking'; at: number }
+  /** The chat's task list as it stands now (from TodoWrite, or TaskCreate and TaskUpdate). */
+  | { t: 'todos'; todos: TodoItem[]; at: number }
+  /** The person (or an approved plan) changed the permission mode. */
+  | { t: 'mode'; mode: string; at: number }
+  /** A subagent or background task: one event per change, matched by `taskId`. */
+  | { t: 'task'; taskId: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description: string; kind: string; tools: number; tokens: number; lastTool?: string; summary?: string; at: number }
   | { t: 'assistant'; uuid: string; blocks: ContentBlock[]; at: number }
   | { t: 'tool_result'; toolUseId: string; isError: boolean; text: string; length: number; at: number }
-  | { t: 'permission'; id: string; toolName: string; input: string; suggestions: number; at: number }
-  | { t: 'permission_resolved'; id: string; behavior: 'allow' | 'deny'; at: number }
+  | ({ t: 'permission'; at: number } & PermissionView)
+  | { t: 'permission_resolved'; id: string; behavior: 'allow' | 'deny'; answers?: Record<string, string>; always?: boolean; at: number }
   /** Live during a turn: what this turn has used so far, and how big the prompt was at the latest model step. */
   | { t: 'usage'; turn: TokenUsage; context: number; at: number }
   | { t: 'result'; subtype: string; cost: number | null; duration: number | null; turns: number | null; errors: string[] | null;

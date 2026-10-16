@@ -12,7 +12,7 @@ import { AwsCreds } from './aws.js';
 import { TerminalManager, type Terminal } from './terminals.js';
 import { DialogueManager } from './dialogue.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
-import { openFile, openFolder, preview, rawImage, statRefs } from './files.js';
+import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
 import { run, errText } from './util.js';
 
 // Fleet tools are deliberately auto-approved via allowedTools; the SDK warns about that on every chat start.
@@ -241,10 +241,23 @@ app.post('/api/chats/:id/send', (req, res) => {
     : fromTitle ? { kind: 'manual' as const, fromChatId: '', fromTitle } : undefined;
   try { c.send(text, origin, attachments); res.json({ ok: true }); } catch (err: any) { res.status(409).json({ error: err.message }); }
 });
+const answersOf = (a: unknown): Record<string, string> | undefined => a && typeof a === 'object' && !Array.isArray(a)
+  ? Object.fromEntries(Object.entries(a).filter(([, v]) => typeof v === 'string')) as Record<string, string> : undefined;
 app.post('/api/chats/:id/permission', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
-  res.json({ ok: c.resolvePermission(String(req.body?.id || ''), req.body?.behavior === 'allow' ? 'allow' : 'deny', req.body?.message) });
+  const b = req.body || {};
+  res.json({ ok: c.resolvePermission(String(b.id || ''), { behavior: b.behavior === 'allow' ? 'allow' : 'deny', message: b.message ? String(b.message) : undefined, answers: answersOf(b.answers), always: !!b.always, mode: b.mode ? String(b.mode) : undefined }) });
 });
+const guarded = (fn: (c: import('./chat.js').Chat, req: Request) => Promise<unknown>) => async (req: Request, res: Response) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  try { res.json(await fn(c, req)); } catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
+};
+app.post('/api/chats/:id/mode', guarded(async (c, req) => { await c.setPermissionMode(String(req.body?.mode || '')); return c.summary(); }));
+app.post('/api/chats/:id/effort', guarded(async (c, req) => { await c.setEffort(req.body?.effort ? String(req.body.effort) : null); return c.summary(); }));
+app.get('/api/chats/:id/context', guarded(c => c.contextUsage()));
+app.post('/api/chats/:id/rewind', guarded((c, req) => c.rewind(String(req.body?.uuid || ''), req.body?.dryRun !== false)));
+app.post('/api/chats/:id/tasks/:taskId/stop', guarded(async (c, req) => { await c.stopTask(req.params.taskId); return { ok: true }; }));
+app.get('/api/chats/:id/files/suggest', guarded(async (c, req) => suggestFiles(c.cwd, String(req.query.q || ''))));
 // `!` commands: run in the chat's own shell. Output streams on the chat's event feed; the model only sees it when sent.
 app.post('/api/chats/:id/shell', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
