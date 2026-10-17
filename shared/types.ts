@@ -119,10 +119,21 @@ export interface TaskSummary {
   base: string | null; baseSha: string | null;
   /** Commits and changed lines against the base, refreshed at each report: "2 commits · 3 files, +40 −5". */
   diff: string | null;
+  /** The Jira ticket the task came from, linked by hand or picked up by the watcher. */
+  ticket: string | null; ticketUrl: string | null;
   createdAt: number; startedAt: number | null; updatedAt: number; finishedAt: number | null; error: string | null;
 }
 
+/** Jira as the board sees it. `jql` is set when the watcher is on; `unmapped` lists tickets it found but has no repo for. */
+export interface JiraStatus {
+  enabled: boolean; baseUrl: string; jql: string | null; everyMinutes: number;
+  lastPoll: number | null; error: string | null; unmapped: string[];
+}
+/** A ticket as the New task form previews it. `cwd` is the folder Fleet would pick for it, if it knows one. */
+export interface JiraIssuePreview { key: string; summary: string; url: string; status: string; type: string; cwd: string | null }
+
 export interface Snapshot {
+  jira: JiraStatus | null;
   generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[]; dialogues: DialogueSummary[]; tasks: TaskSummary[];
   errors: Record<string, string>; roles: Record<string, Role>; dispatch: DispatchDefaults;
 }

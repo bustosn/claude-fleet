@@ -7,7 +7,7 @@ import type { FleetConfig } from './config.js';
 import { run, errText } from './util.js';
 import type { ChatEvent, TaskStatus, TaskSummary } from '../shared/types.js';
 
-export interface TaskSpec { title?: string; prompt: string; cwd: string; model?: string; permissionMode?: string; isolate?: boolean }
+export interface TaskSpec { title?: string; prompt: string; cwd: string; model?: string; permissionMode?: string; isolate?: boolean; ticket?: string | null; ticketUrl?: string | null }
 type Report = { status: 'review' | 'blocked'; summary: string };
 
 const git = (cwd: string, ...args: string[]) => run('git', ['-C', cwd, ...args], { timeout: 120000 }).then(s => s.trim());
@@ -42,6 +42,7 @@ export class TaskManager extends EventEmitter {
     const t: TaskSummary = { id: randomUUID().slice(0, 8), title, prompt, cwd: spec.cwd, model: spec.model || this.config.dispatch.defaultModel,
       permissionMode: spec.permissionMode || this.config.dispatch.permissionMode, status: 'queued', chatId: null, summary: null, rounds: 0,
       isolate: spec.isolate !== false, branch: null, worktree: null, base: null, baseSha: null, diff: null,
+      ticket: spec.ticket || null, ticketUrl: spec.ticketUrl || null,
       createdAt: now, startedAt: null, updatedAt: now, finishedAt: null, error: null };
     this.tasks.set(t.id, t);
     this.emit('change');
@@ -237,7 +238,7 @@ export class TaskManager extends EventEmitter {
     for (const s of saved) {
       if (!s || typeof s.id !== 'string' || typeof s.prompt !== 'string') continue;
       // Tasks saved before worktrees existed ran in place.
-      const t = { isolate: false, branch: null, worktree: null, base: null, baseSha: null, diff: null, ...(s as Partial<TaskSummary>) } as TaskSummary;
+      const t = { isolate: false, branch: null, worktree: null, base: null, baseSha: null, diff: null, ticket: null, ticketUrl: null, ...(s as Partial<TaskSummary>) } as TaskSummary;
       this.tasks.set(t.id, t);
       if (!(['working', 'review', 'blocked'] as TaskStatus[]).includes(t.status)) continue;
       const chat = this.liveChat(t);

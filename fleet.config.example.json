@@ -56,5 +56,15 @@
   },
   "terminal": {
     "shell": null
+  },
+  "jira": {
+    "baseUrl": "",
+    "email": "",
+    "apiToken": "",
+    "repos": {
+      "PROJ": "C:/Users/you/Code/proj"
+    },
+    "jql": "",
+    "everyMinutes": 5
   }
 }

@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -63,7 +63,9 @@ export const api = {
   steerDialogue: (id: string, text: string) => post<DialogueSummary>(`/api/dialogues/${id}/steer`, { text }),
   extendDialogue: (id: string, rounds: number) => post<DialogueSummary>(`/api/dialogues/${id}/extend`, { rounds }),
   removeDialogue: (id: string) => j<{ ok: true }>(`/api/dialogues/${id}`, { method: 'DELETE' }),
-  addTask: (spec: { title?: string; prompt: string; cwd: string; model?: string; permissionMode?: string; isolate?: boolean }) => post<TaskSummary>('/api/tasks', spec),
+  addTask: (spec: { title?: string; prompt: string; cwd: string; model?: string; permissionMode?: string; isolate?: boolean; ticket?: string }) => post<TaskSummary>('/api/tasks', spec),
+  jiraIssue: (key: string) => j<JiraIssuePreview>(`/api/jira/issue/${encodeURIComponent(key)}`),
+  jiraPoll: () => post<JiraStatus>('/api/jira/poll'),
   taskAction: (id: string, action: 'approve' | 'retry' | 'start') => post<TaskSummary>(`/api/tasks/${id}/${action}`),
   sendBackTask: (id: string, text: string) => post<TaskSummary>(`/api/tasks/${id}/send-back`, { text }),
   removeTask: (id: string) => j<{ ok: true }>(`/api/tasks/${id}`, { method: 'DELETE' }),

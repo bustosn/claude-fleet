@@ -32,6 +32,7 @@ export function OverviewView() {
       <div className="flex items-center gap-3">
         <h2 className="text-[14px] font-semibold">Board</h2>
         <span className="num text-[11px] text-fg-muted">{working} of {snap.dispatch.maxConcurrent} slots working</span>
+        {snap.jira?.jql && <JiraLine />}
         <button className="btn primary sm ml-auto" onClick={() => actions.go({ kind: 'new-task' })}><ListPlus size={13} aria-hidden="true" /> New task</button>
       </div>
       <div className="grid grid-cols-4 gap-3 max-[1100px]:grid-cols-2">
@@ -113,11 +114,29 @@ function TaskCard({ t }: { t: TaskSummary }) {
         </>}
         {(t.status === 'failed' || t.status === 'blocked') && !replying && <Action onClick={() => run(() => api.taskAction(t.id, 'retry'))}>Retry</Action>}
         {t.worktree && !replying && t.status !== 'queued' && <Action onClick={() => run(() => api.openWorktree(t.worktree!, 'editor'))}>VS Code</Action>}
+        {t.ticketUrl && !replying && <a className="btn sm ghost mono" style={{ height: 22, padding: '0 8px' }} href={t.ticketUrl} target="_blank" rel="noreferrer" title="Open the ticket in Jira">{t.ticket} ↗</a>}
         {t.status === 'done' && t.summary && <Action onClick={() => setOpen(o => !o)}>{open ? 'Hide summary' : 'Summary'}</Action>}
         {(t.status === 'queued' || t.status === 'failed' || t.status === 'done') && <Action onClick={remove}>Remove</Action>}
         <span className="num ml-auto text-[10px] text-fg-faint">{t.rounds > 0 && `round ${t.rounds + 1} · `}{age(when)}</span>
       </div>
     </div>
+  );
+}
+
+/** The Jira watcher in one line: when it last looked, what went wrong, and tickets it found but has no folder for. */
+function JiraLine() {
+  const j = useStore(s => s.snapshot?.jira);
+  const [busy, setBusy] = useState(false);
+  if (!j?.jql) return null;
+  const check = async () => { setBusy(true); await run(() => api.jiraPoll()); setBusy(false); };
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-fg-muted" title={`Every ${j.everyMinutes} min: ${j.jql}`}>
+      <span className="dot" data-s={j.error ? 'failed' : 'idle'} aria-hidden="true" />
+      <span className="truncate">Jira{j.lastPoll ? `: checked ${age(j.lastPoll)} ago` : ': first check soon'}</span>
+      {j.error && <span className="truncate text-crit" title={j.error}>{j.error}</span>}
+      {j.unmapped.length > 0 && <span className="truncate text-warn" title={`${j.unmapped.join('\n')}\n\nMap their project under jira.repos in fleet.config.json, or add a label naming the repo.`}>{j.unmapped.length} ticket{j.unmapped.length === 1 ? '' : 's'} without a folder</span>}
+      <button className="text-fg-faint hover:text-fg disabled:opacity-50" disabled={busy} onClick={check}>{busy ? 'checking…' : 'check now'}</button>
+    </span>
   );
 }
 
