@@ -67,6 +67,7 @@ A restart ends the daily instance's live chat processes; they reopen from their 
 | Saved conversations | the Agent SDK's `listSessions`, `getSessionMessages`, `renameSession` |
 | Chats | the Agent SDK's `query()` in streaming-input mode, one subprocess per chat |
 | Agent-to-agent | an in-process MCP server (`fleet_list_chats`, `fleet_send`, `fleet_ask`, `fleet_reply`, `fleet_read`) mounted into every chat |
+| Board | tasks you queue (New task). Fleet starts a chat on each while `dispatch.maxConcurrent` slots are free; the chat calls `fleet_report` (or just ends its turn) and the card moves to Needs you with its summary. Approve ends the chat and moves the card to Done; Send back sends your feedback as its next message. By default each task gets its own `fleet/<ticket-or-title>` branch and a worktree under `<repo>/.claude/worktrees/`, so tasks in one repo don't collide; Approve removes the worktree (unless it has uncommitted changes) and keeps the branch. Other chats sit in a collapsed strip below |
 | Dialogues | two chats talk a topic through: the server relays each message, counts rounds, and you steer, pause, extend, or stop. Transcript as markdown |
 | AWS credentials | `~/bin/awsreset` for the silent path; `aws sso login --use-device-code` with the approval page opened in your browser as the fallback |
 | Terminals | `node-pty` shells in the server, `xterm.js` in a tab, a WebSocket between them. Closing the tab keeps the shell; Kill ends it. A `claude` started in one shows up as a session like any other |

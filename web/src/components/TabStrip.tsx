@@ -1,5 +1,5 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
-import { Bot, FolderGit2, GitBranch, KeyRound, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
+import { Bot, FolderGit2, GitBranch, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
 import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
@@ -55,6 +55,7 @@ function iconFor(v: View, state?: string) {
   if (v.kind === 'terminal') return Terminal;
   if (v.kind === 'dialogue' || v.kind === 'new-dialogue') return Users;
   if (v.kind === 'overview') return FolderGit2;
+  if (v.kind === 'new-task') return ListPlus;
   return MessageSquare;
 }
 
@@ -81,6 +82,7 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
       return { text: shortPath(v.path).split('/').pop() || v.path, hint: v.path };
     }
     case 'new-dialogue': return { text: 'New dialogue', hint: 'Two chats talk a topic through' };
+    case 'new-task': return { text: 'New task', hint: 'Queue work for the board' };
     case 'dialogue': {
       const d = snap?.dialogues.find(x => x.id === v.id);
       if (!d) return { text: 'Dialogue', hint: 'Dialogue (no longer known)', state: 'ended' };

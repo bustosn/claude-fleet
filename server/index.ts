@@ -11,6 +11,7 @@ import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
 import { TerminalManager, type Terminal } from './terminals.js';
 import { DialogueManager } from './dialogue.js';
+import { TaskManager } from './tasks.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
 import { run, errText } from './util.js';
@@ -34,6 +35,9 @@ terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
 collector.dialogues = dialogues;
 dialogues.on('change', () => collector.publish());
+const tasks = new TaskManager(chats, config);
+collector.tasks = tasks;
+tasks.on('change', () => collector.publish());
 // Participant chats start here by default: no project CLAUDE.md, so the two sides argue the topic, not a repo.
 const scratchDir = path.join(stateDir, 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
@@ -306,6 +310,25 @@ for (const action of ['pause', 'resume', 'stop', 'steer', 'extend'] as const) {
 }
 app.delete('/api/dialogues/:id', (req, res) => dialogues.remove(req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'no such dialogue' }));
 
+// Board tasks: queued work that Fleet hands to a chat when a slot frees up. The chat reports back; the person approves or sends it back.
+app.post('/api/tasks', (req, res) => {
+  const b = req.body || {};
+  const dir = String(b.cwd || config.reposRoot);
+  if (!fs.existsSync(dir)) return res.status(400).json({ error: `cwd not found: ${dir}` });
+  try { res.json(tasks.add({ title: b.title, prompt: b.prompt, cwd: dir, model: b.model, permissionMode: b.permissionMode, isolate: b.isolate !== false })); }
+  catch (err) { res.status(400).json({ error: errText(err) }); }
+});
+app.post('/api/tasks/clear-done', (_req, res) => { tasks.clearDone(); res.json({ ok: true }); });
+for (const action of ['approve', 'send-back', 'retry', 'start'] as const) {
+  app.post(`/api/tasks/:id/${action}`, (req, res) => {
+    try {
+      const id = req.params.id;
+      res.json(action === 'approve' ? tasks.approve(id) : action === 'send-back' ? tasks.sendBack(id, String(req.body?.text || '')) : action === 'retry' ? tasks.retry(id) : tasks.startNow(id));
+    } catch (err) { res.status(400).json({ error: errText(err) }); }
+  });
+}
+app.delete('/api/tasks/:id', (req, res) => { try { tasks.remove(req.params.id); res.json({ ok: true }); } catch (err) { res.status(404).json({ error: errText(err) }); } });
+
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.
 app.get('/api/terminals', (_req, res) => res.json(terminals.list()));
 app.post('/api/terminals', (req, res) => {
@@ -350,6 +373,7 @@ if (fs.existsSync(webDist)) {
 collector.start();
 chats.persistTo(path.join(stateDir, `chats-${config.port}.json`));
 dialogues.persistTo(path.join(stateDir, `dialogues-${config.port}.json`));
+tasks.persistTo(path.join(stateDir, `tasks-${config.port}.json`));
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
@@ -364,5 +388,7 @@ server.listen(config.port, '127.0.0.1', () => {
   if (reopened) console.log(`reopened ${reopened} chat(s) from the previous run`);
   const kept = dialogues.reopen();
   if (kept) console.log(`restored ${kept} dialogue(s); live ones are paused until resumed`);
+  const board = tasks.reopen();
+  if (board) console.log(`restored ${board} task(s)`);
 });
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); process.exit(0); });

@@ -185,6 +185,11 @@ dialog label { display: grid; gap: 4px; margin-bottom: 10px; font-size: 12px; co
 .msg.assistant::before { content: ''; position: absolute; left: 3px; top: 13px; width: 9px; height: 9px; border-radius: 50%; background: var(--grad); box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
 .msg.assistant p, .assistant-md p { margin: 0 0 10px; } .msg.assistant p:last-child, .assistant-md p:last-child { margin: 0; }
 .msg.assistant ul, .assistant-md ul { margin: 6px 0; padding-left: 20px; list-style: disc; }
+/* Board card summaries: the worker's report, small and clamped until clicked. */
+.task-summary { font-size: 12px; line-height: 1.5; color: var(--fg-muted); cursor: pointer; overflow-wrap: anywhere; }
+.task-summary.clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.task-summary p { margin: 0 0 6px; } .task-summary p:last-child { margin: 0; } .task-summary ul { padding-left: 16px; list-style: disc; margin: 2px 0; }
+.task-summary pre { font-size: 11px; white-space: pre-wrap; } .task-summary h1, .task-summary h2, .task-summary h3, .task-summary h4 { font-size: 12px; font-weight: 650; margin: 4px 0 2px; color: var(--fg); }
 .msg.assistant li, .assistant-md li { margin: 2px 0; }
 .msg.assistant h1, .msg.assistant h2, .msg.assistant h3, .msg.assistant h4, .assistant-md h1, .assistant-md h2, .assistant-md h3, .assistant-md h4 { margin: 14px 0 6px; font-family: var(--font-display); font-weight: 650; line-height: 1.3; letter-spacing: -0.01em; }
 .msg.assistant h1, .assistant-md h1 { font-size: 18px; } .msg.assistant h2, .assistant-md h2 { font-size: 16px; } .msg.assistant h3, .msg.assistant h4, .assistant-md h3, .assistant-md h4 { font-size: 14px; }

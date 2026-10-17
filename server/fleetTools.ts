@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatManager, Chat } from './chat.js';
 
-export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read'].map(n => `mcp__fleet__${n}`);
+export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report'].map(n => `mcp__fleet__${n}`);
 
 const text = (s: unknown) => ({ content: [{ type: 'text' as const, text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const fail = (s: string) => ({ content: [{ type: 'text' as const, text: s }], isError: true });
@@ -59,6 +59,15 @@ export function createFleetServer(mgr: ChatManager, self: Chat) {
             : e.t === 'assistant' ? `ASSISTANT: ${e.blocks.map(b => b.type === 'text' ? (b as any).text : b.type === 'tool_use' ? `[${(b as any).name}: ${(b as any).input}]` : '').join('\n')}` : '');
         return text(rows.join('\n\n') || '(no messages yet)');
       }),
+
+      // Only task workers get this: it is how a card moves to Needs you with something worth reading on it.
+      ...(self.taskId ? [tool('fleet_report', 'Report on the board task you are working on. Call it once at the end of your work with status "review" and a summary for the person, or with status "blocked" when you cannot go on without them, putting the question in the summary. Then end your turn.', {
+        status: z.enum(['review', 'blocked']).describe('review: the work is ready for the person to check. blocked: you need a decision, access, or information from them.'),
+        summary: z.string().describe('For review: what you changed, how you verified it, and anything left open. For blocked: exactly what you need. Markdown, a few short paragraphs at most.'),
+      }, async ({ status, summary }) => {
+        mgr.emit('task-report', self, { status, summary });
+        return text(status === 'review' ? 'Reported. The task is in the person\'s review queue; end your turn now.' : 'Reported. The person will answer in this chat; end your turn now.');
+      })] : []),
     ],
   });
 }

@@ -28,7 +28,7 @@ type ChatEventInput = ChatEvent extends infer E ? (E extends ChatEvent ? Omit<E,
 
 interface AskRecord { id: string; fromChatId: string; toChatId: string; unambiguous: boolean; resolve: (v: string) => void; reject: (e: Error) => void }
 interface Pending { resolve: (r: any) => void; input: Record<string, unknown>; view: PermissionView; suggestions: unknown[] }
-interface OpenOptions { sessionId?: string | null; cwd: string; model?: string; fork?: boolean; permissionMode?: string; id?: string }
+interface OpenOptions { sessionId?: string | null; cwd: string; model?: string; fork?: boolean; permissionMode?: string; id?: string; taskId?: string | null }
 type Located = { repo: string; branch: string | null; path: string; by: import('../shared/types.js').LocatedBy } | null;
 
 export class ChatManager extends EventEmitter {
@@ -47,10 +47,11 @@ export class ChatManager extends EventEmitter {
   get(id: string) { return this.chats.get(id); }
   bySession(sessionId: string) { return [...this.chats.values()].find(c => c.sessionId === sessionId && c.status !== 'ended'); }
 
-  open({ sessionId, cwd, model, fork, permissionMode, id }: OpenOptions): Chat {
+  open({ sessionId, cwd, model, fork, permissionMode, id, taskId }: OpenOptions): Chat {
     const existing = sessionId ? this.bySession(sessionId) : undefined;
     if (existing) return existing;
     const chat = new Chat(this, { sessionId: sessionId || null, cwd, model: model || this.config.dispatch.defaultModel, fork: !!fork, permissionMode: permissionMode || this.config.dispatch.permissionMode, id });
+    chat.taskId = taskId || null;
     this.chats.set(chat.id, chat);
     chat.start();
     return chat;
@@ -60,14 +61,14 @@ export class ChatManager extends EventEmitter {
   persistTo(file: string) { this.persistFile = file; this.on('change', () => this.save()); }
   save() {
     if (!this.persistFile) return;
-    const live = [...this.chats.values()].filter(c => c.status !== 'ended' && c.sessionId).map(c => ({ id: c.id, sessionId: c.sessionId, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode }));
+    const live = [...this.chats.values()].filter(c => c.status !== 'ended' && c.sessionId).map(c => ({ id: c.id, sessionId: c.sessionId, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode, taskId: c.taskId }));
     try { writeFileSync(this.persistFile, JSON.stringify(live, null, 1)); } catch {}
   }
   reopen(): number {
     if (!this.persistFile || !existsSync(this.persistFile)) return 0;
     let saved: any[] = [];
     try { saved = JSON.parse(readFileSync(this.persistFile, 'utf8')); } catch { return 0; }
-    for (const s of saved) if (s.sessionId && s.cwd && existsSync(s.cwd)) this.open({ id: typeof s.id === 'string' && /^[0-9a-f]{8}$/.test(s.id) ? s.id : undefined, sessionId: s.sessionId, cwd: s.cwd, model: s.model, permissionMode: s.permissionMode, fork: false });
+    for (const s of saved) if (s.sessionId && s.cwd && existsSync(s.cwd)) this.open({ id: typeof s.id === 'string' && /^[0-9a-f]{8}$/.test(s.id) ? s.id : undefined, sessionId: s.sessionId, cwd: s.cwd, model: s.model, permissionMode: s.permissionMode, taskId: typeof s.taskId === 'string' ? s.taskId : null, fork: false });
     return saved.length;
   }
 
@@ -115,6 +116,8 @@ export class Chat extends EventEmitter {
   firstText = ''; asksIn: AskRecord[] = []; asksOut: AskRecord[] = []; turnText = '';
   /** A dialogue names its participants ("Critic · topic") and owns their turns; both show in the summary. */
   label: string | null = null; dialogueId: string | null = null;
+  /** The board task this chat works on. Set before start(), so the chat gets the fleet_report tool. */
+  taskId: string | null = null;
   // Token accounting. `turn` accumulates over the model steps of the current turn; `stepOutput` is what the current step has reported so far
   // (message_delta carries a cumulative count). `context` is the prompt size at the latest step. `total` comes from the SDK, cumulative per session.
   turn: TokenUsage = zeroUsage(); private stepOutput = 0; context = 0; total: TokenUsage | null = null; contextWindow: number | null = null;
@@ -141,7 +144,7 @@ export class Chat extends EventEmitter {
     return { id: this.id, sessionId: this.sessionId, resumeId: this.resumeId, forked: this.fork, cwd: this.cwd, model: this.model, title: this.title,
       repo: wt?.repo || null, branch: wt?.branch || null, worktree: wt?.path || null, locatedBy: wt?.by || null,
       permissionMode: this.permissionMode, effort: this.effort, status: this.status, startedAt: this.startedAt, pending: [...this.pending.values()].map(p => p.view), error: this.error,
-      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })), dialogueId: this.dialogueId,
+      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })), dialogueId: this.dialogueId, taskId: this.taskId,
       tokens: this.total ? { total: this.total, context: this.context, contextWindow: this.contextWindow } : null };
   }
 
@@ -453,7 +456,7 @@ export class Chat extends EventEmitter {
             this.contextWindow = Math.max(0, ...models.map(m => m.contextWindow || 0)) || null;
           }
           if (usage) this.turn = usage;
-          this.emitEvent({ t: 'result', subtype: msg.subtype, cost: msg.total_cost_usd ?? null, duration: msg.duration_ms ?? null, turns: msg.num_turns ?? null, errors: msg.errors || null,
+          this.emitEvent({ t: 'result', subtype: msg.subtype, isError: !!msg.is_error, cost: msg.total_cost_usd ?? null, duration: msg.duration_ms ?? null, turns: msg.num_turns ?? null, errors: msg.errors || null,
             usage, total: this.total, context: this.context, contextWindow: this.contextWindow });
           // Fallback for asks the target answered in prose instead of via fleet_reply: only when the turn clearly belonged to that ask.
           for (const a of [...this.asksIn]) if (a.unambiguous && this.turnText.trim()) a.resolve(this.turnText.trim());

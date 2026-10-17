@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { actions, getState, useStore } from '../lib/store';
-import type { ChatStatus } from '../lib/api';
+import type { ChatStatus, TaskStatus } from '../lib/api';
 
 const BASE_TITLE = 'Fleet';
 
@@ -8,7 +8,9 @@ const BASE_TITLE = 'Fleet';
  *  (once the browser allows it) when this window is hidden or the chat is not the one on screen. Renders nothing. */
 export function Notifier() {
   const chats = useStore(s => s.snapshot?.chats);
+  const tasks = useStore(s => s.snapshot?.tasks);
   const seen = useRef(new Map<string, ChatStatus>());
+  const tasksSeen = useRef<Map<string, TaskStatus> | null>(null);
 
   // Browsers only grant notifications after a gesture, so ask on the first click anywhere.
   useEffect(() => {
@@ -18,13 +20,33 @@ export function Notifier() {
     return () => window.removeEventListener('pointerdown', ask);
   }, []);
 
+  // Board tasks: one notification when a card lands in Needs you. Their chats are left to this, not the per-chat one below.
+  useEffect(() => {
+    if (!tasks) return;
+    const first = !tasksSeen.current;
+    const before = tasksSeen.current || new Map<string, TaskStatus>();
+    tasksSeen.current = new Map(tasks.map(t => [t.id, t.status]));
+    if (first || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    for (const t of tasks) {
+      const was = before.get(t.id);
+      if (was === t.status || !(t.status === 'review' || t.status === 'blocked' || t.status === 'failed')) continue;
+      const n = new Notification(t.status === 'review' ? `Ready for review: ${t.title}` : t.status === 'blocked' ? `Blocked: ${t.title}` : `Failed: ${t.title}`, {
+        body: (t.status === 'failed' ? t.error : t.summary)?.replace(/[#*`_>]/g, '').slice(0, 180) || '', tag: `fleet-task-${t.id}`,
+      });
+      n.onclick = () => { window.focus(); actions.go({ kind: 'overview' }); n.close(); };
+    }
+  }, [tasks]);
+
   useEffect(() => {
     if (!chats) return;
-    const waiting = chats.filter(c => c.status === 'needs-you').length;
+    const taskChats = new Set((tasks || []).map(t => t.chatId));
+    const waiting = chats.filter(c => c.status === 'needs-you' && !taskChats.has(c.id)).length
+      + (tasks || []).filter(t => t.status === 'review' || t.status === 'blocked' || t.status === 'failed').length;
     document.title = waiting ? `(${waiting}) ${BASE_TITLE}` : BASE_TITLE;
 
     const first = seen.current.size === 0;
     for (const c of chats) {
+      if (c.taskId) { seen.current.set(c.id, c.status); continue; }
       const before = seen.current.get(c.id);
       seen.current.set(c.id, c.status);
       if (first || before === c.status || typeof Notification === 'undefined' || Notification.permission !== 'granted') continue;
@@ -41,7 +63,7 @@ export function Notifier() {
       });
       n.onclick = () => { window.focus(); actions.go({ kind: 'chat', chatId: c.id }); n.close(); };
     }
-  }, [chats]);
+  }, [chats, tasks]);
 
   return null;
 }

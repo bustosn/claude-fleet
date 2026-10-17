@@ -84,6 +84,8 @@ export interface ChatSummary {
   asksIn: { id: string; from: string }[]; asksOut: { id: string; to: string }[];
   /** Set while a dialogue orchestrates this chat: its turns arrive from Fleet, not from the person typing. */
   dialogueId: string | null;
+  /** Set when the chat is the worker on a board task. */
+  taskId: string | null;
   /** Session totals from the latest result (the SDK reports them cumulatively), plus the size of the prompt the model last saw. Null until the first turn ends. */
   tokens: { total: TokenUsage; context: number; contextWindow: number | null } | null;
 }
@@ -99,8 +101,29 @@ export interface DispatchDefaults { permissionMode: string; defaultModel: string
 /** A shell running inside Fleet. The browser attaches over a WebSocket; it keeps running when its tab closes. */
 export interface TerminalSummary { id: string; cwd: string; shell: string; title: string; startedAt: number; exitCode: number | null }
 
+/** A unit of work on the board. A chat is its worker: Fleet starts one when a slot is free, and the chat reports back with fleet_report.
+ *  queued → working → review | blocked → (approve) done, or (send back) working again. `failed` means the worker is gone. */
+export type TaskStatus = 'queued' | 'working' | 'review' | 'blocked' | 'done' | 'failed';
+export interface TaskSummary {
+  id: string; title: string; prompt: string; cwd: string; model: string; permissionMode: string;
+  status: TaskStatus; chatId: string | null;
+  /** The worker's latest word: its fleet_report summary, its last message when it stopped without one, or what it is waiting on. */
+  summary: string | null;
+  /** How many times the person sent it back. */
+  rounds: number;
+  /** Work on its own branch in a new worktree (`cwd` is then only where the branch starts from). */
+  isolate: boolean;
+  /** Set once the worktree exists. `worktree` goes back to null when Approve removes it; the branch stays for merging. */
+  branch: string | null; worktree: string | null;
+  /** What the branch started from: a branch name, or a short sha when that checkout was detached. `baseSha` is the exact commit. */
+  base: string | null; baseSha: string | null;
+  /** Commits and changed lines against the base, refreshed at each report: "2 commits · 3 files, +40 −5". */
+  diff: string | null;
+  createdAt: number; startedAt: number | null; updatedAt: number; finishedAt: number | null; error: string | null;
+}
+
 export interface Snapshot {
-  generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[]; dialogues: DialogueSummary[];
+  generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[]; dialogues: DialogueSummary[]; tasks: TaskSummary[];
   errors: Record<string, string>; roles: Record<string, Role>; dispatch: DispatchDefaults;
 }
 
@@ -159,7 +182,7 @@ export type ChatEvent =
   | { t: 'permission_resolved'; id: string; behavior: 'allow' | 'deny'; answers?: Record<string, string>; always?: boolean; at: number }
   /** Live during a turn: what this turn has used so far, and how big the prompt was at the latest model step. */
   | { t: 'usage'; turn: TokenUsage; context: number; at: number }
-  | { t: 'result'; subtype: string; cost: number | null; duration: number | null; turns: number | null; errors: string[] | null;
+  | { t: 'result'; subtype: string; isError: boolean; cost: number | null; duration: number | null; turns: number | null; errors: string[] | null;
       usage: TokenUsage | null; total: TokenUsage | null; context: number; contextWindow: number | null; at: number }
   | { t: 'error'; message: string; at: number }
   /** A `!` command the person ran in the chat's own shell. Output streams as snapshots; nothing reaches the model until sent. */
