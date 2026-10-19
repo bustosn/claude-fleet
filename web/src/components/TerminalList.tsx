@@ -4,8 +4,9 @@ import { shortPath } from '../lib/format';
 import { actions, tabKey, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu } from './ContextMenu';
+import { SectionHeader, useSectionOpen } from './SectionHeader';
 
-/** Sidebar section: every shell Fleet is running, including ones whose tab was closed. Hidden when there are none. */
+/** Sidebar section: every shell Fleet is running, including ones whose tab was closed. Collapsible. */
 export function TerminalList() {
   // The fallback stays outside the selector: useSyncExternalStore compares results by identity,
   // and a fresh [] on every call reads as a store change, which loops until React gives up.
@@ -14,11 +15,12 @@ export function TerminalList() {
   const active = view.kind === 'terminal' ? view.id : null;
   const [menu, openMenu] = useContextMenu();
   const kill = (id: string) => api.closeTerminal(id).then(() => actions.closeTab(tabKey({ kind: 'terminal', id }))).catch(e => actions.toast(e.message, 'error'));
-  if (!terms.length) return null;
+  const open = useSectionOpen('terminals');
   return (
     <section className="mb-3">
-      <div className="section-title">Terminals <span className="count num">{terms.length}</span></div>
-      {terms.map(t => (
+      <SectionHeader name="terminals" label="Terminals" count={terms.length} />
+      {open && !terms.length && <div className="px-2 pb-1 text-[11px] text-fg-faint">No shells open.</div>}
+      {open && terms.map(t => (
         <div key={t.id} className={`row tall group ${active === t.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
           onClick={() => actions.go({ kind: 'terminal', id: t.id })}
           onContextMenu={e => openMenu(e, [

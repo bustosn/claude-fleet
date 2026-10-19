@@ -6,6 +6,7 @@ import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu, type MenuItem } from './ContextMenu';
 import { exportConversation, forwardLastReply, openMove } from './SidebarDialogs';
+import { SectionHeader, useSectionOpen } from './SectionHeader';
 
 /** Saved conversations, pinned first then newest, that are not currently running anywhere. Running ones live under their worktree in the tree.
  *  Archived ones (by hand, or idle for two weeks) sit in a collapsed group at the bottom. Right-click a row for everything else. */
@@ -13,7 +14,7 @@ export function ConversationList() {
   const snap = useStore(s => s.snapshot);
   const filter = useStore(s => s.convoFilter);
   const view = useStore(s => s.view);
-  const open = useStore(s => s.convosOpen);
+  const open = useSectionOpen('convos');
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [menu, openMenu] = useContextMenu();
   if (!snap) return null;
@@ -66,13 +67,7 @@ ${c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}${c
 
   return (
     <div className="mb-3">
-      <div className="section-title">
-        <button className="flex items-center gap-1" onClick={actions.toggleConvos} aria-expanded={open}>
-          {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-          Recent conversations
-        </button>
-        <span className="count num">{saved.length}</span>
-      </div>
+      <SectionHeader name="convos" label="Recent conversations" count={saved.length} />
       {open && (
         <>
           <input className="input mb-1 w-full" type="search" placeholder="Filter by title, repo, or branch" value={filter} onChange={e => actions.setConvoFilter(e.target.value)} />

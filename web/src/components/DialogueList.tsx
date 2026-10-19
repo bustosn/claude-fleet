@@ -4,8 +4,9 @@ import { actions, tabKey, useStore } from '../lib/store';
 import { Status } from './ui';
 import { dialogueDot } from '../views/DialogueView';
 import { useContextMenu, type MenuItem } from './ContextMenu';
+import { SectionHeader, useSectionOpen } from './SectionHeader';
 
-/** Sidebar section: every dialogue Fleet knows about, live ones first. Finished ones can be removed here. Hidden when there are none. */
+/** Sidebar section: every dialogue Fleet knows about, live ones first. Finished ones can be removed here. Collapsible. */
 export function DialogueList() {
   // The fallback stays outside the selector: a fresh [] on every read looks like a store change and loops the render.
   const list = useStore(s => s.snapshot?.dialogues) || [];
@@ -13,11 +14,12 @@ export function DialogueList() {
   const active = view.kind === 'dialogue' ? view.id : null;
   const [menu, openMenu] = useContextMenu();
   const remove = (id: string) => api.removeDialogue(id).then(() => actions.closeTab(tabKey({ kind: 'dialogue', id }))).catch(e => actions.toast(e.message, 'error'));
-  if (!list.length) return null;
+  const open = useSectionOpen('dialogues');
   return (
     <section className="mb-3">
-      <div className="section-title">Dialogues <span className="count num">{list.length}</span></div>
-      {list.map(d => {
+      <SectionHeader name="dialogues" label="Dialogues" count={list.length} />
+      {open && !list.length && <div className="px-2 pb-1 text-[11px] text-fg-faint">No dialogues.</div>}
+      {open && list.map(d => {
         const live = d.status === 'running' || d.status === 'paused';
         return (
           <div key={d.id} className={`row tall group ${active === d.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
