@@ -19,7 +19,8 @@ export function ConversationList() {
   const [menu, openMenu] = useContextMenu();
   if (!snap) return null;
   const q = filter.toLowerCase();
-  const all = snap.conversations.filter(c => !c.running && !c.chat).filter(c => !q || `${c.title} ${c.repo || ''} ${c.branch || ''} ${c.cwd}`.toLowerCase().includes(q));
+  // Running ones live under their worktree in the tree; a running one with no repo (a one-off) is listed here instead.
+  const all = snap.conversations.filter(c => !(c.running || c.chat) || !c.worktree).filter(c => !q || `${c.title} ${c.repo || ''} ${c.branch || ''} ${c.cwd}`.toLowerCase().includes(q));
   const saved = all.filter(c => !c.archived).sort((a, b) => Number(b.pinned) - Number(a.pinned)), archived = all.filter(c => c.archived);
 
   const rename = async (sessionId: string, current: string) => {
@@ -35,7 +36,10 @@ export function ConversationList() {
     catch (err: any) { actions.toast(err.message, 'error'); }
   };
   const copy = (text: string, what: string) => navigator.clipboard.writeText(text).then(() => actions.toast(`Copied ${what}`), () => actions.toast('The browser blocked clipboard access', 'error'));
-  const resume = (c: Conversation) => actions.go({ kind: 'resume', sessionId: c.sessionId, cwd: c.cwd, title: c.title });
+  // A live one opens where it is running: its chat, or its session. The rest resume from the transcript.
+  const resume = (c: Conversation) => c.chat ? actions.go({ kind: 'chat', chatId: c.chat.id, title: c.title })
+    : c.running ? actions.go({ kind: 'session', id: c.running.id })
+    : actions.go({ kind: 'resume', sessionId: c.sessionId, cwd: c.cwd, title: c.title });
   const items = (c: Conversation): MenuItem[] => [
     { label: 'Open', icon: MessageSquare, onSelect: () => resume(c) },
     { label: 'Rename…', icon: Pencil, onSelect: () => rename(c.sessionId, c.title) },
@@ -52,11 +56,12 @@ export function ConversationList() {
   ];
 
   const row = (c: Conversation) => {
-    const selected = view.kind === 'resume' && view.sessionId === c.sessionId;
+    const selected = (view.kind === 'resume' && view.sessionId === c.sessionId) || (view.kind === 'chat' && view.chatId === c.chat?.id) || (view.kind === 'session' && view.id === c.running?.id);
+    const live = c.chat?.status || c.running?.state;
     return (
       <div key={c.sessionId} className="flex items-center" onContextMenu={e => openMenu(e, items(c))}>
-        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}
-${c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}${c.autoArchived ? '\n(archived after two weeks idle)' : ''}`} onClick={() => resume(c)}>
+        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}\n${c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}${c.autoArchived ? '\n(archived after two weeks idle)' : ''}`} onClick={() => resume(c)}>
+          {live && <span className="dot" data-s={live} aria-label={live} />}
           {c.pinned && <Pin size={11} className="shrink-0 text-fg-faint" aria-label="Pinned" />}
           <span className={`grow ${c.archived ? 'text-fg-muted' : ''}`}>{c.title}</span>
           <span className="num text-[10px] text-fg-faint">{age(c.lastModified)}</span>

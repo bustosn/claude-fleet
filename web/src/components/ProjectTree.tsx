@@ -15,8 +15,7 @@ export function ProjectTree() {
   if (!snap) return <div className="section-title">Projects <span className="count">loading</span></div>;
 
   const repos = [...snap.repos].sort((a, b) => (b.worktrees.length - a.worktrees.length) || a.name.localeCompare(b.name));
-  const inRepo = new Set(snap.sessions.filter(s => s.worktree).map(s => s.id));
-  const loose = snap.sessions.filter(s => !inRepo.has(s.id));
+  // Sessions with no repo are one-offs; they are listed under Recent conversations, not here.
   // A repo with one checkout and no sessions has nothing to show; those fold into a single "N more" row.
   const busy = (r: Repo) => r.worktrees.length > 1 || snap.sessions.some(s => s.worktree && r.worktrees.some(w => w.path.toLowerCase() === s.worktree!.toLowerCase()));
   const active = repos.filter(busy), idle = repos.filter(r => !busy(r));
@@ -26,12 +25,6 @@ export function ProjectTree() {
       <div className="section-title">Projects <span className="count num">{repos.length}</span></div>
       {active.map(r => <RepoNode key={r.name} repo={r} open={!!openRepos[r.name]} />)}
       {idle.length > 0 && <IdleRepos repos={idle} />}
-      {loose.length > 0 && (
-        <div className="mt-3">
-          <div className="section-title">Sessions outside a repo <span className="count num">{loose.length}</span></div>
-          <SessionList sessions={loose} indent={8} />
-        </div>
-      )}
     </div>
   );
 }
