@@ -28,7 +28,7 @@ type ChatEventInput = ChatEvent extends infer E ? (E extends ChatEvent ? Omit<E,
 
 interface AskRecord { id: string; fromChatId: string; toChatId: string; unambiguous: boolean; resolve: (v: string) => void; reject: (e: Error) => void }
 interface Pending { resolve: (r: any) => void; input: Record<string, unknown>; view: PermissionView; suggestions: unknown[] }
-interface OpenOptions { sessionId?: string | null; cwd: string; model?: string; fork?: boolean; permissionMode?: string; id?: string; taskId?: string | null }
+interface OpenOptions { sessionId?: string | null; cwd: string; model?: string; fork?: boolean; permissionMode?: string; id?: string; taskId?: string | null; lazy?: boolean }
 type Located = { repo: string; branch: string | null; path: string; by: import('../shared/types.js').LocatedBy } | null;
 
 export class ChatManager extends EventEmitter {
@@ -47,16 +47,17 @@ export class ChatManager extends EventEmitter {
   get(id: string) { return this.chats.get(id); }
   bySession(sessionId: string) { return [...this.chats.values()].find(c => c.sessionId === sessionId && c.status !== 'ended'); }
 
-  open({ sessionId, cwd, model, fork, permissionMode, id, taskId }: OpenOptions): Chat {
+  open({ sessionId, cwd, model, fork, permissionMode, id, taskId, lazy }: OpenOptions): Chat {
     const existing = sessionId ? this.bySession(sessionId) : undefined;
     if (existing) return existing;
     const chat = new Chat(this, { sessionId: sessionId || null, cwd, model: model || this.config.dispatch.defaultModel, fork: !!fork, permissionMode: permissionMode || this.config.dispatch.permissionMode, id });
     chat.taskId = taskId || null;
     this.chats.set(chat.id, chat);
-    chat.start();
+    if (lazy) chat.sleep(); else chat.start();
     return chat;
   }
 
+  // Reopened chats come back asleep (no Claude process) and wake on first use, so a restart does not boot every saved chat, and its MCP servers, at once.
   // Live chats are written to disk on every change so a server restart can reopen them (resumed, not forked).
   persistTo(file: string) { this.persistFile = file; this.on('change', () => this.save()); }
   save() {
@@ -68,7 +69,7 @@ export class ChatManager extends EventEmitter {
     if (!this.persistFile || !existsSync(this.persistFile)) return 0;
     let saved: any[] = [];
     try { saved = JSON.parse(readFileSync(this.persistFile, 'utf8')); } catch { return 0; }
-    for (const s of saved) if (s.sessionId && s.cwd && existsSync(s.cwd)) this.open({ id: typeof s.id === 'string' && /^[0-9a-f]{8}$/.test(s.id) ? s.id : undefined, sessionId: s.sessionId, cwd: s.cwd, model: s.model, permissionMode: s.permissionMode, taskId: typeof s.taskId === 'string' ? s.taskId : null, fork: false });
+    for (const s of saved) if (s.sessionId && s.cwd && existsSync(s.cwd)) this.open({ id: typeof s.id === 'string' && /^[0-9a-f]{8}$/.test(s.id) ? s.id : undefined, sessionId: s.sessionId, cwd: s.cwd, model: s.model, permissionMode: s.permissionMode, taskId: typeof s.taskId === 'string' ? s.taskId : null, fork: false, lazy: true });
     return saved.length;
   }
 
@@ -178,6 +179,7 @@ export class Chat extends EventEmitter {
   // origin: null for the person typing; peer/manual for fleet traffic; dialogue text arrives already framed by the orchestrator.
   send(text: string, origin?: MessageOrigin, attachments: Attachment[] = []) {
     if (this.status === 'ended') throw new Error('chat ended');
+    this.wake();
     if (!this.firstText && !origin) this.firstText = text;
     const { images, files } = this.placeAttachments(attachments);
     let body = text;
@@ -241,6 +243,7 @@ export class Chat extends EventEmitter {
 
   /** Asks the process for its command list. The call can fail or come back empty while the process is still settling. */
   private async fetchCommands(): Promise<boolean> {
+    this.wake();
     if (!this.q) return false;
     try {
       const c = await Promise.race([this.q.supportedCommands(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))]);
@@ -259,6 +262,7 @@ export class Chat extends EventEmitter {
   }
   /** Models the process offers, fetched once. The list depends on the account, so it comes from the process rather than a fixed table. */
   async modelList(): Promise<ModelOption[]> {
+    this.wake();
     if (!this.q) return [];
     if (!this.models.length) {
       try { this.models = await Promise.race([this.q.supportedModels(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))]); }
@@ -268,16 +272,18 @@ export class Chat extends EventEmitter {
   }
   /** MCP servers as this chat's process sees them. Fleet's own in-process server is left out; it is not something to manage. */
   async mcpList(): Promise<McpServerView[]> {
+    this.wake();
     if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
     const list = await Promise.race([this.q.mcpServerStatus(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timed out asking the chat for its MCP servers')), 8000))]);
     return list.filter(m => m.name !== 'fleet').map(m => ({
       name: m.name, status: m.status, scope: m.scope ?? null, url: (m.config as any)?.url ?? null, tools: m.tools?.length ?? 0, error: m.error ?? null,
     }));
   }
-  async mcpReconnect(name: string) { if (!this.q) throw new Error('chat is not running'); await this.q.reconnectMcpServer(name); }
-  async mcpToggle(name: string, enabled: boolean) { if (!this.q) throw new Error('chat is not running'); await this.q.toggleMcpServer(name, enabled); }
+  async mcpReconnect(name: string) { this.wake(); if (!this.q) throw new Error('chat is not running'); await this.q.reconnectMcpServer(name); }
+  async mcpToggle(name: string, enabled: boolean) { this.wake(); if (!this.q) throw new Error('chat is not running'); await this.q.toggleMcpServer(name, enabled); }
   /** Switches the live process; the turn in flight finishes on the old model and the next one uses the new. */
   async setModel(model: string) {
+    this.wake();
     if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
     await this.q.setModel(model);
     this.model = model;
@@ -285,6 +291,7 @@ export class Chat extends EventEmitter {
   }
   /** Shift+Tab in the terminal: the next tool call is judged under the new mode. */
   async setPermissionMode(mode: string) {
+    this.wake();
     if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
     if (!['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto'].includes(mode)) throw new Error(`unknown mode: ${mode}`);
     await this.q.setPermissionMode(mode as any);
@@ -292,6 +299,7 @@ export class Chat extends EventEmitter {
   }
   /** Thinking effort for the following turns. Null goes back to the model's default. */
   async setEffort(level: string | null) {
+    this.wake();
     if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
     if (level !== null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(level)) throw new Error(`unknown effort: ${level}`);
     await this.q.applyFlagSettings({ effortLevel: level as any });
@@ -299,6 +307,7 @@ export class Chat extends EventEmitter {
   }
   /** The window by category, as /context shows it. */
   async contextUsage(): Promise<ContextUsage> {
+    this.wake();
     if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
     const u = await Promise.race([this.q.getContextUsage({ detail: 'summary' }), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timed out asking for context usage')), 10000))]);
     return { total: u.totalTokens, max: u.maxTokens, percentage: u.percentage, model: u.model,
@@ -306,6 +315,7 @@ export class Chat extends EventEmitter {
   }
   /** Files back to how they were before a message of this chat. Conversation history is not rewound; only files on disk. */
   async rewind(uuid: string, dryRun: boolean): Promise<RewindPreview> {
+    this.wake();
     if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
     if (!this.userUuids.has(uuid)) throw new Error('that message was not sent in this chat run');
     const r = await this.q.rewindFiles(uuid, { dryRun });
@@ -320,6 +330,12 @@ export class Chat extends EventEmitter {
     for (const a of [...this.asksIn]) a.reject(new Error(`"${this.title}" ended before answering`));
     this.setStatus('ended');
   }
+
+  private asleep = false;
+  /** Restored after a restart without starting the Claude process. Shown as idle; `wake` starts it. */
+  sleep() { this.asleep = true; this.setStatus('idle'); }
+  /** Starts the process of a chat restored asleep. Called on anything that needs it: viewing, sending, model or MCP calls. */
+  wake() { if (!this.asleep || this.status === 'ended') return; this.asleep = false; this.start(); }
 
   start() {
     const opts: any = {

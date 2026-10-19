@@ -106,9 +106,24 @@ app.post('/api/sessions/:id/remove', async (req, res) => {
 });
 
 // Saved conversations
+// Parsed history is kept until the transcript file changes, so switching back to a chat tab does not re-read and re-parse it.
+const historyCache = new Map<string, { stamp: string; history: unknown }>();
+function transcriptStamp(sessionId: string): string | null {
+  const c = collector.conversations.find(x => x.sessionId === sessionId);
+  if (!c?.cwd) return null;
+  try { const st = fs.statSync(path.join(config.claudeHome, 'projects', c.cwd.replace(/[^A-Za-z0-9]/g, '-'), `${sessionId}.jsonl`)); return `${st.size}:${st.mtimeMs}`; }
+  catch { return null; }
+}
 app.get('/api/conversations/:sessionId/history', async (req, res) => {
-  if (!UUID.test(req.params.sessionId)) return res.status(400).json({ error: 'bad session id' });
-  try { res.json({ history: await conversationHistory(req.params.sessionId) }); }
+  const id = req.params.sessionId;
+  if (!UUID.test(id)) return res.status(400).json({ error: 'bad session id' });
+  try {
+    const stamp = transcriptStamp(id), hit = historyCache.get(id);
+    if (stamp && hit?.stamp === stamp) return res.json({ history: hit.history });
+    const history = await conversationHistory(id);
+    if (stamp) { historyCache.delete(id); historyCache.set(id, { stamp, history }); if (historyCache.size > 40) historyCache.delete(historyCache.keys().next().value!); }
+    res.json({ history });
+  }
   catch (err) { res.status(500).json({ error: errText(err) }); }
 });
 app.post('/api/conversations/:sessionId/rename', async (req, res) => {
@@ -234,6 +249,7 @@ app.post('/api/chats/:id/file/open', (req, res) => {
 app.get('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); c ? res.json(c.summary()) : res.status(404).json({ error: 'no such chat' }); });
 app.get('/api/chats/:id/events', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).end();
+  c.wake(); // someone is looking at it: start a chat that was restored asleep
   const s = sse(res);
   s.send(c.summary(), 'chat');
   for (const ev of c.events) s.send(ev);
