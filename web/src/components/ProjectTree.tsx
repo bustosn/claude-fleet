@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ChevronDown, ChevronRight, FolderGit2, GitBranch, MessageSquare, Terminal, Bot, SquareTerminal, X, Code2, FolderOpen, Copy, Plus, Send, Download, FolderInput } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Repo, Session, Worktree } from '../lib/api';
@@ -16,15 +17,19 @@ export function ProjectTree() {
   const repos = [...snap.repos].sort((a, b) => (b.worktrees.length - a.worktrees.length) || a.name.localeCompare(b.name));
   const inRepo = new Set(snap.sessions.filter(s => s.worktree).map(s => s.id));
   const loose = snap.sessions.filter(s => !inRepo.has(s.id));
+  // A repo with one checkout and no sessions has nothing to show; those fold into a single "N more" row.
+  const busy = (r: Repo) => r.worktrees.length > 1 || snap.sessions.some(s => s.worktree && r.worktrees.some(w => w.path.toLowerCase() === s.worktree!.toLowerCase()));
+  const active = repos.filter(busy), idle = repos.filter(r => !busy(r));
 
   return (
     <div className="mb-3">
       <div className="section-title">Projects <span className="count num">{repos.length}</span></div>
-      {repos.map(r => <RepoNode key={r.name} repo={r} open={!collapsed[r.name]} />)}
+      {active.map(r => <RepoNode key={r.name} repo={r} open={!collapsed[r.name]} />)}
+      {idle.length > 0 && <IdleRepos repos={idle} />}
       {loose.length > 0 && (
         <div className="mt-3">
           <div className="section-title">Sessions outside a repo <span className="count num">{loose.length}</span></div>
-          {loose.map(s => <SessionRow key={s.id} session={s} indent={6} />)}
+          <SessionList sessions={loose} indent={8} />
         </div>
       )}
     </div>
@@ -45,13 +50,13 @@ function RepoNode({ repo, open }: { repo: Repo; open: boolean }) {
       <div>
         {menu}
         <button className="row" aria-current={selected ? 'true' : undefined} onClick={() => actions.go({ kind: 'worktree', path: main.path })} onContextMenu={e => openMenu(e, worktreeItems(main))} title={`${main.path}\n${main.branch || ''}`}>
-          <span className="w-[14px]" />
+          <span className="w-[13px] shrink-0" />
           <FolderGit2 size={14} className="text-fg-muted" aria-hidden="true" />
           <span className="grow font-medium">{repo.name}</span>
           {attention > 0 && <span className="chip warn num">{attention}</span>}
           {main.branch && !/^(main|master)$/.test(main.branch) && <span className="mono truncate max-w-[40%] text-fg-faint">{main.branch}</span>}
         </button>
-        {sessions.map(s => <SessionRow key={s.id} session={s} indent={34} />)}
+        <SessionList sessions={sessions} indent={INDENT.wt} />
       </div>
     );
   }
@@ -59,14 +64,14 @@ function RepoNode({ repo, open }: { repo: Repo; open: boolean }) {
     <div>
       {menu}
       <button className="row" onClick={() => actions.toggleRepo(repo.name)} aria-expanded={open} onContextMenu={e => main && openMenu(e, worktreeItems(main))}>
-        {open ? <ChevronDown size={14} className="text-fg-faint" aria-hidden="true" /> : <ChevronRight size={14} className="text-fg-faint" aria-hidden="true" />}
+        {open ? <ChevronDown size={13} className="shrink-0 text-fg-faint" aria-hidden="true" /> : <ChevronRight size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />}
         <FolderGit2 size={14} className="text-fg-muted" aria-hidden="true" />
         <span className="grow font-medium">{repo.name}</span>
         {attention > 0 && <span className="chip warn num">{attention}</span>}
-        {!open && <span className="num text-[11px] text-fg-faint">{repo.worktrees.length} worktrees</span>}
+        {!open && <span className="num text-[11px] text-fg-faint">{repo.worktrees.length}</span>}
       </button>
       {open && repo.worktrees.map(w => <WorktreeNode key={w.path} repo={repo} wt={w} />)}
-      {open && repo.error && <div className="px-7 text-[11px] text-crit">{repo.error}</div>}
+      {open && repo.error && <div className="text-[11px] text-crit" style={{ paddingLeft: INDENT.wt }}>{repo.error}</div>}
     </div>
   );
 }
@@ -81,12 +86,58 @@ function WorktreeNode({ repo, wt }: { repo: Repo; wt: Worktree }) {
   return (
     <div>
       {menu}
-      <button className="row pl-6" aria-current={selected ? 'true' : undefined} onClick={() => actions.go({ kind: 'worktree', path: wt.path })} onContextMenu={e => openMenu(e, worktreeItems(wt))} title={`${wt.path}\n${wt.branch || ''}`}>
-        <GitBranch size={13} className={wt.isMain ? 'text-fg-faint' : 'text-accent'} aria-hidden="true" />
-        <span className="grow mono">{wt.branch || (wt.detached ? `detached ${wt.head}` : shortPath(wt.path))}</span>
-        {key && !wt.isMain && <span className="chip ticket">{key}</span>}      </button>
-      {sessions.map(s => <SessionRow key={s.id} session={s} indent={34} />)}
+      {/* Indents are inline: .row's own padding beats Tailwind's pl-* utilities. */}
+      <button className="row" style={{ paddingLeft: INDENT.wt }} aria-current={selected ? 'true' : undefined} onClick={() => actions.go({ kind: 'worktree', path: wt.path })} onContextMenu={e => openMenu(e, worktreeItems(wt))} title={`${wt.path}\n${wt.branch || ''}`}>
+        <GitBranch size={12} className={`shrink-0 ${wt.isMain ? 'text-fg-faint' : 'text-accent'}`} aria-hidden="true" />
+        {key && !wt.isMain && <span className="mono shrink-0 text-[11px] text-accent">{key}</span>}
+        <span className="grow text-fg-muted">{branchLabel(wt, key)}</span>
+      </button>
+      <SessionList sessions={sessions} indent={INDENT.session} />
     </div>
+  );
+}
+
+const INDENT = { wt: 28, session: 46 };
+const SHOWN = 3;
+
+/** The branch with its ticket key taken off the front and dashes read as spaces: "JL-7488-dlocal-webhook" shows as "dlocal webhook" after the key. */
+function branchLabel(wt: Worktree, key: string | null): string {
+  if (!wt.branch) return wt.detached ? `detached ${wt.head}` : shortPath(wt.path);
+  if (wt.isMain || !key) return wt.branch;
+  return wt.branch.replace(/^.*\//, '').replace(new RegExp(`^${key}`, 'i'), '').replace(/^[-_]+/, '').replace(/[-_]+/g, ' ');
+}
+
+const quiet = (state: string) => state === 'idle' || state === 'stopped' || state === 'ended';
+
+/** A worktree's sessions: anything working or waiting on you first, then idle ones, with all but the first few behind a "N more" row. */
+function SessionList({ sessions, indent }: { sessions: Session[]; indent: number }) {
+  const [all, setAll] = useState(false);
+  if (!sessions.length) return null;
+  const sorted = [...sessions].sort((a, b) => Number(quiet(a.state)) - Number(quiet(b.state)));
+  const cut = Math.max(SHOWN, sorted.filter(s => !quiet(s.state)).length);
+  const shown = all ? sorted : sorted.slice(0, cut);
+  return (
+    <>
+      {shown.map(s => <SessionRow key={s.id} session={s} indent={indent} />)}
+      {sorted.length > cut && (
+        <button className="row text-[11px] text-fg-faint" style={{ paddingLeft: indent + 14 }} onClick={() => setAll(a => !a)}>
+          {all ? 'Show fewer' : `${sorted.length - cut} more`}
+        </button>
+      )}
+    </>
+  );
+}
+
+function IdleRepos({ repos }: { repos: Repo[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="row text-[11px] text-fg-faint" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        {open ? <ChevronDown size={13} className="shrink-0" aria-hidden="true" /> : <ChevronRight size={13} className="shrink-0" aria-hidden="true" />}
+        {repos.length} repos with nothing open
+      </button>
+      {open && repos.map(r => <RepoNode key={r.name} repo={r} open />)}
+    </>
   );
 }
 
@@ -124,10 +175,9 @@ export function SessionRow({ session: s, indent }: { session: Session; indent: n
   ];
   return (
     <>
-      <button className="row" style={{ paddingLeft: indent }} aria-current={selected ? 'true' : undefined} onClick={open} onContextMenu={e => openMenu(e, items)} title={`${s.title}\n${s.state}${s.locatedBy && s.locatedBy !== 'cwd' ? `\nplaced here by ${s.locatedBy}` : ''}`}>
+      <button className="row" style={{ paddingLeft: indent }} aria-current={selected ? 'true' : undefined} onClick={open} onContextMenu={e => openMenu(e, items)} title={`${s.title}\n${s.kind === 'dashboard' ? 'chat' : s.kind === 'background' ? 'background' : 'terminal'} · ${s.state}${s.locatedBy && s.locatedBy !== 'cwd' ? `\nplaced here by ${s.locatedBy}` : ''}`}>
         <span className="dot" data-s={s.state} aria-hidden="true" />
-        <Icon size={13} className="text-fg-faint" aria-hidden="true" />
-        <span className="grow">{s.title || s.name || s.id}</span>
+        <span className={`grow ${quiet(s.state) ? 'text-fg-muted' : 'text-fg'}`}>{s.title || s.name || s.id}</span>
       </button>
       {menu}
     </>
