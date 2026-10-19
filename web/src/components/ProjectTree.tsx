@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, FolderGit2, GitBranch, MessageSquare, Terminal, Bot, SquareTerminal, X, Code2, FolderOpen, Copy, Plus, Send, Download, FolderInput } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderGit2, GitBranch, House, MessageSquare, Terminal, Bot, SquareTerminal, X, Code2, FolderOpen, Copy, Plus, Send, Download, FolderInput } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Repo, Session, Worktree } from '../lib/api';
 import { shortPath, ticketKey } from '../lib/format';
@@ -95,10 +95,18 @@ function WorktreeNode({ repo, wt }: { repo: Repo; wt: Worktree }) {
     <div>
       {menu}
       {/* Indents are inline: .row's own padding beats Tailwind's pl-* utilities. */}
-      <button className="row" style={{ paddingLeft: INDENT.wt }} aria-current={selected ? 'true' : undefined} onClick={() => actions.go({ kind: 'worktree', path: wt.path })} onContextMenu={e => openMenu(e, worktreeItems(wt))} title={`${wt.path}\n${wt.branch || ''}`}>
-        <GitBranch size={12} className={`shrink-0 ${wt.isMain ? 'text-fg-faint' : 'text-accent'}`} aria-hidden="true" />
-        {key && !wt.isMain && <span className="mono shrink-0 text-[11px] text-accent">{key}</span>}
-        <span className="grow text-fg-muted">{branchLabel(wt, key)}</span>
+      <button className="row" style={{ paddingLeft: INDENT.wt }} aria-current={selected ? 'true' : undefined} onClick={() => actions.go({ kind: 'worktree', path: wt.path })} onContextMenu={e => openMenu(e, worktreeItems(wt))}
+        title={wt.isMain ? `${wt.path}\nThe repo's own folder (not a worktree), currently on ${wt.branch || 'a detached HEAD'}` : `${wt.path}\n${wt.branch || ''}`}>
+        {/* The main checkout is the repo folder itself. Labelled by its branch it reads like a worktree, so it gets a house and "Main folder" instead. */}
+        {wt.isMain ? <>
+          <House size={12} className="shrink-0 text-fg-faint" aria-hidden="true" />
+          <span className="shrink-0 text-fg-muted">Main folder</span>
+          <span className="grow mono text-[11px] text-fg-faint">{wt.branch && !/^(main|master)$/.test(wt.branch) ? wt.branch : ''}</span>
+        </> : <>
+          <GitBranch size={12} className="shrink-0 text-accent" aria-hidden="true" />
+          {key && <span className="mono shrink-0 text-[11px] text-accent">{key}</span>}
+          <span className="grow text-fg-muted">{branchLabel(wt, key)}</span>
+        </>}
       </button>
       <SessionList sessions={sessions} indent={INDENT.session} />
     </div>
@@ -111,7 +119,7 @@ const SHOWN = 3;
 /** The branch with its ticket key taken off the front and dashes read as spaces: "JL-7488-dlocal-webhook" shows as "dlocal webhook" after the key. */
 function branchLabel(wt: Worktree, key: string | null): string {
   if (!wt.branch) return wt.detached ? `detached ${wt.head}` : shortPath(wt.path);
-  if (wt.isMain || !key) return wt.branch;
+  if (!key) return wt.branch;
   return wt.branch.replace(/^.*\//, '').replace(new RegExp(`^${key}`, 'i'), '').replace(/^[-_]+/, '').replace(/[-_]+/g, ' ');
 }
 

@@ -17,7 +17,7 @@ export function DialogueList() {
   const open = useSectionOpen('dialogues');
   return (
     <section className="mb-3">
-      <SectionHeader name="dialogues" label="Dialogues" count={list.length} />
+      <SectionHeader name="dialogues" label="Dialogues" count={list.length} add={{ label: 'New dialogue', onClick: () => actions.go({ kind: 'new-dialogue' }) }} />
       {open && !list.length && <div className="px-2 pb-1 text-[11px] text-fg-faint">No dialogues.</div>}
       {open && list.map(d => {
         const live = d.status === 'running' || d.status === 'paused';

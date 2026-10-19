@@ -18,7 +18,7 @@ export function TerminalList() {
   const open = useSectionOpen('terminals');
   return (
     <section className="mb-3">
-      <SectionHeader name="terminals" label="Terminals" count={terms.length} />
+      <SectionHeader name="terminals" label="Terminals" count={terms.length} add={{ label: 'New terminal', onClick: () => openTerminal() }} />
       {open && !terms.length && <div className="px-2 pb-1 text-[11px] text-fg-faint">No shells open.</div>}
       {open && terms.map(t => (
         <div key={t.id} className={`row tall group ${active === t.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
