@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, Download, FolderInput, MessageSquare, Pencil, Pin, PinOff, Plus, Send, SquareTerminal, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, Download, FolderInput, MessageSquare, Pencil, Pin, PinOff, Send, SquareTerminal, Trash2 } from 'lucide-react';
 import { api, type Conversation } from '../lib/api';
 import { age, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu, type MenuItem } from './ContextMenu';
 import { exportConversation, forwardLastReply, openMove } from './SidebarDialogs';
+import { SectionHeader, useSectionOpen } from './SectionHeader';
 
 /** Saved conversations, pinned first then newest, that are not currently running anywhere. Running ones live under their worktree in the tree.
  *  Archived ones (by hand, or idle for two weeks) sit in a collapsed group at the bottom. Right-click a row for everything else. */
@@ -13,12 +14,13 @@ export function ConversationList() {
   const snap = useStore(s => s.snapshot);
   const filter = useStore(s => s.convoFilter);
   const view = useStore(s => s.view);
-  const [open, setOpen] = useState(true);
+  const open = useSectionOpen('convos');
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [menu, openMenu] = useContextMenu();
   if (!snap) return null;
   const q = filter.toLowerCase();
-  const all = snap.conversations.filter(c => !c.running && !c.chat).filter(c => !q || `${c.title} ${c.repo || ''} ${c.branch || ''} ${c.cwd}`.toLowerCase().includes(q));
+  // Running ones live under their worktree in the tree; a running one with no repo (a one-off) is listed here instead.
+  const all = snap.conversations.filter(c => !(c.running || c.chat) || !c.worktree).filter(c => !q || `${c.title} ${c.repo || ''} ${c.branch || ''} ${c.cwd}`.toLowerCase().includes(q));
   const saved = all.filter(c => !c.archived).sort((a, b) => Number(b.pinned) - Number(a.pinned)), archived = all.filter(c => c.archived);
 
   const rename = async (sessionId: string, current: string) => {
@@ -34,7 +36,10 @@ export function ConversationList() {
     catch (err: any) { actions.toast(err.message, 'error'); }
   };
   const copy = (text: string, what: string) => navigator.clipboard.writeText(text).then(() => actions.toast(`Copied ${what}`), () => actions.toast('The browser blocked clipboard access', 'error'));
-  const resume = (c: Conversation) => actions.go({ kind: 'resume', sessionId: c.sessionId, cwd: c.cwd, title: c.title });
+  // A live one opens where it is running: its chat, or its session. The rest resume from the transcript.
+  const resume = (c: Conversation) => c.chat ? actions.go({ kind: 'chat', chatId: c.chat.id, title: c.title })
+    : c.running ? actions.go({ kind: 'session', id: c.running.id })
+    : actions.go({ kind: 'resume', sessionId: c.sessionId, cwd: c.cwd, title: c.title });
   const items = (c: Conversation): MenuItem[] => [
     { label: 'Open', icon: MessageSquare, onSelect: () => resume(c) },
     { label: 'Rename…', icon: Pencil, onSelect: () => rename(c.sessionId, c.title) },
@@ -51,30 +56,23 @@ export function ConversationList() {
   ];
 
   const row = (c: Conversation) => {
-    const selected = view.kind === 'resume' && view.sessionId === c.sessionId;
+    const selected = (view.kind === 'resume' && view.sessionId === c.sessionId) || (view.kind === 'chat' && view.chatId === c.chat?.id) || (view.kind === 'session' && view.id === c.running?.id);
+    const live = c.chat?.status || c.running?.state;
     return (
-      <div key={c.sessionId} className="group flex items-center" onContextMenu={e => openMenu(e, items(c))}>
-        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}${c.autoArchived ? '\n(archived after two weeks idle)' : ''}`} onClick={() => resume(c)}>
+      <div key={c.sessionId} className="flex items-center" onContextMenu={e => openMenu(e, items(c))}>
+        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}\n${c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}${c.autoArchived ? '\n(archived after two weeks idle)' : ''}`} onClick={() => resume(c)}>
+          {live && <span className="dot" data-s={live} aria-label={live} />}
           {c.pinned && <Pin size={11} className="shrink-0 text-fg-faint" aria-label="Pinned" />}
           <span className={`grow ${c.archived ? 'text-fg-muted' : ''}`}>{c.title}</span>
-          <span className="text-[10px] text-fg-faint truncate max-w-[35%] mono">{c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}</span>
           <span className="num text-[10px] text-fg-faint">{age(c.lastModified)}</span>
         </button>
-        <button className="iconbtn shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" style={{ width: 22, height: 22 }} title="Rename" aria-label={`Rename ${c.title}`} onClick={() => rename(c.sessionId, c.title)}><Pencil size={12} aria-hidden="true" /></button>
       </div>
     );
   };
 
   return (
     <div className="mb-3">
-      <div className="section-title">
-        <button className="flex items-center gap-1" onClick={() => setOpen(o => !o)} aria-expanded={open}>
-          {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-          Recent conversations
-        </button>
-        <span className="count num">{saved.length}</span>
-        <button className="iconbtn" style={{ width: 22, height: 22 }} title="New chat" aria-label="New chat" onClick={() => actions.go({ kind: 'new-chat' })}><Plus size={14} aria-hidden="true" /></button>
-      </div>
+      <SectionHeader name="convos" label="Recent conversations" count={saved.length} />
       {open && (
         <>
           <input className="input mb-1 w-full" type="search" placeholder="Filter by title, repo, or branch" value={filter} onChange={e => actions.setConvoFilter(e.target.value)} />

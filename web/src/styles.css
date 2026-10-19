@@ -73,6 +73,10 @@ button:disabled { cursor: default; }
 .row[aria-current="true"], .row.is-selected { background: var(--selected); box-shadow: inset 2px 0 0 var(--accent); }
 .row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A row with a title and a subtitle line: grows to fit both instead of overflowing into the next row. */
+/* The sidebar is a dense list: shorter rows, smaller dots, idle dots faded. */
+.sidebar { --row: 26px; }
+.sidebar .dot { width: 6px; height: 6px; }
+.sidebar .dot[data-s="idle"], .sidebar .dot[data-s="stopped"], .sidebar .dot[data-s="ended"] { opacity: 0.55; }
 .row.tall { height: auto; min-height: var(--row); padding: 6px 8px; gap: 10px; line-height: 1.3; }
 .row.tall + .row.tall { margin-top: 1px; }
 

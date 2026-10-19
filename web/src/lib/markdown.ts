@@ -98,6 +98,51 @@ export function md(src: string, isFile?: (path: string) => boolean): string {
   return out.join('');
 }
 
+/** Quote-aware CSV/TSV parse. Returns null when the text is not a clean grid. */
+function parseGrid(text: string, sep: string): string[][] | null {
+  const rows: string[][] = [];
+  let row: string[] = [], cell = '', quoted = false, wasQuoted = false;
+  const endCell = () => { row.push(cell); cell = ''; wasQuoted = false; };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else quoted = false; } else cell += c;
+    } else if (c === '"' && cell === '') { quoted = true; wasQuoted = true; }
+    else if (c === sep) endCell();
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      endCell(); rows.push(row); row = [];
+    } else if (wasQuoted) return null; // stray text after a closing quote: not CSV
+    else cell += c;
+  }
+  if (quoted) return null;
+  if (cell !== '' || row.length) { endCell(); rows.push(row); }
+  return rows;
+}
+
+/** A pasted CSV or spreadsheet (TSV) as a markdown table, or null when the text does not look like one: at least a header and two rows, two or more columns, every row the same width, short non-empty header cells. */
+export function csvToMarkdownTable(text: string): string | null {
+  const t = text.trim();
+  if (!t.includes('\n')) return null;
+  for (const sep of [',', '\t']) {
+    if (!t.split('\n')[0].includes(sep)) continue;
+    const rows = parseGrid(t, sep);
+    if (!rows || rows.length < 3 || rows[0].length < 2 || rows.some(r => r.length !== rows[0].length)) continue;
+    if (rows[0].some(h => !h.trim() || h.length > 40)) continue;
+    const cell = (s: string) => s.replace(/\s*\n\s*/g, ' ').trim().replace(/\|/g, '\\|');
+    const line = (r: string[]) => `| ${r.map(cell).join(' | ')} |`;
+    return [line(rows[0]), `| ${rows[0].map(() => '---').join(' | ')} |`, ...rows.slice(1).map(line)].join('\n');
+  }
+  return null;
+}
+
+/** Your own message with any markdown table drawn as a table. Null when there is none, so the caller keeps plain text. */
+export function userTables(text: string): string | null {
+  if (!/^\s*\|.*\|\s*\n\s*\|?\s*:?-{2,}/m.test(text)) return null;
+  const html = tables(esc(text));
+  return html.includes('<table>') ? html : null;
+}
+
 /** Every path `md` would consider linking, so the caller can check which exist before rendering. */
 export function fileRefs(src: string): string[] {
   const seen = new Set<string>();

@@ -11,6 +11,7 @@ export interface Placement { worktree: WorktreeRef; by: LocatedBy }
 const TICKET = /\b([A-Z]{2,6}-\d{2,6})\b/i;
 export const ticketKey = (s: string | null | undefined) => { const m = (s || '').match(TICKET); return m ? m[1].toUpperCase() : null; };
 
+const SCRATCH = /[\\/]state[\\/]scratch([\\/]|$)/i;
 const TAIL_BYTES = 2 * 1024 * 1024;
 const RESCAN_MS = 60_000;
 const MIN_MENTIONS = 3;
@@ -40,8 +41,10 @@ export class SessionHomes {
     const byPath = (p: string | null) => p ? worktrees.find(w => normPath(w.path) === normPath(p)) || null : null;
     const pinned = byPath(this.pinned(sessionId));
     if (pinned) return { worktree: pinned, by: 'pinned' };
+    // Fleet's scratch folder (state/scratch, where a chat with no folder starts) sits inside the claude-fleet checkout,
+    // but a chat there is not about claude-fleet; it skips the cwd rule and is placed by the guesses below, or not at all.
     let best: WorktreeRef | null = null;
-    for (const w of worktrees) if (pathWithin(cwd, w.path) && (!best || w.path.length > best.path.length)) best = w;
+    if (!SCRATCH.test(cwd)) for (const w of worktrees) if (pathWithin(cwd, w.path) && (!best || w.path.length > best.path.length)) best = w;
     if (best) return { worktree: best, by: 'cwd' };
     const key = ticketKey(title);
     if (key) {
@@ -104,6 +107,7 @@ function mostMentioned(text: string, worktrees: WorktreeRef[]): string | null {
   const sorted = [...worktrees].sort((a, b) => b.path.length - a.path.length);
   for (const m of text.matchAll(PATH_RE)) {
     const p = m[0].replace(/\\\\/g, '/').replace(/\\/g, '/');
+    if (SCRATCH.test(p)) continue;
     const w = sorted.find(w => pathWithin(p, w.path));
     if (w) counts.set(w.path, (counts.get(w.path) || 0) + 1);
   }
