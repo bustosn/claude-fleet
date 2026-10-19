@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import * as pty from 'node-pty';
 import type { TerminalSummary } from '../shared/types.js';
 
@@ -9,7 +11,24 @@ const SCROLLBACK_CHARS = 200_000;
 
 export function defaultShell(): string {
   if (process.platform === 'win32') return 'powershell.exe';
-  return process.env.SHELL || '/bin/bash';
+  // launchd starts Fleet without SHELL; zsh is the macOS default.
+  return process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash');
+}
+
+// A login shell reads .zprofile/.bash_profile, where Homebrew and nvm put themselves on PATH. Without it a Fleet
+// started by launchd opens terminals that cannot find brew, node or claude.
+const loginArgs = (shell: string) => process.platform !== 'win32' && /^(zsh|bash|fish|sh)$/.test(path.basename(shell)) ? ['-l'] : [];
+
+// node-pty's macOS prebuilds include a spawn-helper binary that npm can unpack without its execute bit;
+// every terminal then fails with "posix_spawnp failed". Put the bit back once at startup.
+if (process.platform === 'darwin') {
+  try {
+    const root = path.dirname(createRequire(import.meta.url).resolve('node-pty/package.json'));
+    for (const dir of ['prebuilds/darwin-arm64', 'prebuilds/darwin-x64', 'build/Release']) {
+      const helper = path.join(root, dir, 'spawn-helper');
+      if (fs.existsSync(helper)) fs.chmodSync(helper, 0o755);
+    }
+  } catch {}
 }
 
 /** One shell in a pseudo-terminal. The browser attaches over a WebSocket; closing the tab leaves the shell running. */
@@ -20,7 +39,7 @@ export class Terminal extends EventEmitter {
   constructor(opts: { cwd: string; shell: string; cols?: number; rows?: number }) {
     super();
     this.cwd = opts.cwd; this.shell = opts.shell; this.title = path.basename(this.shell).replace(/\.exe$/i, '');
-    this.p = pty.spawn(this.shell, [], { name: 'xterm-256color', cols: opts.cols || 120, rows: opts.rows || 30, cwd: this.cwd, env: process.env as Record<string, string> });
+    this.p = pty.spawn(this.shell, loginArgs(this.shell), { name: 'xterm-256color', cols: opts.cols || 120, rows: opts.rows || 30, cwd: this.cwd, env: process.env as Record<string, string> });
     this.p.onData(d => { this.buf += d; if (this.buf.length > SCROLLBACK_CHARS) this.buf = this.buf.slice(-SCROLLBACK_CHARS); this.emit('data', d); });
     this.p.onExit(({ exitCode }) => { this.exitCode = exitCode; this.emit('exit', exitCode); });
   }

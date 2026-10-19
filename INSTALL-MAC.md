@@ -108,6 +108,8 @@ If something fails:
 | `reposRoot ... does not exist` | The path in `fleet.config.json` is wrong. Use an absolute path, not `~`. |
 | `No config at ...` | Step 5 was skipped: copy `fleet.config.example.json` to `fleet.config.json`. |
 | Chats do not start | Run `claude auth login` in Terminal. |
+| A terminal tab fails with `posix_spawnp failed` | Fleet fixes this itself when it starts; on an older checkout run `chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper` and restart Fleet. |
+| A terminal tab cannot find `brew`, `node` or `claude` | Terminals open as a login shell and read `~/.zprofile`; make sure Homebrew's and nvm's setup lines are there, not only in `~/.zshrc`. |
 | `EADDRINUSE` / port 7777 in use | Start with `FLEET_PORT=7787 npm start` (any free port) and use that address. |
 | Blank page | The web app was not built: run `npm run build`, then reload. |
 | Does not start at login | `tail state/fleet.log`; the usual cause is a wrong `npm` path in the plist. |
