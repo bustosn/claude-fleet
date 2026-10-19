@@ -11,7 +11,7 @@ import { exportConversation, forwardLastReply, openMove } from './SidebarDialogs
 /** Repos → worktrees → the sessions living in each. The spine of the app. */
 export function ProjectTree() {
   const snap = useStore(s => s.snapshot);
-  const collapsed = useStore(s => s.collapsedRepos);
+  const openRepos = useStore(s => s.openRepos);
   if (!snap) return <div className="section-title">Projects <span className="count">loading</span></div>;
 
   const repos = [...snap.repos].sort((a, b) => (b.worktrees.length - a.worktrees.length) || a.name.localeCompare(b.name));
@@ -24,7 +24,7 @@ export function ProjectTree() {
   return (
     <div className="mb-3">
       <div className="section-title">Projects <span className="count num">{repos.length}</span></div>
-      {active.map(r => <RepoNode key={r.name} repo={r} open={!collapsed[r.name]} />)}
+      {active.map(r => <RepoNode key={r.name} repo={r} open={!!openRepos[r.name]} />)}
       {idle.length > 0 && <IdleRepos repos={idle} />}
       {loose.length > 0 && (
         <div className="mt-3">
@@ -42,21 +42,29 @@ function RepoNode({ repo, open }: { repo: Repo; open: boolean }) {
   const snap = useStore(s => s.snapshot)!;
   const attention = repo.worktrees.reduce((n, w) => n + w.sessions.filter(s => s.column === 'needs-you').length, 0);
   const main = repo.worktrees[0];
-  // A repo with only its main checkout is one row: the repo opens the checkout directly.
+  const chevron = (
+    <button className="iconbtn shrink-0" style={{ width: 16, height: 16 }} onClick={e => { e.stopPropagation(); actions.toggleRepo(repo.name); }} aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${repo.name}`}>
+      {open ? <ChevronDown size={13} className="text-fg-faint" aria-hidden="true" /> : <ChevronRight size={13} className="text-fg-faint" aria-hidden="true" />}
+    </button>
+  );
+  // A repo with only its main checkout is one row: the name opens the checkout, the chevron shows its sessions.
   if (repo.worktrees.length === 1 && main) {
     const selected = view.kind === 'worktree' && view.path === main.path;
     const sessions = snap.sessions.filter(s => s.worktree && s.worktree.toLowerCase() === main.path.toLowerCase());
     return (
       <div>
         {menu}
-        <button className="row" aria-current={selected ? 'true' : undefined} onClick={() => actions.go({ kind: 'worktree', path: main.path })} onContextMenu={e => openMenu(e, worktreeItems(main))} title={`${main.path}\n${main.branch || ''}`}>
-          <span className="w-[13px] shrink-0" />
-          <FolderGit2 size={14} className="text-fg-muted" aria-hidden="true" />
-          <span className="grow font-medium">{repo.name}</span>
-          {attention > 0 && <span className="chip warn num">{attention}</span>}
-          {main.branch && !/^(main|master)$/.test(main.branch) && <span className="mono truncate max-w-[40%] text-fg-faint">{main.branch}</span>}
-        </button>
-        <SessionList sessions={sessions} indent={INDENT.wt} />
+        <div className="row" aria-current={selected ? 'true' : undefined} onContextMenu={e => openMenu(e, worktreeItems(main))} title={`${main.path}\n${main.branch || ''}`}>
+          {sessions.length ? chevron : <span className="w-[16px] shrink-0" />}
+          <button className="flex min-w-0 grow items-center gap-2 text-left" onClick={() => actions.go({ kind: 'worktree', path: main.path })}>
+            <FolderGit2 size={14} className="shrink-0 text-fg-muted" aria-hidden="true" />
+            <span className="grow font-medium">{repo.name}</span>
+            {attention > 0 && <span className="chip warn num">{attention}</span>}
+            {main.branch && !/^(main|master)$/.test(main.branch) && <span className="mono truncate max-w-[40%] text-fg-faint">{main.branch}</span>}
+            {!open && sessions.length > 0 && <span className="num text-[11px] text-fg-faint">{sessions.length}</span>}
+          </button>
+        </div>
+        {open && <SessionList sessions={sessions} indent={INDENT.wt} />}
       </div>
     );
   }
@@ -64,8 +72,8 @@ function RepoNode({ repo, open }: { repo: Repo; open: boolean }) {
     <div>
       {menu}
       <button className="row" onClick={() => actions.toggleRepo(repo.name)} aria-expanded={open} onContextMenu={e => main && openMenu(e, worktreeItems(main))}>
-        {open ? <ChevronDown size={13} className="shrink-0 text-fg-faint" aria-hidden="true" /> : <ChevronRight size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />}
-        <FolderGit2 size={14} className="text-fg-muted" aria-hidden="true" />
+        <span className="flex w-[16px] shrink-0 justify-center">{open ? <ChevronDown size={13} className="text-fg-faint" aria-hidden="true" /> : <ChevronRight size={13} className="text-fg-faint" aria-hidden="true" />}</span>
+        <FolderGit2 size={14} className="shrink-0 text-fg-muted" aria-hidden="true" />
         <span className="grow font-medium">{repo.name}</span>
         {attention > 0 && <span className="chip warn num">{attention}</span>}
         {!open && <span className="num text-[11px] text-fg-faint">{repo.worktrees.length}</span>}

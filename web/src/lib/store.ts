@@ -22,7 +22,7 @@ export type Theme = 'system' | 'light' | 'dark';
 interface State {
   snapshot: Snapshot | null; live: boolean; view: View; tabs: Tab[]; theme: Theme;
   sidebarWidth: number; sidebarCollapsed: boolean; paletteOpen: boolean;
-  collapsedRepos: Record<string, boolean>; convoFilter: string; toast: { id: number; text: string; level: 'info' | 'error' } | null;
+  openRepos: Record<string, boolean>; convosOpen: boolean; convoFilter: string; toast: { id: number; text: string; level: 'info' | 'error' } | null;
 }
 
 const read = <T,>(k: string, fallback: T): T => { try { const v = localStorage.getItem(k); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } };
@@ -52,7 +52,8 @@ let state: State = {
   tabs: savedTabs, view: savedTabs.find(t => t.key === savedActive)?.view || { kind: 'overview' },
   theme: read<Theme>('fleet.theme.mode', 'system'),
   sidebarWidth: read('fleet.sidebar.width', 300), sidebarCollapsed: read('fleet.sidebar.collapsed', false), paletteOpen: false,
-  collapsedRepos: read('fleet.repos.collapsed', {}), convoFilter: '', toast: null,
+  // Repos and the conversation list start collapsed; only what you open stays open.
+  openRepos: read('fleet.repos.open', {}), convosOpen: read('fleet.convos.open', false), convoFilter: '', toast: null,
 };
 const listeners = new Set<() => void>();
 function set(patch: Partial<State> | ((s: State) => Partial<State>)) {
@@ -99,7 +100,8 @@ export const actions = {
   setSidebarWidth: (w: number) => { const width = Math.min(480, Math.max(220, Math.round(w))); write('fleet.sidebar.width', width); set({ sidebarWidth: width }); },
   toggleSidebar: () => set(s => { write('fleet.sidebar.collapsed', !s.sidebarCollapsed); return { sidebarCollapsed: !s.sidebarCollapsed }; }),
   setPalette: (paletteOpen: boolean) => set({ paletteOpen }),
-  toggleRepo: (name: string) => set(s => { const collapsedRepos = { ...s.collapsedRepos, [name]: !s.collapsedRepos[name] }; write('fleet.repos.collapsed', collapsedRepos); return { collapsedRepos }; }),
+  toggleRepo: (name: string) => set(s => { const openRepos = { ...s.openRepos, [name]: !s.openRepos[name] }; write('fleet.repos.open', openRepos); return { openRepos }; }),
+  toggleConvos: () => set(s => { write('fleet.convos.open', !s.convosOpen); return { convosOpen: !s.convosOpen }; }),
   setConvoFilter: (convoFilter: string) => set({ convoFilter }),
   toast: (text: string, level: 'info' | 'error' = 'info') => {
     const id = Date.now();

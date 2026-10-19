@@ -13,7 +13,7 @@ export function ConversationList() {
   const snap = useStore(s => s.snapshot);
   const filter = useStore(s => s.convoFilter);
   const view = useStore(s => s.view);
-  const [open, setOpen] = useState(true);
+  const open = useStore(s => s.convosOpen);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [menu, openMenu] = useContextMenu();
   if (!snap) return null;
@@ -67,7 +67,7 @@ ${c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}${c
   return (
     <div className="mb-3">
       <div className="section-title">
-        <button className="flex items-center gap-1" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        <button className="flex items-center gap-1" onClick={actions.toggleConvos} aria-expanded={open}>
           {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
           Recent conversations
         </button>
