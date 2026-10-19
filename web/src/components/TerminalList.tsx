@@ -1,11 +1,11 @@
-import { Copy, Plus, SquareTerminal, Terminal, X } from 'lucide-react';
+import { Copy, SquareTerminal, Terminal, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, tabKey, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu } from './ContextMenu';
 
-/** Sidebar section: every shell Fleet is running, including ones whose tab was closed. */
+/** Sidebar section: every shell Fleet is running, including ones whose tab was closed. Hidden when there are none. */
 export function TerminalList() {
   // The fallback stays outside the selector: useSyncExternalStore compares results by identity,
   // and a fresh [] on every call reads as a store change, which loops until React gives up.
@@ -14,12 +14,10 @@ export function TerminalList() {
   const active = view.kind === 'terminal' ? view.id : null;
   const [menu, openMenu] = useContextMenu();
   const kill = (id: string) => api.closeTerminal(id).then(() => actions.closeTab(tabKey({ kind: 'terminal', id }))).catch(e => actions.toast(e.message, 'error'));
+  if (!terms.length) return null;
   return (
     <section className="mb-3">
-      <div className="section-title">Terminals <span className="count num">{terms.length}</span>
-        <button className="iconbtn" style={{ width: 22, height: 22 }} title="New terminal" aria-label="New terminal" onClick={() => openTerminal()}><Plus size={14} aria-hidden="true" /></button>
-      </div>
-      {terms.length === 0 && <div className="px-2 pb-1 text-[11px] text-fg-faint">No shells open. The terminal button on the tab strip starts one in the folder you are looking at.</div>}
+      <div className="section-title">Terminals <span className="count num">{terms.length}</span></div>
       {terms.map(t => (
         <div key={t.id} className={`row tall group ${active === t.id ? 'bg-selected' : ''}`} role="button" tabIndex={0}
           onClick={() => actions.go({ kind: 'terminal', id: t.id })}

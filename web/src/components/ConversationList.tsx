@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, Download, FolderInput, MessageSquare, Pencil, Pin, PinOff, Plus, Send, SquareTerminal, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, Download, FolderInput, MessageSquare, Pencil, Pin, PinOff, Send, SquareTerminal, Trash2 } from 'lucide-react';
 import { api, type Conversation } from '../lib/api';
 import { age, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
@@ -53,14 +53,13 @@ export function ConversationList() {
   const row = (c: Conversation) => {
     const selected = view.kind === 'resume' && view.sessionId === c.sessionId;
     return (
-      <div key={c.sessionId} className="group flex items-center" onContextMenu={e => openMenu(e, items(c))}>
-        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}${c.autoArchived ? '\n(archived after two weeks idle)' : ''}`} onClick={() => resume(c)}>
+      <div key={c.sessionId} className="flex items-center" onContextMenu={e => openMenu(e, items(c))}>
+        <button className="row" aria-current={selected ? 'true' : undefined} title={`${c.firstPrompt}
+${c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}${c.locatedBy && c.locatedBy !== 'cwd' ? `\n(placed by ${c.locatedBy})` : ''}${c.autoArchived ? '\n(archived after two weeks idle)' : ''}`} onClick={() => resume(c)}>
           {c.pinned && <Pin size={11} className="shrink-0 text-fg-faint" aria-label="Pinned" />}
           <span className={`grow ${c.archived ? 'text-fg-muted' : ''}`}>{c.title}</span>
-          <span className="text-[10px] text-fg-faint truncate max-w-[35%] mono">{c.repo ? `${c.repo}${c.branch ? ' / ' + c.branch : ''}` : shortPath(c.cwd)}</span>
           <span className="num text-[10px] text-fg-faint">{age(c.lastModified)}</span>
         </button>
-        <button className="iconbtn shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" style={{ width: 22, height: 22 }} title="Rename" aria-label={`Rename ${c.title}`} onClick={() => rename(c.sessionId, c.title)}><Pencil size={12} aria-hidden="true" /></button>
       </div>
     );
   };
@@ -73,7 +72,6 @@ export function ConversationList() {
           Recent conversations
         </button>
         <span className="count num">{saved.length}</span>
-        <button className="iconbtn" style={{ width: 22, height: 22 }} title="New chat" aria-label="New chat" onClick={() => actions.go({ kind: 'new-chat' })}><Plus size={14} aria-hidden="true" /></button>
       </div>
       {open && (
         <>

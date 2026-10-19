@@ -49,7 +49,7 @@ function RepoNode({ repo, open }: { repo: Repo; open: boolean }) {
           <FolderGit2 size={14} className="text-fg-muted" aria-hidden="true" />
           <span className="grow font-medium">{repo.name}</span>
           {attention > 0 && <span className="chip warn num">{attention}</span>}
-          <span className="mono truncate max-w-[40%] text-fg-faint">{main.branch || ''}</span>
+          {main.branch && !/^(main|master)$/.test(main.branch) && <span className="mono truncate max-w-[40%] text-fg-faint">{main.branch}</span>}
         </button>
         {sessions.map(s => <SessionRow key={s.id} session={s} indent={34} />)}
       </div>
@@ -128,7 +128,6 @@ export function SessionRow({ session: s, indent }: { session: Session; indent: n
         <span className="dot" data-s={s.state} aria-hidden="true" />
         <Icon size={13} className="text-fg-faint" aria-hidden="true" />
         <span className="grow">{s.title || s.name || s.id}</span>
-        <span className="text-[10px] text-fg-faint">{s.kind === 'dashboard' ? 'chat' : s.kind === 'background' ? 'bg' : 'tty'}</span>
       </button>
       {menu}
     </>
