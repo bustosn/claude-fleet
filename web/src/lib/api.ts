@@ -1,4 +1,4 @@
-import type { Attachment, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TerminalSummary } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -37,7 +37,14 @@ export const api = {
   send: (id: string, text: string, fromChatId?: string, attachments?: Attachment[]) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId, attachments }),
   /** Forwarded text: from a live chat (`chatId`), or from a saved conversation, which only has a title. */
   forward: (id: string, text: string, from: { chatId?: string; title?: string }) => post<{ ok: true }>(`/api/chats/${id}/send`, { text, fromChatId: from.chatId, fromTitle: from.title }),
-  permission: (id: string, permId: string, behavior: 'allow' | 'deny') => post<{ ok: boolean }>(`/api/chats/${id}/permission`, { id: permId, behavior }),
+  permission: (id: string, permId: string, choice: PermissionChoice) => post<{ ok: boolean }>(`/api/chats/${id}/permission`, { id: permId, ...choice }),
+  setMode: (id: string, mode: string) => post<ChatSummary>(`/api/chats/${id}/mode`, { mode }),
+  setEffort: (id: string, effort: string | null) => post<ChatSummary>(`/api/chats/${id}/effort`, { effort }),
+  context: (id: string) => j<ContextUsage>(`/api/chats/${id}/context`),
+  rewind: (id: string, uuid: string, dryRun: boolean) => post<RewindPreview>(`/api/chats/${id}/rewind`, { uuid, dryRun }),
+  stopTask: (id: string, taskId: string) => post<{ ok: true }>(`/api/chats/${id}/tasks/${encodeURIComponent(taskId)}/stop`),
+  suggestFiles: (id: string, q: string) => j<string[]>(`/api/chats/${id}/files/suggest?q=${encodeURIComponent(q)}`),
+  answerQuestions: (id: string, permId: string, answers: Record<string, string>) => post<{ ok: boolean }>(`/api/chats/${id}/permission`, { id: permId, behavior: 'allow', answers }),
   interrupt: (id: string) => post<{ ok: true }>(`/api/chats/${id}/interrupt`),
   shell: (id: string, cmd: string) => post<{ id: string; terminalId: string }>(`/api/chats/${id}/shell`, { cmd }),
   shellInterrupt: (id: string) => post<{ ok: boolean }>(`/api/chats/${id}/shell/interrupt`),
@@ -56,6 +63,13 @@ export const api = {
   steerDialogue: (id: string, text: string) => post<DialogueSummary>(`/api/dialogues/${id}/steer`, { text }),
   extendDialogue: (id: string, rounds: number) => post<DialogueSummary>(`/api/dialogues/${id}/extend`, { rounds }),
   removeDialogue: (id: string) => j<{ ok: true }>(`/api/dialogues/${id}`, { method: 'DELETE' }),
+  addTask: (spec: { title?: string; prompt: string; cwd: string; model?: string; permissionMode?: string; isolate?: boolean; ticket?: string }) => post<TaskSummary>('/api/tasks', spec),
+  jiraIssue: (key: string) => j<JiraIssuePreview>(`/api/jira/issue/${encodeURIComponent(key)}`),
+  jiraPoll: () => post<JiraStatus>('/api/jira/poll'),
+  taskAction: (id: string, action: 'approve' | 'retry' | 'start') => post<TaskSummary>(`/api/tasks/${id}/${action}`),
+  sendBackTask: (id: string, text: string) => post<TaskSummary>(`/api/tasks/${id}/send-back`, { text }),
+  removeTask: (id: string) => j<{ ok: true }>(`/api/tasks/${id}`, { method: 'DELETE' }),
+  clearDoneTasks: () => post<{ ok: true }>('/api/tasks/clear-done'),
 };
 
 /** Server-sent events with a typed handler. Reconnects on its own; the browser handles that. */

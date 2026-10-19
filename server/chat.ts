@@ -4,11 +4,12 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { query, type SDKUserMessage, type Query } from '@anthropic-ai/claude-agent-sdk';
 import { createFleetServer, FLEET_TOOL_NAMES } from './fleetTools.js';
-import { summarizeInput } from './sources/conversations.js';
+import { summarizeInput, editPreview, todoList, cut } from './sources/conversations.js';
+import type { TodoItem } from '../shared/types.js';
 import type { FleetConfig } from './config.js';
 import { ShellRunner } from './shellRunner.js';
 import type { TerminalManager } from './terminals.js';
-import type { Attachment, ChatEvent, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
+import type { AskQuestion, Attachment, ChatEvent, ContextUsage, PermissionChoice, RewindPreview, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
 class Inbox implements AsyncIterable<SDKUserMessage> {
@@ -26,8 +27,8 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
 type ChatEventInput = ChatEvent extends infer E ? (E extends ChatEvent ? Omit<E, 'at'> : never) : never;
 
 interface AskRecord { id: string; fromChatId: string; toChatId: string; unambiguous: boolean; resolve: (v: string) => void; reject: (e: Error) => void }
-interface Pending { resolve: (r: any) => void; input: Record<string, unknown>; view: PermissionView }
-interface OpenOptions { sessionId?: string | null; cwd: string; model?: string; fork?: boolean; permissionMode?: string; id?: string }
+interface Pending { resolve: (r: any) => void; input: Record<string, unknown>; view: PermissionView; suggestions: unknown[] }
+interface OpenOptions { sessionId?: string | null; cwd: string; model?: string; fork?: boolean; permissionMode?: string; id?: string; taskId?: string | null }
 type Located = { repo: string; branch: string | null; path: string; by: import('../shared/types.js').LocatedBy } | null;
 
 export class ChatManager extends EventEmitter {
@@ -46,10 +47,11 @@ export class ChatManager extends EventEmitter {
   get(id: string) { return this.chats.get(id); }
   bySession(sessionId: string) { return [...this.chats.values()].find(c => c.sessionId === sessionId && c.status !== 'ended'); }
 
-  open({ sessionId, cwd, model, fork, permissionMode, id }: OpenOptions): Chat {
+  open({ sessionId, cwd, model, fork, permissionMode, id, taskId }: OpenOptions): Chat {
     const existing = sessionId ? this.bySession(sessionId) : undefined;
     if (existing) return existing;
     const chat = new Chat(this, { sessionId: sessionId || null, cwd, model: model || this.config.dispatch.defaultModel, fork: !!fork, permissionMode: permissionMode || this.config.dispatch.permissionMode, id });
+    chat.taskId = taskId || null;
     this.chats.set(chat.id, chat);
     chat.start();
     return chat;
@@ -59,14 +61,14 @@ export class ChatManager extends EventEmitter {
   persistTo(file: string) { this.persistFile = file; this.on('change', () => this.save()); }
   save() {
     if (!this.persistFile) return;
-    const live = [...this.chats.values()].filter(c => c.status !== 'ended' && c.sessionId).map(c => ({ id: c.id, sessionId: c.sessionId, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode }));
+    const live = [...this.chats.values()].filter(c => c.status !== 'ended' && c.sessionId).map(c => ({ id: c.id, sessionId: c.sessionId, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode, taskId: c.taskId }));
     try { writeFileSync(this.persistFile, JSON.stringify(live, null, 1)); } catch {}
   }
   reopen(): number {
     if (!this.persistFile || !existsSync(this.persistFile)) return 0;
     let saved: any[] = [];
     try { saved = JSON.parse(readFileSync(this.persistFile, 'utf8')); } catch { return 0; }
-    for (const s of saved) if (s.sessionId && s.cwd && existsSync(s.cwd)) this.open({ id: typeof s.id === 'string' && /^[0-9a-f]{8}$/.test(s.id) ? s.id : undefined, sessionId: s.sessionId, cwd: s.cwd, model: s.model, permissionMode: s.permissionMode, fork: false });
+    for (const s of saved) if (s.sessionId && s.cwd && existsSync(s.cwd)) this.open({ id: typeof s.id === 'string' && /^[0-9a-f]{8}$/.test(s.id) ? s.id : undefined, sessionId: s.sessionId, cwd: s.cwd, model: s.model, permissionMode: s.permissionMode, taskId: typeof s.taskId === 'string' ? s.taskId : null, fork: false });
     return saved.length;
   }
 
@@ -95,6 +97,15 @@ export class ChatManager extends EventEmitter {
 const INLINE_IMAGE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_INLINE_IMAGE = 5 * 1024 * 1024; // the API's per-image limit, measured on the base64 text
 
+/** The questions in an AskUserQuestion call, trimmed to what the card needs. Malformed ones are dropped, so a bad call falls back to Allow/Deny. */
+function askQuestions(input: Record<string, unknown>): AskQuestion[] {
+  const qs = Array.isArray(input.questions) ? input.questions : [];
+  return qs.filter((q: any) => q && typeof q.question === 'string' && Array.isArray(q.options)).map((q: any) => ({
+    question: q.question, header: typeof q.header === 'string' ? q.header : '', multiSelect: !!q.multiSelect,
+    options: q.options.filter((o: any) => o && typeof o.label === 'string').map((o: any) => ({ label: o.label, description: typeof o.description === 'string' ? o.description : '' })),
+  }));
+}
+
 const zeroUsage = (): TokenUsage => ({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
 
 export class Chat extends EventEmitter {
@@ -105,6 +116,8 @@ export class Chat extends EventEmitter {
   firstText = ''; asksIn: AskRecord[] = []; asksOut: AskRecord[] = []; turnText = '';
   /** A dialogue names its participants ("Critic · topic") and owns their turns; both show in the summary. */
   label: string | null = null; dialogueId: string | null = null;
+  /** The board task this chat works on. Set before start(), so the chat gets the fleet_report tool. */
+  taskId: string | null = null;
   // Token accounting. `turn` accumulates over the model steps of the current turn; `stepOutput` is what the current step has reported so far
   // (message_delta carries a cumulative count). `context` is the prompt size at the latest step. `total` comes from the SDK, cumulative per session.
   turn: TokenUsage = zeroUsage(); private stepOutput = 0; context = 0; total: TokenUsage | null = null; contextWindow: number | null = null;
@@ -113,6 +126,9 @@ export class Chat extends EventEmitter {
   private terminalCommands = new Set<string>();
   private models: import('@anthropic-ai/claude-agent-sdk').ModelInfo[] = [];
   private shell: ShellRunner | null = null;
+  effort: string | null = null;
+  /** Ids given to the messages sent in this process, so files can be rewound to before one. */
+  private userUuids = new Set<string>();
 
   constructor(mgr: ChatManager, opts: { sessionId: string | null; cwd: string; model: string; fork: boolean; permissionMode: string; id?: string }) {
     super();
@@ -127,8 +143,8 @@ export class Chat extends EventEmitter {
     const wt = this.mgr.locate(this.cwd, this.sessionId || this.resumeId, this.title);
     return { id: this.id, sessionId: this.sessionId, resumeId: this.resumeId, forked: this.fork, cwd: this.cwd, model: this.model, title: this.title,
       repo: wt?.repo || null, branch: wt?.branch || null, worktree: wt?.path || null, locatedBy: wt?.by || null,
-      permissionMode: this.permissionMode, status: this.status, startedAt: this.startedAt, pending: [...this.pending.values()].map(p => p.view), error: this.error,
-      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })), dialogueId: this.dialogueId,
+      permissionMode: this.permissionMode, effort: this.effort, status: this.status, startedAt: this.startedAt, pending: [...this.pending.values()].map(p => p.view), error: this.error,
+      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })), dialogueId: this.dialogueId, taskId: this.taskId,
       tokens: this.total ? { total: this.total, context: this.context, contextWindow: this.contextWindow } : null };
   }
 
@@ -176,8 +192,9 @@ export class Chat extends EventEmitter {
     if (files.length) body = `${body}\n\nAttached file${files.length > 1 ? 's' : ''}:\n${files.map(f => `- ${f}`).join('\n')}`.trim();
     const content = images.length ? [...images, ...(body ? [{ type: 'text', text: body }] : [])] : body;
     this.turn = zeroUsage(); this.stepOutput = 0; // a new turn starts with this message
-    this.inbox.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null } as SDKUserMessage);
-    this.emitEvent({ t: 'user', text, origin: origin || null, ...(attachments.length ? { attachments: attachments.map(a => a.name) } : {}) });
+    const uuid = randomUUID(); this.userUuids.add(uuid);
+    this.inbox.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, uuid } as SDKUserMessage);
+    this.emitEvent({ t: 'user', text, origin: origin || null, uuid, ...(attachments.length ? { attachments: attachments.map(a => a.name) } : {}) });
     this.turnText = '';
     this.setStatus('running');
   }
@@ -201,11 +218,23 @@ export class Chat extends EventEmitter {
     return { images, files };
   }
 
-  resolvePermission(id: string, behavior: 'allow' | 'deny', message?: string): boolean {
+  /** `answers` (question text to chosen label or typed text) answers an AskUserQuestion; a deny on one tells Claude the person skipped it. */
+  resolvePermission(id: string, c: PermissionChoice): boolean {
     const p = this.pending.get(id); if (!p) return false;
     this.pending.delete(id);
-    p.resolve(behavior === 'allow' ? { behavior: 'allow', updatedInput: p.input } : { behavior: 'deny', message: message || 'Denied from dashboard' });
-    this.emitEvent({ t: 'permission_resolved', id, behavior });
+    const asked = !!p.view.questions, plan = p.view.toolName === 'ExitPlanMode';
+    if (c.behavior === 'allow') {
+      const updates: unknown[] = c.always ? [...p.suggestions] : [];
+      if (plan) {
+        const mode = c.mode === 'acceptEdits' ? 'acceptEdits' : 'default';
+        updates.push({ type: 'setMode', mode, destination: 'session' });
+        this.permissionMode = mode; this.emitEvent({ t: 'mode', mode });
+      }
+      p.resolve({ behavior: 'allow', updatedInput: asked ? { ...p.input, answers: c.answers || {} } : p.input, ...(updates.length ? { updatedPermissions: updates } : {}) });
+    } else p.resolve({ behavior: 'deny', message: c.message || (asked ? 'The user skipped these questions. Continue with your best judgment, or ask in plain text.'
+      : plan ? 'The user wants to keep planning. Revise the plan or ask what to change.' : 'Denied from dashboard') });
+    const behavior = c.behavior;
+    this.emitEvent({ t: 'permission_resolved', id, behavior, ...(asked && behavior === 'allow' ? { answers: c.answers || {} } : {}), ...(c.always && behavior === 'allow' ? { always: true } : {}) });
     this.mgr.emit('change');
     return true;
   }
@@ -254,6 +283,35 @@ export class Chat extends EventEmitter {
     this.model = model;
     this.emitEvent({ t: 'model', model }); this.mgr.emit('change');
   }
+  /** Shift+Tab in the terminal: the next tool call is judged under the new mode. */
+  async setPermissionMode(mode: string) {
+    if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
+    if (!['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto'].includes(mode)) throw new Error(`unknown mode: ${mode}`);
+    await this.q.setPermissionMode(mode as any);
+    this.permissionMode = mode; this.emitEvent({ t: 'mode', mode }); this.mgr.emit('change');
+  }
+  /** Thinking effort for the following turns. Null goes back to the model's default. */
+  async setEffort(level: string | null) {
+    if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
+    if (level !== null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(level)) throw new Error(`unknown effort: ${level}`);
+    await this.q.applyFlagSettings({ effortLevel: level as any });
+    this.effort = level; this.mgr.emit('change');
+  }
+  /** The window by category, as /context shows it. */
+  async contextUsage(): Promise<ContextUsage> {
+    if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
+    const u = await Promise.race([this.q.getContextUsage({ detail: 'summary' }), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timed out asking for context usage')), 10000))]);
+    return { total: u.totalTokens, max: u.maxTokens, percentage: u.percentage, model: u.model,
+      categories: u.categories.map(c => ({ name: c.name, tokens: c.tokens, kind: c.kind, color: c.color })), memoryFiles: u.memoryFiles.map(m => ({ path: m.path, tokens: m.tokens })) };
+  }
+  /** Files back to how they were before a message of this chat. Conversation history is not rewound; only files on disk. */
+  async rewind(uuid: string, dryRun: boolean): Promise<RewindPreview> {
+    if (this.status === 'ended' || !this.q) throw new Error('chat is not running');
+    if (!this.userUuids.has(uuid)) throw new Error('that message was not sent in this chat run');
+    const r = await this.q.rewindFiles(uuid, { dryRun });
+    return { canRewind: r.canRewind, error: r.error, files: r.filesChanged || [], insertions: r.insertions || 0, deletions: r.deletions || 0 };
+  }
+  async stopTask(taskId: string) { if (!this.q) throw new Error('chat is not running'); await this.q.stopTask(taskId); }
   async interrupt() { try { await this.q?.interrupt(); } catch (e: any) { this.emitEvent({ t: 'error', message: String(e.message || e) }); } }
   close() {
     this.shell?.close();
@@ -267,14 +325,18 @@ export class Chat extends EventEmitter {
     const opts: any = {
       cwd: this.cwd, model: this.model, permissionMode: this.permissionMode,
       additionalDirectories: this.mgr.attachDir ? [this.mgr.attachDir] : [],
-      includePartialMessages: true, abortController: this.abort,
+      includePartialMessages: true, abortController: this.abort, enableFileCheckpointing: true, agentProgressSummaries: true,
+      thinking: { type: 'adaptive', display: 'summarized' },
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       mcpServers: { fleet: createFleetServer(this.mgr, this) },
       allowedTools: FLEET_TOOL_NAMES,
       canUseTool: (toolName: string, input: Record<string, unknown>, { suggestions }: any) => new Promise(resolve => {
         const id = randomUUID().slice(0, 8);
-        const view: PermissionView = { id, toolName, input: summarizeInput(input), suggestions: (suggestions || []).length };
-        this.pending.set(id, { resolve, input, view });
+        const questions = toolName === 'AskUserQuestion' ? askQuestions(input) : undefined;
+        const plan = toolName === 'ExitPlanMode' && typeof input.plan === 'string' ? cut(input.plan, 20000) : undefined;
+        const edit = editPreview(toolName, input) || undefined;
+        const view: PermissionView = { id, toolName, input: summarizeInput(input), suggestions: (suggestions || []).length, ...(questions?.length ? { questions } : {}), ...(plan ? { plan } : {}), ...(edit ? { edit } : {}) };
+        this.pending.set(id, { resolve, input, view, suggestions: suggestions || [] });
         this.emitEvent({ t: 'permission', ...view });
         this.setStatus('needs-you');
       }),
@@ -283,6 +345,51 @@ export class Chat extends EventEmitter {
     this.q = query({ prompt: this.inbox, options: opts });
     this.setStatus('idle');
     this.pump().catch(err => { this.error = String(err.message || err); this.emitEvent({ t: 'error', message: this.error! }); this.setStatus('ended'); });
+  }
+
+  /** The task list the model keeps for itself. Older tools send the whole list (TodoWrite); newer ones create and update items by id
+   *  (TaskCreate, TaskUpdate), where the id is only known from the result. Every change goes out as one `todos` event. */
+  private board = new Map<string, TodoItem>();
+  private creating = new Map<string, TodoItem>();
+  private pushTodos() { this.emitEvent({ t: 'todos', todos: [...this.board.values()] }); }
+  private trackTasks(b: any) {
+    const input = b.input || {};
+    if (b.name === 'TodoWrite') {
+      const list = todoList('TodoWrite', input); if (!list) return;
+      this.board = new Map(list.map((t, i) => [String(i + 1), t])); this.pushTodos();
+    } else if (b.name === 'TaskCreate' && typeof input.subject === 'string') {
+      this.creating.set(b.id, { content: input.subject, activeForm: typeof input.activeForm === 'string' && input.activeForm ? input.activeForm : input.subject, status: 'pending' });
+    } else if (b.name === 'TaskUpdate' && input.taskId != null) {
+      const id = String(input.taskId), t = this.board.get(id);
+      if (input.status === 'deleted') { if (this.board.delete(id)) this.pushTodos(); return; }
+      if (!t) return;
+      if (typeof input.subject === 'string') t.content = input.subject;
+      if (typeof input.activeForm === 'string') t.activeForm = input.activeForm;
+      if (input.status === 'pending' || input.status === 'in_progress' || input.status === 'completed') t.status = input.status;
+      this.pushTodos();
+    }
+  }
+  private taskResult(toolUseId: string, text: string, isError: boolean) {
+    const t = this.creating.get(toolUseId); if (!t) return;
+    this.creating.delete(toolUseId);
+    if (isError) return;
+    this.board.set(/#(\d+)/.exec(text)?.[1] || String(this.board.size + 1), t); this.pushTodos();
+  }
+
+  /** Subagents and background tasks, tracked by id so the log can show one row per task that updates in place. */
+  private tasks = new Map<string, { description: string; kind: string; tools: number; tokens: number; lastTool?: string; summary?: string }>();
+  private onTask(msg: any) {
+    const id = String(msg.task_id || ''); if (!id) return;
+    if (msg.subtype === 'task_updated' && !msg.patch?.status) return;
+    const t = this.tasks.get(id) || { description: '', kind: 'task', tools: 0, tokens: 0 };
+    if (msg.description) t.description = String(msg.description);
+    if (msg.subagent_type) t.kind = String(msg.subagent_type); else if (msg.task_type && t.kind === 'task') t.kind = String(msg.task_type);
+    const u = msg.usage; if (u) { t.tools = u.tool_uses ?? t.tools; t.tokens = u.total_tokens ?? t.tokens; }
+    if (msg.last_tool_name) t.lastTool = String(msg.last_tool_name);
+    if (typeof msg.summary === 'string' && msg.summary) t.summary = msg.summary;
+    this.tasks.set(id, t);
+    const status = msg.subtype === 'task_notification' ? (['completed', 'failed', 'stopped'].includes(msg.status) ? msg.status : 'completed') : 'running';
+    this.emitEvent({ t: 'task', taskId: id, status, description: t.description, kind: t.kind, tools: t.tools, tokens: t.tokens, lastTool: t.lastTool, summary: t.summary });
   }
 
   private async pump() {
@@ -298,6 +405,7 @@ export class Chat extends EventEmitter {
             this.emitEvent({ t: 'init', sessionId: msg.session_id, model: msg.model }); this.mgr.emit('change');
           }
           else if (msg.subtype === 'commands_changed') this.commands = msg.commands || [];
+          else if (msg.subtype === 'task_started' || msg.subtype === 'task_progress' || msg.subtype === 'task_notification' || msg.subtype === 'task_updated') this.onTask(msg);
           break;
         case 'stream_event': {
           const e = msg.event;
@@ -320,8 +428,10 @@ export class Chat extends EventEmitter {
         }
         case 'assistant': {
           const blocks: ContentBlock[] = (msg.message?.content || []).map((b: any) => b.type === 'text' ? { type: 'text', text: b.text }
-            : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input), description: typeof b.input?.description === 'string' ? b.input.description : undefined }
-            : b.type === 'thinking' ? { type: 'thinking' } : { type: b.type });
+            : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input), description: typeof b.input?.description === 'string' ? b.input.description : undefined,
+              edit: editPreview(b.name, b.input) || undefined }
+            : b.type === 'thinking' ? { type: 'thinking', text: typeof b.thinking === 'string' && b.thinking.trim() ? cut(b.thinking, 6000) : undefined } : { type: b.type });
+          for (const b of (msg.message?.content || [])) if (b.type === 'tool_use') this.trackTasks(b);
           for (const b of blocks) if (b.type === 'text') this.turnText += (this.turnText ? '\n\n' : '') + (b as any).text;
           if (blocks.length) this.emitEvent({ t: 'assistant', uuid: msg.uuid, blocks });
           break;
@@ -330,6 +440,7 @@ export class Chat extends EventEmitter {
           const c = msg.message?.content;
           if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result') {
             const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n') : '';
+            this.taskResult(b.tool_use_id, typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((x: any) => x?.text || '').join('\n') : '', !!b.is_error);
             // Enough to read a command's output in the chat, like the terminal shows it. The view previews a few lines and expands on click.
             this.emitEvent({ t: 'tool_result', toolUseId: b.tool_use_id, isError: !!b.is_error, text: text.slice(0, 8000), length: text.length });
           }
@@ -345,7 +456,7 @@ export class Chat extends EventEmitter {
             this.contextWindow = Math.max(0, ...models.map(m => m.contextWindow || 0)) || null;
           }
           if (usage) this.turn = usage;
-          this.emitEvent({ t: 'result', subtype: msg.subtype, cost: msg.total_cost_usd ?? null, duration: msg.duration_ms ?? null, turns: msg.num_turns ?? null, errors: msg.errors || null,
+          this.emitEvent({ t: 'result', subtype: msg.subtype, isError: !!msg.is_error, cost: msg.total_cost_usd ?? null, duration: msg.duration_ms ?? null, turns: msg.num_turns ?? null, errors: msg.errors || null,
             usage, total: this.total, context: this.context, contextWindow: this.contextWindow });
           // Fallback for asks the target answered in prose instead of via fleet_reply: only when the turn clearly belonged to that ask.
           for (const a of [...this.asksIn]) if (a.unambiguous && this.turnText.trim()) a.resolve(this.turnText.trim());

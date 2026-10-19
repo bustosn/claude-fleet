@@ -16,10 +16,10 @@ export function TitleBar() {
   const nextTheme = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
 
   return (
-    <header className="flex items-center gap-2 border-b border-line bg-surface px-3">
-      <button className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-hover" onClick={() => actions.go({ kind: 'overview' })} title="Overview">
-        <Anchor size={16} className="text-accent" aria-hidden="true" />
-        <span className="text-[14px] font-semibold tracking-tight">Fleet</span>
+    <header className="titlebar">
+      <button className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-hover" onClick={() => actions.go({ kind: 'overview' })} title="Overview">
+        <span className="logo-mark"><Anchor size={14} aria-hidden="true" /></span>
+        <span className="brand">Fleet</span>
         <span className={`dot ${live ? '' : ''}`} data-s={live ? 'done' : 'failed'} title={live ? 'connected' : 'reconnecting'} />
       </button>
       {port != null && port !== 7777 && <span className="chip warn num" title={`This page talks to the dev API on port ${port}, not the daily instance on 7777`}>dev {port}</span>}
@@ -27,7 +27,7 @@ export function TitleBar() {
         <SidebarIcon size={16} aria-hidden="true" />
       </button>
 
-      <button className="mx-auto flex h-7 w-full max-w-md items-center gap-2 rounded-full border border-line bg-bg px-3 text-[12px] text-fg-muted hover:border-line-strong" onClick={() => actions.setPalette(true)}>
+      <button className="search-pill" onClick={() => actions.setPalette(true)}>
         <Search size={13} aria-hidden="true" />
         <span className="flex-1 truncate text-left">Jump to a conversation, worktree, or action</span>
         <Kbd>Ctrl</Kbd><Kbd>K</Kbd>

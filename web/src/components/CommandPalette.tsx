@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, KeyRound, LayoutGrid, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
+import { GitBranch, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
@@ -22,6 +22,7 @@ export function CommandPalette() {
       { id: 'overview', label: 'Overview', hint: 'fleet board', icon: LayoutGrid, view: { kind: 'overview' } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
+      { id: 'new-task', label: 'New task', hint: 'queue work; a chat picks it up and reports back for review', icon: ListPlus, view: { kind: 'new-task' } },
       { id: 'terminal', label: 'New terminal', hint: 'open a shell in the folder you are looking at', icon: Terminal, run: () => openTerminal() },
       { id: 'new-dialogue', label: 'New dialogue', hint: 'two chats talk a topic through while you moderate', icon: Users, view: { kind: 'new-dialogue' } },
     ];

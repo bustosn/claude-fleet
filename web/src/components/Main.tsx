@@ -8,6 +8,7 @@ import { HubView } from '../views/HubView';
 import { TerminalView } from '../views/TerminalView';
 import { DialogueView } from '../views/DialogueView';
 import { NewDialogueView } from '../views/NewDialogue';
+import { NewTaskView } from '../views/NewTask';
 import { TabStrip } from './TabStrip';
 
 export function Main() {
@@ -24,6 +25,7 @@ export function Main() {
       {view.kind === 'terminal' && <TerminalView key={view.id} id={view.id} />}
       {view.kind === 'dialogue' && <DialogueView key={view.id} id={view.id} />}
       {view.kind === 'new-dialogue' && <NewDialogueView />}
+      {view.kind === 'new-task' && <NewTaskView key={view.cwd || ''} cwd={view.cwd} />}
       {view.kind === 'hub' && <HubView />}
     </main>
   );

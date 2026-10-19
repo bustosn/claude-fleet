@@ -17,6 +17,15 @@ export interface FleetConfig {
   terminal: { shell: string | null };
   /** Saved conversations idle this many days move to Archived on their own. 0 turns it off. */
   conversations: { archiveAfterDays: number };
+  jira: JiraConfig;
+}
+
+/** Jira Cloud (email + API token, REST v3) or Data Center (personal access token only, REST v2). Off without a baseUrl and token.
+ *  `repos` maps a project key to the folder its tickets are worked in; a ticket label naming a repo under reposRoot also works.
+ *  `jql` turns the watcher on: matching tickets become tasks, each picked up once. */
+export interface JiraConfig {
+  baseUrl: string; email: string; apiToken: string;
+  repos: Record<string, string>; jql: string; everyMinutes: number;
 }
 
 export const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -38,6 +47,13 @@ export function loadConfig(): FleetConfig {
     roles: raw.roles || {}, aws: raw.aws || {},
     terminal: { shell: raw.terminal?.shell ? String(raw.terminal.shell) : null },
     conversations: { archiveAfterDays: Number(raw.conversations?.archiveAfterDays ?? 14) || 0 },
+    jira: {
+      baseUrl: String(raw.jira?.baseUrl || '').replace(/\/+$/, ''), email: String(raw.jira?.email || ''),
+      // The token can stay out of the file.
+      apiToken: String(raw.jira?.apiToken || process.env.JIRA_API_TOKEN || ''),
+      repos: raw.jira?.repos && typeof raw.jira.repos === 'object' ? Object.fromEntries(Object.entries(raw.jira.repos).map(([k, v]) => [k.toUpperCase(), String(v)])) : {},
+      jql: String(raw.jira?.jql || '').trim(), everyMinutes: Math.max(1, Number(raw.jira?.everyMinutes) || 5),
+    },
   };
   return cfg;
 }

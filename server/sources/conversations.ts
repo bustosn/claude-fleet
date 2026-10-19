@@ -1,5 +1,18 @@
 import { listSessions, getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
-import type { ChatEvent, ContentBlock } from '../../shared/types.js';
+import type { ChatEvent, ContentBlock, EditPreview, TodoItem } from '../../shared/types.js';
+
+export const cut = (s: unknown, n = 4000) => { const t = typeof s === 'string' ? s : ''; return t.length > n ? t.slice(0, n) + '\n… (cut)' : t; };
+/** What a file edit changes, for a diff in the log and on the permission card. Null for anything that is not an edit. */
+export function editPreview(name: string, input: any): EditPreview | null {
+  if (!input || typeof input.file_path !== 'string') return null;
+  if (name === 'Edit') return { path: input.file_path, write: false, hunks: [{ old: cut(input.old_string), new: cut(input.new_string) }] };
+  if (name === 'MultiEdit' && Array.isArray(input.edits)) return { path: input.file_path, write: false, hunks: input.edits.slice(0, 20).map((e: any) => ({ old: cut(e?.old_string), new: cut(e?.new_string) })) };
+  if (name === 'Write') return { path: input.file_path, write: true, hunks: [{ old: '', new: cut(input.content) }] };
+  return null;
+}
+export const todoList = (name: string, input: any): TodoItem[] | undefined => name === 'TodoWrite' && Array.isArray(input?.todos)
+  ? input.todos.map((t: any) => ({ content: String(t?.content ?? ''), status: t?.status === 'completed' || t?.status === 'in_progress' ? t.status : 'pending', activeForm: String(t?.activeForm ?? t?.content ?? '') })) : undefined;
+
 
 export interface SavedConversation {
   sessionId: string; title: string; firstPrompt: string; cwd: string; gitBranch: string | null;
@@ -53,7 +66,8 @@ export async function conversationHistory(sessionId: string, keep = 300): Promis
       }
     } else if (m.type === 'assistant' && Array.isArray(c)) {
       const blocks: ContentBlock[] = c.map((b: any) => b.type === 'text' ? { type: 'text', text: b.text }
-        : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input), description: typeof b.input?.description === 'string' ? b.input.description : undefined }
+        : b.type === 'tool_use' ? { type: 'tool_use', id: b.id, name: b.name, input: summarizeInput(b.input), description: typeof b.input?.description === 'string' ? b.input.description : undefined,
+          edit: editPreview(b.name, b.input) || undefined }
         : { type: b.type }).filter((b: ContentBlock) => b.type !== 'thinking');
       if (blocks.length) out.push({ t: 'assistant', uuid: m.uuid, blocks, at });
     }

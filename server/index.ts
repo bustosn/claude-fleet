@@ -11,8 +11,10 @@ import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
 import { TerminalManager, type Terminal } from './terminals.js';
 import { DialogueManager } from './dialogue.js';
+import { TaskManager } from './tasks.js';
+import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
-import { openFile, openFolder, preview, rawImage, statRefs } from './files.js';
+import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
 import { run, errText } from './util.js';
 
 // Fleet tools are deliberately auto-approved via allowedTools; the SDK warns about that on every chat start.
@@ -34,6 +36,19 @@ terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
 collector.dialogues = dialogues;
 dialogues.on('change', () => collector.publish());
+const tasks = new TaskManager(chats, config);
+collector.tasks = tasks;
+tasks.on('change', () => collector.publish());
+// Where a ticket gets worked: jira.repos by project key, else a ticket label that names a repo Fleet knows.
+const folderFor = (project: string, labels: string[]) => {
+  const mapped = config.jira.repos[project.toUpperCase()];
+  if (mapped && fs.existsSync(mapped)) return mapped;
+  const names = new Set(labels.map(l => l.toLowerCase()));
+  return collector.repos.find(r => names.has(r.name.toLowerCase()))?.path || null;
+};
+const jira = new JiraWatcher(config.jira, new JiraClient(config.jira), tasks, folderFor, path.join(stateDir, `jira-claimed-${config.port}.json`));
+collector.jira = jira;
+jira.on('change', () => collector.publish());
 // Participant chats start here by default: no project CLAUDE.md, so the two sides argue the topic, not a repo.
 const scratchDir = path.join(stateDir, 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
@@ -241,10 +256,23 @@ app.post('/api/chats/:id/send', (req, res) => {
     : fromTitle ? { kind: 'manual' as const, fromChatId: '', fromTitle } : undefined;
   try { c.send(text, origin, attachments); res.json({ ok: true }); } catch (err: any) { res.status(409).json({ error: err.message }); }
 });
+const answersOf = (a: unknown): Record<string, string> | undefined => a && typeof a === 'object' && !Array.isArray(a)
+  ? Object.fromEntries(Object.entries(a).filter(([, v]) => typeof v === 'string')) as Record<string, string> : undefined;
 app.post('/api/chats/:id/permission', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
-  res.json({ ok: c.resolvePermission(String(req.body?.id || ''), req.body?.behavior === 'allow' ? 'allow' : 'deny', req.body?.message) });
+  const b = req.body || {};
+  res.json({ ok: c.resolvePermission(String(b.id || ''), { behavior: b.behavior === 'allow' ? 'allow' : 'deny', message: b.message ? String(b.message) : undefined, answers: answersOf(b.answers), always: !!b.always, mode: b.mode ? String(b.mode) : undefined }) });
 });
+const guarded = (fn: (c: import('./chat.js').Chat, req: Request) => Promise<unknown>) => async (req: Request, res: Response) => {
+  const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
+  try { res.json(await fn(c, req)); } catch (e: any) { res.status(409).json({ error: String(e.message || e) }); }
+};
+app.post('/api/chats/:id/mode', guarded(async (c, req) => { await c.setPermissionMode(String(req.body?.mode || '')); return c.summary(); }));
+app.post('/api/chats/:id/effort', guarded(async (c, req) => { await c.setEffort(req.body?.effort ? String(req.body.effort) : null); return c.summary(); }));
+app.get('/api/chats/:id/context', guarded(c => c.contextUsage()));
+app.post('/api/chats/:id/rewind', guarded((c, req) => c.rewind(String(req.body?.uuid || ''), req.body?.dryRun !== false)));
+app.post('/api/chats/:id/tasks/:taskId/stop', guarded(async (c, req) => { await c.stopTask(req.params.taskId); return { ok: true }; }));
+app.get('/api/chats/:id/files/suggest', guarded(async (c, req) => suggestFiles(c.cwd, String(req.query.q || ''))));
 // `!` commands: run in the chat's own shell. Output streams on the chat's event feed; the model only sees it when sent.
 app.post('/api/chats/:id/shell', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).json({ error: 'no such chat' });
@@ -293,6 +321,38 @@ for (const action of ['pause', 'resume', 'stop', 'steer', 'extend'] as const) {
 }
 app.delete('/api/dialogues/:id', (req, res) => dialogues.remove(req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'no such dialogue' }));
 
+// Board tasks: queued work that Fleet hands to a chat when a slot frees up. The chat reports back; the person approves or sends it back.
+// With a ticket, the task is built from the Jira issue and `prompt` is only extra notes; the folder can come from jira.repos.
+app.post('/api/tasks', async (req, res) => {
+  const b = req.body || {};
+  const dir = b.cwd ? String(b.cwd) : b.ticket ? '' : config.reposRoot;
+  if (dir && !fs.existsSync(dir)) return res.status(400).json({ error: `cwd not found: ${dir}` });
+  try {
+    if (b.ticket) {
+      const key = ticketKey(String(b.ticket));
+      if (!key) return res.status(400).json({ error: `Not a ticket key or link: ${b.ticket}` });
+      return res.json(await jira.taskFor(key, { cwd: dir || undefined, notes: String(b.prompt || ''), model: b.model, permissionMode: b.permissionMode, isolate: b.isolate !== false }));
+    }
+    res.json(tasks.add({ title: b.title, prompt: b.prompt, cwd: dir, model: b.model, permissionMode: b.permissionMode, isolate: b.isolate !== false }));
+  } catch (err) { res.status(400).json({ error: errText(err) }); }
+});
+app.get('/api/jira/issue/:key', async (req, res) => {
+  const key = ticketKey(req.params.key);
+  if (!key) return res.status(400).json({ error: 'not a ticket key' });
+  try { res.json(await jira.preview(key)); } catch (err) { res.status(400).json({ error: errText(err) }); }
+});
+app.post('/api/jira/poll', async (_req, res) => res.json(await jira.poll()));
+app.post('/api/tasks/clear-done', (_req, res) => { tasks.clearDone(); res.json({ ok: true }); });
+for (const action of ['approve', 'send-back', 'retry', 'start'] as const) {
+  app.post(`/api/tasks/:id/${action}`, (req, res) => {
+    try {
+      const id = req.params.id;
+      res.json(action === 'approve' ? tasks.approve(id) : action === 'send-back' ? tasks.sendBack(id, String(req.body?.text || '')) : action === 'retry' ? tasks.retry(id) : tasks.startNow(id));
+    } catch (err) { res.status(400).json({ error: errText(err) }); }
+  });
+}
+app.delete('/api/tasks/:id', (req, res) => { try { tasks.remove(req.params.id); res.json({ ok: true }); } catch (err) { res.status(404).json({ error: errText(err) }); } });
+
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.
 app.get('/api/terminals', (_req, res) => res.json(terminals.list()));
 app.post('/api/terminals', (req, res) => {
@@ -337,6 +397,7 @@ if (fs.existsSync(webDist)) {
 collector.start();
 chats.persistTo(path.join(stateDir, `chats-${config.port}.json`));
 dialogues.persistTo(path.join(stateDir, `dialogues-${config.port}.json`));
+tasks.persistTo(path.join(stateDir, `tasks-${config.port}.json`));
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
@@ -351,5 +412,9 @@ server.listen(config.port, '127.0.0.1', () => {
   if (reopened) console.log(`reopened ${reopened} chat(s) from the previous run`);
   const kept = dialogues.reopen();
   if (kept) console.log(`restored ${kept} dialogue(s); live ones are paused until resumed`);
+  const board = tasks.reopen();
+  if (board) console.log(`restored ${board} task(s)`);
+  jira.start();
+  if (jira.status.jql) console.log(`watching Jira every ${config.jira.everyMinutes} min: ${jira.status.jql}`);
 });
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); process.exit(0); });

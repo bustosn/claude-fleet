@@ -1,5 +1,5 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
-import { Bot, FolderGit2, GitBranch, KeyRound, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
+import { Bot, FolderGit2, GitBranch, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
 import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
@@ -18,7 +18,7 @@ export function TabStrip() {
 
   if (tabs.length === 0) return null;
   return (
-    <div ref={strip} role="tablist" aria-label="Open views" className="flex h-[34px] shrink-0 items-stretch overflow-x-auto border-b border-line bg-surface [scrollbar-width:thin]">
+    <div ref={strip} role="tablist" aria-label="Open views" className="tabstrip shrink-0">
       {tabs.map(t => <TabButton key={t.key} tab={t} active={t.key === active} label={tabLabel(t.view, snap)} />)}
       <button className="iconbtn my-auto ml-1 shrink-0" style={{ width: 26, height: 26 }} title="New chat" aria-label="New chat" onClick={() => actions.go({ kind: 'new-chat' })}><Plus size={14} aria-hidden="true" /></button>
       <button className="iconbtn my-auto shrink-0" style={{ width: 26, height: 26 }} title="New terminal (in the current worktree or chat's folder)" aria-label="New terminal" onClick={() => openTerminal()}><Terminal size={14} aria-hidden="true" /></button>
@@ -30,14 +30,15 @@ function TabButton({ tab, active, label }: { tab: Tab; active: boolean; label: {
   const Icon = iconFor(tab.view, label.state);
   const close = (e: MouseEvent) => { e.stopPropagation(); actions.closeTab(tab.key); };
   const onAux = (e: MouseEvent) => { if (e.button === 1) { e.preventDefault(); actions.closeTab(tab.key); } };
+  // Middle mousedown would start the browser's autoscroll on an overflowing strip; cancel it so auxclick can close.
+  const onDown = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
   return (
     <div
       role="tab" aria-selected={active} tabIndex={0} title={label.hint}
-      className={`group relative flex max-w-[220px] min-w-[120px] shrink-0 cursor-pointer items-center gap-1.5 border-r border-line pl-3 pr-1 text-[12px] select-none ${active ? 'bg-bg text-fg' : 'text-fg-muted hover:bg-hover hover:text-fg'}`}
-      onClick={() => actions.go(tab.view)} onAuxClick={onAux}
+      className="group tab"
+      onClick={() => actions.go(tab.view)} onMouseDown={onDown} onAuxClick={onAux}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.go(tab.view); } if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); actions.closeTab(tab.key); } }}
     >
-      {active && <span className="absolute inset-x-0 top-0 h-[2px] bg-accent" aria-hidden="true" />}
       {label.state ? <span className="dot shrink-0" data-s={label.state} aria-hidden="true" /> : <Icon size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />}
       <span className="min-w-0 flex-1 truncate">{label.text}</span>
       <button className={`iconbtn shrink-0 ${active ? '' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'}`} style={{ width: 20, height: 20 }} aria-label={`Close ${label.text}`} title="Close" onClick={close}>
@@ -54,6 +55,7 @@ function iconFor(v: View, state?: string) {
   if (v.kind === 'terminal') return Terminal;
   if (v.kind === 'dialogue' || v.kind === 'new-dialogue') return Users;
   if (v.kind === 'overview') return FolderGit2;
+  if (v.kind === 'new-task') return ListPlus;
   return MessageSquare;
 }
 
@@ -80,6 +82,7 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
       return { text: shortPath(v.path).split('/').pop() || v.path, hint: v.path };
     }
     case 'new-dialogue': return { text: 'New dialogue', hint: 'Two chats talk a topic through' };
+    case 'new-task': return { text: 'New task', hint: 'Queue work for the board' };
     case 'dialogue': {
       const d = snap?.dialogues.find(x => x.id === v.id);
       if (!d) return { text: 'Dialogue', hint: 'Dialogue (no longer known)', state: 'ended' };

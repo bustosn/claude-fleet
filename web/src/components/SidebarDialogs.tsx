@@ -22,8 +22,8 @@ export const openMove = (sessionId: string, title: string, worktree: string | nu
 export async function forwardLastReply(sessionId: string, from: { chatId?: string; title: string }) {
   try {
     const history = await api.history(sessionId);
-    const last = [...history].reverse().find(e => e.t === 'assistant' && e.blocks.some(b => 'text' in b && b.text.trim()));
-    const text = last?.t === 'assistant' ? last.blocks.map(b => ('text' in b ? b.text : '')).filter(Boolean).join('\n\n') : '';
+    const last = [...history].reverse().find(e => e.t === 'assistant' && e.blocks.some(b => 'text' in b && b.text?.trim()));
+    const text = last?.t === 'assistant' ? last.blocks.map(b => ('text' in b ? b.text ?? '' : '')).filter(Boolean).join('\n\n') : '';
     openForward(text, from);
   } catch (err: any) { actions.toast(err.message, 'error'); }
 }
