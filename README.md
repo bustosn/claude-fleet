@@ -8,10 +8,12 @@ Node + TypeScript server, React + TypeScript + Vite + Tailwind web app. No frame
 
 On Windows, from a clone: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`. It installs Git, Node.js and Claude Code if missing, writes the config, builds, and starts Fleet at logon. Step by step, including a version to hand to Claude Code: [INSTALL.md](INSTALL.md).
 
+On a Mac: [INSTALL-MAC.md](INSTALL-MAC.md) has the commands, an optional start-at-login setup, and a version to hand to Claude Code. The repo is private, so your GitHub account needs access first. (Untested on a Mac so far.)
+
 By hand, on any OS (Node 20+, git, and a signed-in Claude Code):
 
 ```
-cp fleet.config.example.json fleet.config.json   # once, then set reposRoot
+cp fleet.config.example.json fleet.config.json   # once, then set reposRoot (the folder holding your git repos) and claudeHome to real paths
 npm install
 npm run build      # once, builds the web app into dist/web
 npm start          # daily instance: http://127.0.0.1:7777
