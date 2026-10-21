@@ -56,6 +56,8 @@ export class Terminal extends EventEmitter {
 export class TerminalManager extends EventEmitter {
   private terms = new Map<string, Terminal>();
   constructor(private shell: string | null) { super(); }
+  /** What a new tab runs: the configured shell, else the platform default. */
+  get shellPath(): string { return this.shell || defaultShell(); }
 
   open(opts: { cwd: string; shell?: string | null; cols?: number; rows?: number }): Terminal {
     const t = new Terminal({ cwd: opts.cwd, shell: opts.shell || this.shell || defaultShell(), cols: opts.cols, rows: opts.rows });

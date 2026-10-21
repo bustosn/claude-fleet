@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Anchor, KeyRound, LayoutGrid, Moon, PanelLeft, PanelLeftClose, Search, Sun, SunMoon } from 'lucide-react';
 import { actions, useStore } from '../lib/store';
 import { Kbd } from './ui';
+import { MOD, isMac } from '../lib/platform';
 
 export function TitleBar() {
   const collapsed = useStore(s => s.sidebarCollapsed);
@@ -23,14 +24,14 @@ export function TitleBar() {
         <span className={`dot ${live ? '' : ''}`} data-s={live ? 'done' : 'failed'} title={live ? 'connected' : 'reconnecting'} />
       </button>
       {port != null && port !== 7777 && <span className="chip warn num" title={`This page talks to the dev API on port ${port}, not the daily instance on 7777`}>dev {port}</span>}
-      <button className="iconbtn" aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'} title="Ctrl+B" onClick={actions.toggleSidebar}>
+      <button className="iconbtn" aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'} title={`${MOD}B`} onClick={actions.toggleSidebar}>
         <SidebarIcon size={16} aria-hidden="true" />
       </button>
 
       <button className="search-pill" onClick={() => actions.setPalette(true)}>
         <Search size={13} aria-hidden="true" />
         <span className="flex-1 truncate text-left">Jump to a conversation, worktree, or action</span>
-        <Kbd>Ctrl</Kbd><Kbd>K</Kbd>
+        <Kbd>{isMac ? '⌘' : 'Ctrl'}</Kbd><Kbd>K</Kbd>
       </button>
 
       <nav className="flex items-center gap-1">

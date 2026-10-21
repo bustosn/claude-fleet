@@ -3,6 +3,7 @@ import { api, type JiraIssuePreview } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { CodeTextarea } from '../components/CodeTextarea';
+import { MOD } from '../lib/platform';
 
 const keyOf = (s: string) => /\b([A-Z][A-Z0-9_]{1,19}-\d{1,7})\b/.exec(s.toUpperCase())?.[1] || null;
 
@@ -75,7 +76,7 @@ export function NewTaskView({ cwd }: { cwd?: string }) {
       )}
       <label className="mb-3 grid gap-1 text-[12px] text-fg-muted">{key ? <>Extra notes <span className="text-fg-faint">(optional; the agent reads the ticket)</span></> : 'What should be done'}
         <CodeTextarea className="input" wrapClass="rich-boxed" rows={key ? 4 : 8} value={prompt} onChange={setPrompt}
-          placeholder={key ? 'Anything the ticket does not say: where to look, what to avoid. Ctrl+Enter starts it.' : 'Describe the task and what done looks like: the change, how to check it, anything off limits. Ctrl+Enter queues it.'}
+          placeholder={key ? `Anything the ticket does not say: where to look, what to avoid. ${MOD}Enter starts it.` : `Describe the task and what done looks like: the change, how to check it, anything off limits. ${MOD}Enter queues it.`}
           onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!busy) e.currentTarget.form?.requestSubmit(); } }} />
       </label>
       <label className="mb-3 grid gap-1 text-[12px] text-fg-muted">Working directory

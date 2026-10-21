@@ -9,8 +9,9 @@ import type { Terminal, TerminalManager } from './terminals.js';
 const MAX_UI_CHARS = 60_000;
 /** What rides along to the model: the tail of the output. */
 const MAX_CTX_LINES = 200, MAX_CTX_CHARS = 8_000;
-/** The script did not print its start marker: a parse error, or the shell is wedged. */
-const START_TIMEOUT_MS = 4_000;
+/** The script did not print its start marker: a parse error, or the shell is wedged. A shell that just started gets longer:
+ *  a Mac login shell reads .zprofile/.zshrc first, and nvm or oh-my-zsh there can take several seconds. */
+const START_TIMEOUT_MS = 4_000, FRESH_SHELL_TIMEOUT_MS = 20_000;
 
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]|[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f]/g;
 /** Plain text: escapes gone, CRLF to LF, and a bare CR keeps only what was drawn last on that line (progress bars). */
@@ -43,7 +44,10 @@ export class ShellRunner extends EventEmitter {
     if (this.term && (this.term.exitCode != null || !this.terminals.get(this.term.id))) this.term = null;
     if (!this.term) {
       // Wide, so the shell does not wrap captured lines; a tab that attaches resizes it to what it shows.
-      this.term = this.terminals.open({ cwd: this.cwd, cols: 400, rows: 50 });
+      // The command script is PowerShell or POSIX sh; a fish or nushell default gets zsh/bash for `!` commands instead.
+      const sh = this.terminals.shellPath;
+      const shell = /^(powershell|pwsh|sh|bash|zsh|dash|ksh)(\.exe)?$/i.test(path.basename(sh)) ? sh : process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash';
+      this.term = this.terminals.open({ cwd: this.cwd, shell, cols: 400, rows: 50 });
       this.term.setTitle(`! ${this.title()}`);
     }
     return this.term;
@@ -115,7 +119,8 @@ export class ShellRunner extends EventEmitter {
     const onExit = () => finish(null, run.output + '\n(the shell exited)');
     // Prompts and the echoed dot-source line are noise in the diagnostic; the error the shell printed is the point.
     const noise = (s: string) => s.split('\n').filter(l => !/^PS [^>]*>+\s*(\. '.*')?\s*$/.test(l.trim())).join('\n').trim();
-    const startGuard = setTimeout(() => { if (!started) finish(null, `(the shell did not start the command; what it printed instead:)\n${noise(clean(raw))}`); }, START_TIMEOUT_MS);
+    const startGuard = setTimeout(() => { if (!started) finish(null, `(the shell did not start the command; what it printed instead:)\n${noise(clean(raw))}`); },
+      Date.now() - t.startedAt < FRESH_SHELL_TIMEOUT_MS ? FRESH_SHELL_TIMEOUT_MS : START_TIMEOUT_MS);
     this.interruptCurrent = () => {
       // What was there when Ctrl+C went in is the output; what follows is the shell's ^C and a fresh prompt.
       run.interrupted = true; const before = buf; t.write('\x03');

@@ -3,6 +3,7 @@ import { ListPlus } from 'lucide-react';
 import { api, type Session, type TaskSummary } from '../lib/api';
 import { age, shortPath } from '../lib/format';
 import { md } from '../lib/markdown';
+import { MOD } from '../lib/platform';
 import { actions, useStore } from '../lib/store';
 import { Status, Empty } from '../components/ui';
 
@@ -98,7 +99,7 @@ function TaskCard({ t }: { t: TaskSummary }) {
       )}
       {replying && (
         <textarea className="input mt-1.5 w-full text-[12px]" rows={3} autoFocus value={reply} onChange={e => setReply(e.target.value)}
-          placeholder={t.status === 'blocked' ? 'Your answer. Ctrl+Enter sends.' : 'What to change. Ctrl+Enter sends.'}
+          placeholder={t.status === 'blocked' ? `Your answer. ${MOD}Enter sends.` : `What to change. ${MOD}Enter sends.`}
           onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && reply.trim()) { e.preventDefault(); sendBack(); } if (e.key === 'Escape') setReplying(false); }} />
       )}
       <div className="mt-1.5 flex flex-wrap items-center gap-1">

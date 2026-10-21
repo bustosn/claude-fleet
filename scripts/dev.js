@@ -9,8 +9,11 @@ const port = process.env.FLEET_PORT || '7778';
 const env = { ...process.env, FLEET_PORT: port };
 const bin = name => path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
 
-const server = spawn(bin('tsx'), ['watch', path.join(root, 'server', 'index.ts')], { stdio: 'inherit', env, shell: true });
-const web = spawn(bin('vite'), ['--config', path.join(root, 'web', 'vite.config.ts')], { stdio: 'inherit', env, shell: true });
+// Windows needs a shell to run the .cmd shims, so paths are quoted for it; elsewhere the binaries run directly.
+const win = process.platform === 'win32';
+const q = p => win ? `"${p}"` : p;
+const server = spawn(q(bin('tsx')), ['watch', q(path.join(root, 'server', 'index.ts'))], { stdio: 'inherit', env, shell: win });
+const web = spawn(q(bin('vite')), ['--config', q(path.join(root, 'web', 'vite.config.ts'))], { stdio: 'inherit', env, shell: win });
 
 const stop = () => { server.kill(); web.kill(); };
 process.on('SIGINT', () => { stop(); process.exit(0); });

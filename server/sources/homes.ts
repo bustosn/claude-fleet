@@ -98,9 +98,10 @@ function nameRe(name: string): RegExp | null {
   return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'i');
 }
 
-// Windows paths inside JSON come escaped (C:\\Users\\...) or forward-slashed; both are accepted.
+// Windows paths inside JSON come escaped (C:\\Users\\...) or forward-slashed; both are accepted. POSIX paths (/Users/..., a Mac)
+// count when they start the token, so the path part of a URL or of a relative a/b/c does not.
 // Only file paths count: repo names in the text are no signal, since CLAUDE.md and memory mention every repo in every transcript.
-const PATH_RE = /[A-Za-z]:(?:\\\\|\\|\/)(?:[^"'\s\\/]+(?:\\\\|\\|\/))+[^"'\s\\/]*/g;
+const PATH_RE = /[A-Za-z]:(?:\\\\|\\|\/)(?:[^"'\s\\/]+(?:\\\\|\\|\/))+[^"'\s\\/]*|(?<![\w.:/\\-])\/(?:[^"'\s\\/]+\/)+[^"'\s\\/]*/g;
 
 function mostMentioned(text: string, worktrees: WorktreeRef[]): string | null {
   const counts = new Map<string, number>();

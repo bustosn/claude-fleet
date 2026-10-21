@@ -3,6 +3,7 @@ import { api } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Empty } from '../components/ui';
+import { MOD } from '../lib/platform';
 import { CodeTextarea } from '../components/CodeTextarea';
 import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, readAttachment, toSend, type Pending } from '../components/Attachments';
 
@@ -29,7 +30,7 @@ export function NewChatView({ cwd }: { cwd?: string }) {
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
 
-  // Same as the chat composer: files dropped or pasted (Ctrl+V, or Alt+V for a clipboard image) go with the first message.
+  // Same as the chat composer: files dropped or pasted (Ctrl+V / Cmd+V, or Alt+V / Option+V for a clipboard image) go with the first message.
   const attach = async (files: File[]) => {
     const tooBig = files.filter(f => f.size > MAX_ATTACHMENT);
     if (tooBig.length) actions.toast(`Too large to attach (over ${MAX_ATTACHMENT / 1024 / 1024} MB): ${tooBig.map(f => f.name).join(', ')}`, 'error');
@@ -38,7 +39,7 @@ export function NewChatView({ cwd }: { cwd?: string }) {
   };
   const pasteImage = async () => {
     try { const files = await clipboardImages(); if (files.length) attach(files); else actions.toast('No image on the clipboard.'); }
-    catch { actions.toast('The browser blocked clipboard access. Ctrl+V pastes images too.', 'error'); }
+    catch { actions.toast(`The browser blocked clipboard access. ${MOD}V pastes images too.`, 'error'); }
   };
   const isFileDrag = (e: DragEvent) => e.dataTransfer.types.includes('Files');
 
@@ -78,7 +79,7 @@ export function NewChatView({ cwd }: { cwd?: string }) {
         <CodeTextarea className="input" wrapClass="rich-boxed" rows={5} value={text} onChange={setText} placeholder="What should this chat work on? Enter starts the chat, Shift+Enter adds a line. Drop files or paste images to attach."
           onPaste={e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); attach(files); } }}
           onKeyDown={e => {
-            if (e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteImage(); return; }
+            if (e.altKey && !e.ctrlKey && e.code === 'KeyV') { e.preventDefault(); pasteImage(); return; }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey || e.currentTarget.dataset.code !== 'true')) { e.preventDefault(); if (!busy && dir) e.currentTarget.form?.requestSubmit(); }
           }} />
       </label>

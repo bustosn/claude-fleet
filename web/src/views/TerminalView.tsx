@@ -11,10 +11,9 @@ import { shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { Status } from '../components/ui';
+import { isMac } from '../lib/platform';
 
 type Link = 'connecting' | 'live' | 'exited' | 'lost';
-
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** xterm draws its own colors, so it reads the same tokens the rest of the app uses and follows the theme switch. */
 function themeFromCss() {

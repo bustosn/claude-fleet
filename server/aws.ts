@@ -6,7 +6,10 @@ import { approveDeviceLogin } from './awsApprove.js';
 import type { AwsConfig } from './config.js';
 import type { AwsRun, AwsStatus } from '../shared/types.js';
 
-const BASH = 'C:/Program Files/Git/bin/bash.exe';
+const IS_WIN = process.platform === 'win32';
+const BASH = IS_WIN ? 'C:/Program Files/Git/bin/bash.exe' : '/bin/bash';
+const CHROME = IS_WIN ? 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+  : process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/usr/bin/google-chrome';
 
 // AWS credential refresh: silent path first (SSO refresh token), then a device-code login approved in the user's normal browser.
 export class AwsCreds {
@@ -15,7 +18,7 @@ export class AwsCreds {
   login: ChildProcess | null = null; private loginDone: Promise<void> | null = null;
 
   constructor(cfg: Partial<AwsConfig>, stateDir: string) {
-    this.cfg = { profile: '', credProfile: 'default', resetScript: '', resetSh: path.join(os.homedir(), 'reset.sh'), teleportScript: '', ssoRegion: 'us-east-1', chromePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    this.cfg = { profile: '', credProfile: 'default', resetScript: '', resetSh: path.join(os.homedir(), 'reset.sh'), teleportScript: '', ssoRegion: 'us-east-1', chromePath: CHROME,
       autoApprove: false, autoRefresh: true, autoRefreshMinutesBefore: 60, ...cfg };
     this.stateDir = stateDir; this.profileDir = path.join(stateDir, 'chrome-aws-profile');
     if (this.cfg.autoRefresh && this.enabled) setInterval(() => this.autoRefreshTick().catch(() => {}), 10 * 60000);
@@ -63,13 +66,21 @@ export class AwsCreds {
   }
 
   // The user's own reset.sh (AWS login, Teleport, DB tunnels) needs a real console for winpty and the browser prompts, and the server has none,
-  // so it gets its own visible Git Bash window. The window stays open at the end so the output can be read.
+  // so it gets its own visible window: Git Bash on Windows, Terminal on a Mac. The window stays open at the end so the output can be read.
   openReset() {
+    if (!this.enabled) return;
+    this.cachedAt = 0;
     const script = this.cfg.resetSh.replace(/\\/g, '/');
+    if (process.platform === 'darwin') {
+      const cmd = `bash '${script.replace(/'/g, `'\\''`)}'`;
+      const applescript = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      detached('osascript', ['-e', `tell application "Terminal" to do script ${applescript(cmd)}`, '-e', 'tell application "Terminal" to activate']);
+      return;
+    }
+    if (!IS_WIN) return;
     const bash = BASH.replace(/\//g, '\\');
     const line = `/d /s /c "start "Fleet reset" "${bash}" -l -c "bash '${script}'; echo; read -p 'Finished. Press Enter to close. '""`;
-    spawn('cmd.exe', [line], { cwd: os.homedir(), windowsVerbatimArguments: true, detached: true, stdio: 'ignore' }).unref();
-    this.cachedAt = 0;
+    detached('cmd.exe', [line], { cwd: os.homedir(), windowsVerbatimArguments: true });
   }
 
   // Only expiry metadata is read from the SSO cache; tokens never leave this function.
@@ -184,4 +195,11 @@ function exec(cmd: string, args: string[], opts: Record<string, unknown> = {}): 
     (err, stdout, stderr) => err ? reject(Object.assign(err, { stdout, stderr })) : resolve(String(stdout))));
 }
 function short(err: any): string { return String(err?.stderr || err?.stdout || err?.message || err).replace(/\r/g, '').trim().split('\n').filter(Boolean).slice(-3).join(' | ').slice(0, 400); }
-function openInBrowser(url: string) { spawn('cmd', ['/c', 'start', '', url], { windowsHide: true, detached: true, stdio: 'ignore' }).unref(); }
+function openInBrowser(url: string) {
+  if (IS_WIN) detached('cmd', ['/c', 'start', '', url], { windowsHide: true });
+  else detached(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
+}
+// A program that cannot start (wrong OS, not installed) must not take the server down with an unhandled 'error' event.
+function detached(cmd: string, args: string[], opts: Record<string, unknown> = {}) {
+  spawn(cmd, args, { ...opts, detached: true, stdio: 'ignore' }).on('error', err => console.error(`fleet: could not run ${cmd}: ${err.message}`)).unref();
+}

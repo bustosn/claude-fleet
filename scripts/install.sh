@@ -132,7 +132,8 @@ else
   repos_root="${repos_root/#\~/$HOME}"
   [ -d "$repos_root" ] || fail "$repos_root is not a folder."
   repos_root="$(cd "$repos_root" && pwd)"
-  node -e 'const fs=require("fs");const [ex,out,repos,home,port]=process.argv.slice(1);const c=JSON.parse(fs.readFileSync(ex,"utf8"));c.reposRoot=repos;c.claudeHome=home;c.port=Number(port);fs.writeFileSync(out,JSON.stringify(c,null,2)+"\n")' \
+  # The example's Windows-only values (AWS reset script, Chrome path, a sample Jira repo) are dropped; Fleet's Mac defaults apply.
+  node -e 'const fs=require("fs");const [ex,out,repos,home,port]=process.argv.slice(1);const c=JSON.parse(fs.readFileSync(ex,"utf8"));c.reposRoot=repos;c.claudeHome=home;c.port=Number(port);if(c.aws){c.aws.resetScript="";delete c.aws.chromePath}if(c.jira)c.jira.repos={};fs.writeFileSync(out,JSON.stringify(c,null,2)+"\n")' \
     "$root/fleet.config.example.json" "$config" "$repos_root" "$HOME/.claude" "$port" || fail 'could not write fleet.config.json'
   ok "repos in $repos_root, port $port"
 fi

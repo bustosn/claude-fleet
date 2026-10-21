@@ -16,7 +16,8 @@ export function timeLeft(iso: string | null): { text: string; level: 'ok' | 'war
   return { text: h ? `${h}h ${m}m` : `${m}m`, level: h < 1 ? 'crit' : h < 2 ? 'warn' : 'ok' };
 }
 
-export const shortPath = (p: string | null | undefined) => (p || '').replace(/\\/g, '/').replace(/^C:\/Users\/[^/]+\//i, '~/').replace(/^C:\/Users\/[^/]+$/i, '~');
+/** The home folder as ~: C:/Users/<you> on Windows, /Users/<you> on a Mac, /home/<you> on Linux. */
+export const shortPath = (p: string | null | undefined) => (p || '').replace(/\\/g, '/').replace(/^(?:[A-Z]:\/Users|\/Users|\/home)\/[^/]+(?=\/|$)/i, '~');
 
 /** 950 → "950", 12345 → "12.3k", 123456 → "123k", 1500000 → "1.50M". */
 export const fmtTokens = (n: number) => n < 1000 ? String(Math.round(n)) : n < 10000 ? `${(n / 1000).toFixed(1)}k` : n < 1e6 ? `${Math.round(n / 1000)}k` : `${(n / 1e6).toFixed(2)}M`;

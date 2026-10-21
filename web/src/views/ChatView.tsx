@@ -6,6 +6,7 @@ import { md, esc, fileRefs, csvToMarkdownTable, userTables } from '../lib/markdo
 import { fmtTokens, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { Status, WorktreePicker } from '../components/ui';
+import { MOD, modKey } from '../lib/platform';
 import { ForwardDialog } from '../components/SidebarDialogs';
 import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, fmtBytes, readAttachment, toSend, type Pending } from '../components/Attachments';
 import type { AskQuestion, EditPreview, TodoItem, TokenUsage } from '../../../shared/types';
@@ -141,12 +142,12 @@ export function ChatView({ chatId }: { chatId: string }) {
     const read = await Promise.all(files.filter(f => f.size <= MAX_ATTACHMENT).map(readAttachment));
     if (read.length) setAttachments(a => [...a, ...read]);
   };
-  // Alt+V, as in Claude Code on Windows. The browser asks once for clipboard access; Ctrl+V needs no permission and works too.
+  // Alt+V (Option+V on a Mac), as in Claude Code. The browser asks once for clipboard access; Ctrl+V / Cmd+V needs no permission and works too.
   const pasteImage = async () => {
     try {
       const files = await clipboardImages();
       if (files.length) attach(files); else dispatch({ type: 'sys', text: 'No image on the clipboard.' });
-    } catch { dispatch({ type: 'sys', text: 'The browser blocked clipboard access. Ctrl+V pastes images too.', err: true }); }
+    } catch { dispatch({ type: 'sys', text: `The browser blocked clipboard access. ${MOD}V pastes images too.`, err: true }); }
   };
   const isFileDrag = (e: DragEvent) => e.dataTransfer.types.includes('Files');
 
@@ -197,7 +198,7 @@ export function ChatView({ chatId }: { chatId: string }) {
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); pickCommand(matches[Math.min(cmdIndex, matches.length - 1)]); return; }
       if (e.key === 'Escape') { e.preventDefault(); setCmdDismissed(true); return; }
     }
-    if (e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteImage(); return; }
+    if (e.altKey && !e.ctrlKey && e.code === 'KeyV') { e.preventDefault(); pasteImage(); return; }
     if (e.key === 'Escape' && shellRunning) { e.preventDefault(); api.shellInterrupt(chatId).catch(() => {}); return; }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && bangHistory.length && (text === '' || (bang && !text.includes('\n')))) {
       const next = e.key === 'ArrowUp' ? Math.min(histIdx + 1, bangHistory.length - 1) : Math.max(histIdx - 1, -1);
@@ -274,7 +275,7 @@ export function ChatView({ chatId }: { chatId: string }) {
     const a = (e.target as HTMLElement).closest<HTMLElement>('a.file-link'); if (!a?.dataset.path) return;
     e.preventDefault();
     const path = a.dataset.path, line = a.dataset.line ? Number(a.dataset.line) : null;
-    if (e.ctrlKey || e.metaKey) api.openFile(chatId, path, 'editor', line ?? undefined).catch(err => actions.toast(err.message, 'error'));
+    if (modKey(e)) api.openFile(chatId, path, 'editor', line ?? undefined).catch(err => actions.toast(err.message, 'error'));
     else setViewing({ path, line });
   };
 
@@ -629,7 +630,7 @@ function ToolRow({ e }: { e: ToolEntry }) {
       <div className="flex min-w-0 items-baseline gap-2">
         <span className={`shrink-0 font-semibold ${fleet ? 'text-warn' : 'text-info'}`}>{toolLabel(e.name)}</span>
         {shell ? <span className="min-w-0 truncate text-fg-muted">{e.description || ''}</span>
-          : FILE_TOOLS.test(e.name) && e.input ? <a className="file-link mono min-w-0 truncate" href="#" data-path={e.input} title={`Open ${e.input} (Ctrl+click: VS Code)`}>{e.input}</a>
+          : FILE_TOOLS.test(e.name) && e.input ? <a className="file-link mono min-w-0 truncate" href="#" data-path={e.input} title={`Open ${e.input} (${MOD}click: VS Code)`}>{e.input}</a>
           : <span className="mono min-w-0 truncate">{e.input}</span>}
         {r && !shell && <span className={`ml-auto shrink-0 text-[11px] ${r.isError ? 'text-crit' : 'text-fg-faint'}`}>{r.isError ? 'error' : ''}</span>}
       </div>

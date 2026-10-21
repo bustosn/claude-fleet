@@ -8,7 +8,7 @@ import type { FilePreview, FileRef } from '../shared/types.js';
 
 const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.ico': 'image/x-icon' };
 /** Opening these with the default app would run them, so Fleet only offers VS Code and the folder. */
-const RUNNABLE = /\.(exe|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|msi|msp|scr|lnk|reg|hta|cpl|jar|sh|command|app)$/i;
+const RUNNABLE = /\.(exe|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|msi|msp|scr|lnk|reg|hta|cpl|jar|sh|command|app|tool|terminal|scpt|scptd|applescript|workflow|action|pkg|mpkg|dmg)$/i;
 const MAX_TEXT = 2 * 1024 * 1024;
 
 /** A path as Claude wrote it, made absolute: relative paths are taken from the chat's folder, `~` from home. */
@@ -99,13 +99,15 @@ function shellOpen(target: string) {
   if (process.platform === 'win32') detached('explorer.exe', [target]);
   else detached(process.platform === 'darwin' ? 'open' : 'xdg-open', [target]);
 }
+/** vscode://file/<path>: C:/x on Windows, Users/x on a Mac. A POSIX path's own leading slash would make it //Users/x, a network host. */
+const vscodeUrl = (abs: string) => `vscode://file/${encodeURI(abs.replace(/\\/g, '/').replace(/^\/+/, '')).replace(/[#?]/g, encodeURIComponent)}`;
 
 /** A folder in VS Code (a new window) or the file manager. */
 export function openFolder(abs: string, how: 'editor' | 'folder') {
   if (!fs.statSync(abs).isDirectory()) throw new Error('not a folder');
   if (how === 'editor') {
     if (!hasVSCode()) throw new Error('VS Code is not on the PATH');
-    shellOpen(`vscode://file/${encodeURI(abs.replace(/\\/g, '/')).replace(/[#?]/g, encodeURIComponent)}/`);
+    shellOpen(`${vscodeUrl(abs)}/`);
   } else shellOpen(abs);
 }
 
@@ -122,7 +124,7 @@ export function openFile(cwd: string, p: string, how: 'editor' | 'default' | 're
   if (how === 'editor') {
     if (!hasVSCode()) throw new Error('VS Code is not on the PATH');
     // The vscode:// handler opens at a line without going through code.cmd, which Node cannot spawn without a shell.
-    shellOpen(`vscode://file/${encodeURI(abs.replace(/\\/g, '/')).replace(/[#?]/g, encodeURIComponent)}${line ? `:${line}` : ''}`);
+    shellOpen(`${vscodeUrl(abs)}${line ? `:${line}` : ''}`);
     return;
   }
   if (RUNNABLE.test(abs)) throw new Error('this file would run rather than open; use VS Code or Show in folder');

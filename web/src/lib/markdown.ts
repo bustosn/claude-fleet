@@ -1,10 +1,12 @@
 import { highlight } from './highlight';
+import { MOD } from './platform';
 
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const unesc = (s: string) => s.replace(/&(amp|lt|gt|quot);/g, (_, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"' }[e as 'amp']));
 
-/** A path in running text: a drive path, or something with a slash and an extension. Not inside a URL or a longer word. */
-const PATH = String.raw`(?<![\w/\\:.@-])(?:[A-Za-z]:[\\/][^\s\x60<>"'|*?()\[\]&]+|(?:~|\.{1,2})?[\\/]?(?:[\w.@-]+[\\/])+[\w@-][\w.@-]*\.[A-Za-z0-9]{1,8})(?::\d+(?::\d+)?)?`;
+/** A path in running text: a drive path, an absolute POSIX path (a Mac's /Users/..., extension or not), or something with a slash
+ *  and an extension. Not inside a URL or a longer word. */
+const PATH = String.raw`(?<![\w/\\:.@-])(?:[A-Za-z]:[\\/][^\s\x60<>"'|*?()\[\]&]+|~?\/(?:[\w.@-]+\/)+[\w@-][\w.@-]*|(?:~|\.{1,2})?[\\/]?(?:[\w.@-]+[\\/])+[\w@-][\w.@-]*\.[A-Za-z0-9]{1,8})(?::\d+(?::\d+)?)?`;
 // One pass over prose: inline code, a markdown link, or a bare path. Matching all three together keeps a link from being linked twice.
 const TOKEN = new RegExp(String.raw`\x60{3,}|\x60([^\x60]+)\x60|\[([^\]\n]+)\]\(([^)\s]+)\)|(${PATH})`, 'g');
 /** Inline code that names a file: no spaces, and a slash, a drive, or a file name with an extension. */
@@ -21,7 +23,7 @@ function linkify(prose: string, isFile?: (path: string) => boolean): string {
   const fileLink = (ref: string, inner: string) => {
     const { path, line } = splitLine(unesc(ref));
     if (!isFile?.(path)) return null;
-    return `<a class="file-link" href="#" data-path="${esc(path)}"${line ? ` data-line="${line}"` : ''} title="Open ${esc(path)}${line ? `, line ${line}` : ''} (Ctrl+click: VS Code)">${inner}</a>`;
+    return `<a class="file-link" href="#" data-path="${esc(path)}"${line ? ` data-line="${line}"` : ''} title="Open ${esc(path)}${line ? `, line ${line}` : ''} (${MOD}click: VS Code)">${inner}</a>`;
   };
   return prose.replace(TOKEN, (all, code?: string, text?: string, target?: string, bare?: string) => {
     if (code == null && text == null && bare == null) return all; // a run of ``` mid-sentence stays as typed
