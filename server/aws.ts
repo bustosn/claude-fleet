@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { approveDeviceLogin } from './awsApprove.js';
 import type { AwsConfig } from './config.js';
 import type { AwsRun, AwsStatus } from '../shared/types.js';
@@ -14,14 +15,35 @@ const CHROME = IS_WIN ? 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 // AWS credential refresh: silent path first (SSO refresh token), then a device-code login approved in the user's normal browser.
 export class AwsCreds {
   cfg: AwsConfig; stateDir: string; profileDir: string;
-  run: AwsRun | null = null; private cached: Omit<AwsStatus, 'run' | 'needsLogin'> | null = null; private cachedAt = 0;
+  run: AwsRun | null = null; configFile: string | null; private cached: Omit<AwsStatus, 'run' | 'needsLogin'> | null = null; private cachedAt = 0;
   login: ChildProcess | null = null; private loginDone: Promise<void> | null = null;
 
-  constructor(cfg: Partial<AwsConfig>, stateDir: string) {
+  constructor(cfg: Partial<AwsConfig>, stateDir: string, configFile: string | null = null) {
     this.cfg = { profile: '', credProfile: 'default', resetScript: '', resetSh: path.join(os.homedir(), 'reset.sh'), teleportScript: '', ssoRegion: 'us-east-1', chromePath: CHROME,
       autoApprove: false, autoRefresh: true, autoRefreshMinutesBefore: 60, ...cfg };
-    this.stateDir = stateDir; this.profileDir = path.join(stateDir, 'chrome-aws-profile');
-    if (this.cfg.autoRefresh && this.enabled) setInterval(() => this.autoRefreshTick().catch(() => {}), 10 * 60000);
+    this.stateDir = stateDir; this.profileDir = path.join(stateDir, 'chrome-aws-profile'); this.configFile = configFile;
+    // Always running: the hub can be switched on from the UI later, and the tick does nothing while it is off.
+    if (this.cfg.autoRefresh) setInterval(() => this.autoRefreshTick().catch(() => {}), 10 * 60000).unref();
+  }
+
+  // Profiles the AWS CLI already knows about, so setup is a pick from a list instead of typing a name.
+  async profiles(): Promise<string[]> {
+    try { return (await exec('aws', ['configure', 'list-profiles'])).split(/\r?\n/).map(l => l.trim()).filter(Boolean); }
+    catch { return []; }
+  }
+
+  // First-time setup from the UI: remember the chosen profile in fleet.config.json and turn the hub on.
+  // Without the personal awsreset script there are no static keys to write, so the SSO profile itself is the credential profile.
+  async setup(profile: string) {
+    if (!(await this.profiles()).includes(profile)) throw new Error(`"${profile}" is not an AWS CLI profile on this machine. Run \`aws configure sso\` first.`);
+    const hasReset = !!this.cfg.resetScript && existsSync(this.cfg.resetScript);
+    const credProfile = hasReset ? this.cfg.credProfile : profile;
+    if (this.configFile) {
+      const raw = JSON.parse(await fs.readFile(this.configFile, 'utf8'));
+      raw.aws = { ...(raw.aws || {}), profile, credProfile };
+      await fs.writeFile(this.configFile, JSON.stringify(raw, null, 2) + '\n');
+    }
+    this.cfg.profile = profile; this.cfg.credProfile = credProfile; this.needsLogin = false; this.cachedAt = 0;
   }
 
   // No profile configured (a machine with no SSO setup): the hub reports itself off instead of failing every poll.
@@ -85,6 +107,14 @@ export class AwsCreds {
     detached('cmd.exe', [line], { cwd: os.homedir(), windowsVerbatimArguments: true });
   }
 
+  // Sign in as someone else: drop every cached SSO token, then log in again in a private window so the old portal session is not reused.
+  async switchUser(): Promise<AwsRun> {
+    if (this.run && !this.run.done) return this.run;
+    try { await exec('aws', ['sso', 'logout']); } catch {}
+    this.needsLogin = false; this.cachedAt = 0;
+    return this.start({ forceLogin: true, fresh: true });
+  }
+
   // Only expiry metadata is read from the SSO cache; tokens never leave this function.
   async ssoCache() {
     const dir = path.join(os.homedir(), '.aws', 'sso', 'cache');
@@ -102,11 +132,11 @@ export class AwsCreds {
     return { ssoExpiresAt: latest, ssoHasRefresh: hasRefresh };
   }
 
-  start({ forceLogin = false, auto = false } = {}): AwsRun {
+  start({ forceLogin = false, auto = false, fresh = false } = {}): AwsRun {
     if (this.run && !this.run.done) return this.run;
     if (!this.enabled) return { id: 'off', startedAt: Date.now(), done: true, ok: false, state: 'failed', log: [], approveUrl: null, code: null, error: 'No aws.profile configured in fleet.config.json', forceLogin, auto };
     this.run = { id: Date.now().toString(36), startedAt: Date.now(), done: false, ok: null, state: 'starting', log: [], approveUrl: null, code: null, error: null, forceLogin, auto };
-    this.execute(forceLogin, auto).catch(err => this.finish(false, short(err)));
+    this.execute(forceLogin, auto, fresh).catch(err => this.finish(false, short(err)));
     return this.run;
   }
 
@@ -114,7 +144,7 @@ export class AwsCreds {
   private setState(s: string) { this.run!.state = s; this.log(`[${s}]`); }
   private finish(ok: boolean, error?: string) { const r = this.run!; r.done = true; r.ok = ok; r.error = error || null; r.state = ok ? 'done' : 'failed'; this.log(ok ? 'done' : `failed: ${error}`); this.cachedAt = 0; this.login?.kill(); if (ok) this.needsLogin = false; }
 
-  private async execute(forceLogin: boolean, auto = false) {
+  private async execute(forceLogin: boolean, auto = false, fresh = false) {
     if (!forceLogin) {
       this.setState('silent');
       this.log('Trying to refresh from the cached SSO session (no browser)');
@@ -126,7 +156,10 @@ export class AwsCreds {
     const { url, code } = await this.deviceLogin();
     this.run!.approveUrl = url; this.run!.code = code;
     this.setState('approve');
-    if (this.cfg.autoApprove) {
+    if (fresh) {
+      this.log(`Approval page opened in a private window with code ${code}. Sign in as the user you want, then click "Confirm and continue" and "Allow access".`);
+      openPrivate(url, this.cfg.chromePath);
+    } else if (this.cfg.autoApprove) {
       this.log(`Approving device code ${code} automatically in a headless Chrome profile`);
       try {
         await approveDeviceLogin({ url, code, chromePath: this.cfg.chromePath, profileDir: this.profileDir, stateDir: this.stateDir, log: l => this.log(l),
@@ -160,9 +193,14 @@ export class AwsCreds {
   }
 
   // awsreset --no-login: export from the SSO cache, back up and rewrite ~/.aws files, verify with STS.
+  // Machines without awsreset have no keys to write; exporting from the profile still renews the SSO token silently, which is all the CLI and boto3 need.
   private async writeCreds(): Promise<boolean> {
+    if (!this.cfg.resetScript || !existsSync(this.cfg.resetScript)) {
+      try { await exec('aws', ['configure', 'export-credentials', '--profile', this.cfg.profile, '--format', 'process']); return true; }
+      catch (err) { this.log(`silent refresh failed: ${short(err)}`); return false; }
+    }
     try {
-      const out = await exec(BASH, [this.cfg.resetScript, '--no-login'], { timeout: 90000 });
+      const out = await exec(BASH, [this.cfg.resetScript, '--no-login'], { timeout: 90000, env: { ...process.env, AWS_RESET_PROFILE: this.cfg.profile } });
       for (const l of out.split('\n')) if (l.trim()) this.log(l);
       return true;
     } catch (err) { this.log(`silent refresh failed: ${short(err)}`); return false; }
@@ -197,6 +235,10 @@ function exec(cmd: string, args: string[], opts: Record<string, unknown> = {}): 
     (err, stdout, stderr) => err ? reject(Object.assign(err, { stdout, stderr })) : resolve(String(stdout))));
 }
 function short(err: any): string { return String(err?.stderr || err?.stdout || err?.message || err).replace(/\r/g, '').trim().split('\n').filter(Boolean).slice(-3).join(' | ').slice(0, 400); }
+// A private Chrome window, so a different Identity Center user can sign in. Falls back to the normal browser when Chrome is not at the configured path.
+function openPrivate(url: string, chromePath: string) {
+  if (existsSync(chromePath)) detached(chromePath, ['--incognito', url]); else openInBrowser(url);
+}
 function openInBrowser(url: string) {
   if (IS_WIN) detached('cmd', ['/c', 'start', '', url], { windowsHide: true });
   else detached(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
