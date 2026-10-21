@@ -50,6 +50,8 @@ export class AwsCreds {
     catch (err) { out.arn = null; out.error = out.error || short(err); }
     Object.assign(out, await this.ssoCache());
     this.cached = out; this.cachedAt = Date.now();
+    // Working keys mean the login is no longer needed, however they got refreshed (reset.sh in its own window never touches this flag).
+    if (out.arn && out.expiration && Date.parse(out.expiration) > Date.now()) this.needsLogin = false;
     this.fillMissingKeys(out);
     return { ...out, run: this.run, needsLogin: this.needsLogin };
   }
