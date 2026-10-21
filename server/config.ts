@@ -33,7 +33,7 @@ export const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // FLEET_CONFIG and FLEET_PORT let a second checkout (a dev worktree) run beside the daily instance.
 export function loadConfig(): FleetConfig {
   const file = process.env.FLEET_CONFIG || path.join(root, 'fleet.config.json');
-  if (!fs.existsSync(file)) fail(`No config at ${file}.\nRun the installer (powershell -ExecutionPolicy Bypass -File scripts\\install.ps1), or copy fleet.config.example.json to fleet.config.json and set reposRoot.`);
+  if (!fs.existsSync(file)) fail(`No config at ${file}.\nRun the installer (Windows: powershell -ExecutionPolicy Bypass -File scripts\\install.ps1; Mac: ./scripts/install.sh), or copy fleet.config.example.json to fleet.config.json and set reposRoot.`);
   let raw: any;
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { fail(`${file} is not valid JSON: ${(err as Error).message}`); }
   if (!raw.reposRoot || !fs.existsSync(raw.reposRoot)) fail(`reposRoot in ${file} is ${raw.reposRoot ? `"${raw.reposRoot}", which does not exist` : 'not set'}. Set it to the folder your git repos live in.`);
