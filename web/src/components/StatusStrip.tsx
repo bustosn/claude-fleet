@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bell, KeyRound } from 'lucide-react';
 import { api, type AwsStatus } from '../lib/api';
 import { timeLeft } from '../lib/format';
@@ -27,6 +27,15 @@ export function StatusStrip() {
   const openSetup = (current?: string) => api.awsProfiles().then(profiles => setSetup({ profiles, pick: current && profiles.includes(current) ? current : profiles[0] || '', error: '' })).catch(() => setSetup({ profiles: [], pick: '', error: '' }));
   const saveSetup = () => setup && api.awsSetup(setup.pick).then(() => { setSetup(null); setWatchUntil(Date.now() + 5000); }).catch(err => setSetup({ ...setup, error: err.message }));
   const switchUser = () => { setSetup(null); api.awsSwitchUser().then(() => setWatchUntil(Date.now() + 600000)).catch(() => {}); };
+  // The popover closes on a click anywhere else or on Escape.
+  const awsBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!setup) return;
+    const away = (e: MouseEvent) => { if (!awsBox.current?.contains(e.target as Node)) setSetup(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setSetup(null); };
+    document.addEventListener('mousedown', away); document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [!!setup]);
   const runReset = () => { api.awsReset().then(() => setWatchUntil(Date.now() + 600000)).catch(() => {}); };
 
   const needs = snap?.sessions.filter(s => s.column === 'needs-you') || [];
@@ -41,7 +50,7 @@ export function StatusStrip() {
       <span className="num"><b className="text-fg">{working}</b> working</span>
       {errors.length > 0 && <span className="truncate text-serious" title={errors.map(([k, v]) => `${k}: ${v}`).join('\n')}>{errors.length} collector error{errors.length > 1 ? 's' : ''}</span>}
 
-      <div className="relative ml-auto">
+      <div ref={awsBox} className="relative ml-auto">
         {aws?.enabled !== false && (
         <button onContextMenu={e => { e.preventDefault(); openSetup(aws?.profile); }} className={`chip ${aws ? (active ? 'good' : 'crit') : ''}`} onClick={runReset} title={`Click to refresh AWS credentials. Right-click to switch profile or user. (and run reset.sh for Teleport and the DB tunnels, if you have one).\n${active ? 'AWS credentials are active.' : aws?.needsLogin ? 'SSO session expired.' : 'AWS credentials are not active.'}${aws?.arn ? `\n${aws.arn}` : ''}`}>
           <KeyRound size={11} aria-hidden="true" />
