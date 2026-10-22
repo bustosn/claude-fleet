@@ -79,7 +79,7 @@ Right-click to edit the proxy and tunnels.`}>
         <div className="panel absolute bottom-7 right-0 z-40 w-[460px] p-1 shadow-[var(--shadow)]">
           <div className="flex items-center gap-2 px-2 pt-1.5">
             <span className="grow truncate text-[12px] text-fg">{live ? <>{s!.user} · <span className="text-fg-muted">{left.text} left</span></> : s?.error || 'Not logged in'}</span>
-            <button className={`btn sm ${live ? 'ghost' : 'primary'}`} disabled={running} onClick={() => act('login', () => api.teleportLogin())}>{live ? 'Log in again' : 'Log in'}</button>
+            <button className={`btn sm ${live ? 'ghost' : 'primary'}`} disabled={running} title={live ? 'Sign out and in again for a fresh session. Tunnels drop until the sign-in finishes, then restart.' : undefined} onClick={() => act('login', () => api.teleportLogin(live))}>{live ? 'Log in again' : 'Log in'}</button>
             <button className="iconbtn" style={{ width: 22, height: 22 }} title="Edit the proxy and tunnels" aria-label="Teleport setup" onClick={() => setOpen('setup')}><Settings size={12} /></button>
           </div>
 

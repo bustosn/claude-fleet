@@ -102,7 +102,7 @@ const tp = (fn: (req: Request) => Promise<unknown> | unknown) => async (req: Req
 app.get('/api/teleport/status', tp(req => teleport.status(req.query.force === '1')));
 app.get('/api/teleport/setup', tp(() => teleport.setupInfo()));
 app.post('/api/teleport/setup', tp(async req => { await teleport.setup(req.body || {}); return { ok: true }; }));
-app.post('/api/teleport/login', tp(() => teleport.startLogin()));
+app.post('/api/teleport/login', tp(req => teleport.startLogin(!!req.body?.force)));
 app.post('/api/teleport/cancel', tp(() => { teleport.cancelLogin(); return { ok: true }; }));
 app.post('/api/teleport/tunnels/start-all', tp(req => teleport.startAll(!!req.body?.includeProd)));
 app.post('/api/teleport/tunnels/:alias/start', tp(req => teleport.start(req.params.alias)));

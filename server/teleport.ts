@@ -7,7 +7,7 @@ import type { TeleportConfig } from './config.js';
 import type { TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec } from '../shared/types.js';
 
 const IS_WIN = process.platform === 'win32';
-const DB_LIST_MS = 10 * 60000, STATUS_MS = 15000, TICK_MS = 2 * 60000;
+const DB_LIST_MS = 10 * 60000, STATUS_MS = 15000, TICK_MS = 2 * 60000, SESSION_MS = 10000;
 
 interface TshProc { pid: number; db: string; port: number }
 interface DbEntry { name: string; label: string; stage: string; endpoint: string }
@@ -20,7 +20,12 @@ export class Teleport {
   private logDir: string; private pidFile: string; private ours = new Set<number>();
   private dbs: DbEntry[] = []; private dbsAt = 0; private dbsError: string | null = null;
   private cached: TeleportStatus | null = null; private cachedAt = 0;
+  // tsh status takes about a second; inside one operation (a batch start reads the state before and after) it is reused briefly.
+  // Login and logout clear it.
+  private sessionCache: { at: number; value: Awaited<ReturnType<Teleport['session']>> } | null = null;
   // Keyed by alias, kept with the PID it was taken against, so a tunnel replaced outside Fleet (reset.sh) does not show an old result.
+  /** Tunnels stopped for a logout, started again after the next successful login. */
+  private reopen: string[] = [];
   private probes = new Map<string, { pid: number | null; at: number; ok: boolean; detail: string }>();
   private busy = new Set<string>();
 
@@ -96,9 +101,11 @@ export class Teleport {
   async status(force = false): Promise<TeleportStatus> {
     if (!this.enabled) return { enabled: false, proxy: '', tsh: this.cfg.tsh, session: null, tunnels: [], dbListAt: null, dbListError: null, run: null, events: [] };
     if (!force && this.cached && Date.now() - this.cachedAt < STATUS_MS) return { ...this.cached, run: this.run, events: this.events.slice(-30) };
-    const session = await this.session();
+    if (!this.sessionCache || Date.now() - this.sessionCache.at > SESSION_MS) this.sessionCache = { at: Date.now(), value: await this.session() };
+    const session = this.sessionCache.value;
     const live = session.loggedIn && !session.expired;
-    if (live && (force || Date.now() - this.dbsAt > DB_LIST_MS)) await this.loadDbs();
+    // tsh db ls is a round trip to the proxy, so it is not part of a forced look: it reloads when old, after a login, and at setup.
+    if (live && Date.now() - this.dbsAt > DB_LIST_MS) await this.loadDbs();
     const [procs, listeners] = await Promise.all([tshProcs(), listening()]);
     const alive = new Set(procs.map(p => p.pid));
     for (const p of [...this.ours]) if (!alive.has(p)) this.ours.delete(p);
@@ -176,37 +183,61 @@ export class Teleport {
     if (this.login) return;
     const s = await this.status(true);
     if (!this.cfg.autoRepoint || !s.session?.loggedIn || s.session.expired) return;
-    for (const t of s.tunnels) if (t.state === 'stale' && !t.prod) {
-      this.note(`${t.alias}: ${t.note}; re-pointing it`);
-      await this.start(t.alias).catch(err => this.note(`${t.alias}: re-point failed: ${short(err)}`));
-    }
+    const stale = s.tunnels.filter(t => t.state === 'stale' && !t.prod);
+    for (const t of stale) this.note(`${t.alias}: ${t.note}; re-pointing it`);
+    if (stale.length) for (const r of await this.startMany(stale.map(t => t.alias))) if (r.error) this.note(`${r.alias}: re-point failed: ${r.error}`);
   }
 
   /** Start or restart one tunnel on its configured port, aimed at the current target. */
   async start(alias: string): Promise<TeleportTunnel> {
-    const t = this.spec(alias); if (!t) throw new Error(`No tunnel named ${alias}. Configured: ${this.cfg.tunnels.map(x => x.alias).join(', ') || 'none'}`);
-    if (this.busy.has(alias)) throw new Error(`${alias} is already starting`);
+    const [r] = await this.startMany([alias]);
+    if (r.error) throw new Error(r.error);
+    return r.tunnel!;
+  }
+
+  /** Start or restart several tunnels at once: one look at the state, the old processes stopped together, the new ones launched
+   *  together, and one wait for all their ports. Done one by one this took 5-8 s a tunnel, mostly re-reading the state each time. */
+  async startMany(aliases: string[]): Promise<{ alias: string; ok: boolean; detail: string; error?: string; tunnel?: TeleportTunnel }[]> {
+    const errors = new Map<string, string>();
+    for (const a of aliases) {
+      if (!this.spec(a)) errors.set(a, `No tunnel named ${a}. Configured: ${this.cfg.tunnels.map(x => x.alias).join(', ') || 'none'}`);
+      else if (this.busy.has(a)) errors.set(a, `${a} is already starting`);
+    }
     const s = await this.status(true);
-    if (!s.session?.loggedIn || s.session.expired) throw new Error('The Teleport session has expired. Log in first.');
-    const cur = s.tunnels.find(x => x.alias === alias)!;
-    if (!cur.target) throw new Error(cur.note);
-    if (cur.state === 'busy') throw new Error(cur.note);
-    this.busy.add(alias);
+    if (!s.session?.loggedIn || s.session.expired) for (const a of aliases) if (!errors.has(a)) errors.set(a, 'The Teleport session has expired. Log in first.');
+    const plan = aliases.filter(a => !errors.has(a)).map(a => ({ t: this.spec(a)!, cur: s.tunnels.find(x => x.alias === a)! })).filter(({ t, cur }) => {
+      if (!cur.target) errors.set(t.alias, cur.note); else if (cur.state === 'busy') errors.set(t.alias, cur.note); else return true;
+      return false;
+    });
+    for (const { t } of plan) this.busy.add(t.alias);
     try {
-      if (cur.pid && cur.runningDb) { this.note(`${alias}: stopping PID ${cur.pid} (${cur.runningDb})`); await kill(cur.pid); await waitPort(t.port, false, 5000); }
-      const log = fs.openSync(path.join(this.logDir, `${alias}.log`), 'a');
-      fs.writeSync(log, `\n--- ${new Date().toISOString()} ${cur.target} on ${t.port}\n`);
-      // Detached, so a server restart (tsx watch, npm run restart) does not drop the tunnel.
-      const p = spawn(this.cfg.tsh, ['proxy', 'db', cur.target, '--tunnel', `--db-user=${t.dbUser || this.cfg.dbUser}`, `--port=${t.port}`],
-        { detached: true, windowsHide: true, stdio: ['ignore', log, log] });
-      fs.closeSync(log);
-      if (p.pid) { this.ours.add(p.pid); this.savePids(); }
-      p.unref();
-      const up = await waitPort(t.port, true, 15000);
-      this.probes.delete(alias);
-      this.note(up ? `${alias}: listening on ${t.port} -> ${cur.target}` : `${alias}: tsh started but ${t.port} is not listening yet; see state/teleport/${alias}.log`);
-    } finally { this.busy.delete(alias); this.cachedAt = 0; }
-    return (await this.status(true)).tunnels.find(x => x.alias === alias)!;
+      const old = plan.filter(p => p.cur.pid && p.cur.runningDb);
+      for (const { t, cur } of old) this.note(`${t.alias}: stopping PID ${cur.pid} (${cur.runningDb})`);
+      await Promise.all(old.map(p => kill(p.cur.pid!)));
+      if (old.length) await waitPorts(old.map(p => p.t.port), false, 5000);
+      for (const { t, cur } of plan) {
+        const log = fs.openSync(path.join(this.logDir, `${t.alias}.log`), 'a');
+        fs.writeSync(log, `\n--- ${new Date().toISOString()} ${cur.target} on ${t.port}\n`);
+        // Detached, so a server restart (tsx watch, npm run restart) does not drop the tunnel.
+        const p = spawn(this.cfg.tsh, ['proxy', 'db', cur.target!, '--tunnel', `--db-user=${t.dbUser || this.cfg.dbUser}`, `--port=${t.port}`],
+          { detached: true, windowsHide: true, stdio: ['ignore', log, log] });
+        fs.closeSync(log);
+        p.on('error', err => this.note(`${t.alias}: could not run tsh: ${err.message}`));
+        if (p.pid) this.ours.add(p.pid);
+        p.unref();
+      }
+      this.savePids();
+      const up = plan.length ? await waitPorts(plan.map(p => p.t.port), true, 15000) : new Set<number>();
+      for (const { t, cur } of plan) {
+        this.probes.delete(t.alias);
+        this.note(up.has(t.port) ? `${t.alias}: listening on ${t.port} -> ${cur.target}` : `${t.alias}: tsh started but ${t.port} is not listening yet; see state/teleport/${t.alias}.log`);
+      }
+    } finally { for (const { t } of plan) this.busy.delete(t.alias); this.cachedAt = 0; }
+    const after = plan.length ? await this.status(true) : s;
+    return aliases.map(a => {
+      const tunnel = after.tunnels.find(x => x.alias === a), error = errors.get(a);
+      return error ? { alias: a, ok: false, detail: error, error } : { alias: a, ok: tunnel?.state === 'up', detail: tunnel?.note || '', tunnel };
+    });
   }
 
   async stop(alias: string) {
@@ -222,12 +253,7 @@ export class Teleport {
   async startAll(includeProd: boolean) {
     const s = await this.status(true);
     const todo = s.tunnels.filter(t => ['down', 'stale', 'other'].includes(t.state) && (includeProd || !t.prod));
-    const out: { alias: string; ok: boolean; detail: string }[] = [];
-    for (const t of todo) {
-      try { const r = await this.start(t.alias); out.push({ alias: t.alias, ok: r.state === 'up', detail: r.note }); }
-      catch (err) { out.push({ alias: t.alias, ok: false, detail: short(err) }); }
-    }
-    return out;
+    return (await this.startMany(todo.map(t => t.alias))).map(({ alias, ok, detail }) => ({ alias, ok, detail }));
   }
 
   // A real round trip: connect through the tunnel and read the MySQL greeting. Only on request, since every probe is a session in the Teleport audit log.
@@ -239,42 +265,82 @@ export class Teleport {
     return (await this.status()).tunnels.filter(t => !alias || t.alias === alias);
   }
 
-  /** tsh login in the background. tsh opens the sign-in page itself; the URL is kept on the run in case it does not. */
-  startLogin(): TeleportRun {
+  /** tsh login in the background. tsh opens the sign-in page itself; the URL is kept on the run in case it does not.
+   *  force logs out first: tsh login on a session that is still valid just reuses it, so "Log in again" would change nothing. */
+  startLogin(force = false): TeleportRun {
     if (this.run && !this.run.done) return this.run;
     const args = ['login', `--proxy=${this.cfg.proxy}`, ...(this.cfg.user ? [`--user=${this.cfg.user}`] : []), ...(this.cfg.auth ? [`--auth=${this.cfg.auth}`] : [])];
     const run: TeleportRun = { id: Date.now().toString(36), startedAt: Date.now(), done: false, ok: null, state: 'login', log: [], url: null, error: null, restarted: [] };
     this.run = run;
     const log = (l: string) => { run.log.push({ at: Date.now(), line: l }); if (run.log.length > 200) run.log.shift(); };
-    log(`tsh ${args.join(' ')}`);
-    log('A Teleport sign-in page opens in your browser. Pick the sign-in option you normally use (GitHub).');
-    const p = spawn(this.cfg.tsh, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    this.login = p;
-    let buf = '';
-    const scan = (c: Buffer) => {
-      const s = c.toString().replace(/\r/g, ''); buf += s;
-      for (const l of s.split('\n')) if (l.trim()) log(l.trim());
-      const m = buf.match(/https?:\/\/127\.0\.0\.1:\d+\/\S+/); if (m && !run.url) run.url = m[0];
-    };
-    p.stdout!.on('data', scan); p.stderr!.on('data', scan);
-    const timer = setTimeout(() => { log('timed out after 5 minutes'); p.kill(); }, 300000);
-    p.on('exit', async code => {
-      clearTimeout(timer); this.login = null; this.cachedAt = 0;
-      if (code !== 0) { Object.assign(run, { done: true, ok: false, state: 'failed', error: buf.trim().split('\n').slice(-2).join(' | ') || `tsh login exited ${code}` }); this.note(`login failed: ${run.error}`); return; }
-      this.note('logged in to Teleport');
-      run.state = 'tunnels';
-      try {
-        this.dbsAt = 0;
-        const s = await this.status(true);
-        // Tunnels started before the login hold the old certificates, so they are restarted along with the stale ones.
-        const todo = s.tunnels.filter(t => t.runningDb && (this.cfg.restartAfterLogin || t.state === 'stale'));
-        for (const t of todo) {
-          try { const r = await this.start(t.alias); run.restarted.push(`${t.alias}: ${r.state}`); log(`${t.alias}: ${r.state} (${r.note})`); }
-          catch (err) { run.restarted.push(`${t.alias}: failed`); log(`${t.alias}: ${short(err)}`); }
+    const fail = (error: string) => { Object.assign(run, { done: true, ok: false, state: 'failed', error }); this.note(`login failed: ${error}`); };
+    (async () => {
+      const cur = await this.session(), before = cur.validUntil;
+      // A profile tsh cannot read (a logout that half-failed leaves a scrambled key) gets the same clean-out as a forced login.
+      if ((force && cur.loggedIn) || cur.error) {
+        if (cur.error) log(`tsh cannot read its profile (${cur.error}); clearing it`);
+        // Stop the tunnels first. On Windows a running tsh holds the key file open, so tsh logout overwrites the key, fails to delete it,
+        // and leaves a profile no tsh command can read. reset.sh kills every tsh before logging out for the same reason.
+        const procs = await tshProcs();
+        for (const t of this.cfg.tunnels) if (procs.some(p => p.port === t.port) && !this.reopen.includes(t.alias)) this.reopen.push(t.alias);
+        if (procs.length) log(`Stopping ${procs.length} tunnel${procs.length === 1 ? '' : 's'} so tsh can remove the old keys; they restart after the sign-in`);
+        for (const p of procs) await kill(p.pid);
+        if (procs.length) await waitPort(procs[0].port, false, 5000);
+        // Plain "tsh logout" clears every profile. With --user it would default to the OS user (nikolas.bustos, not nikolasbustos) and do nothing.
+        log('tsh logout');
+        try { const o = await tsh(this.cfg.tsh, ['logout'], 30000); for (const l of o.split('\n')) if (l.trim()) log(l.trim()); } catch (err) { log(`logout: ${short(err)}`); }
+        this.cachedAt = 0; this.sessionCache = null;
+        let left = await this.session();
+        // tsh logout reads the profile first, so it cannot clear one whose key is scrambled. Move that key folder aside; the next plain tsh logout clears it.
+        if (left.error) {
+          const dir = path.join(os.homedir(), '.tsh', 'keys', this.cfg.proxy.replace(/:\d+$/, ''));
+          const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+          try { fs.renameSync(dir, `${dir}.broken-${stamp}`); log(`Moved the unreadable keys to ${path.basename(dir)}.broken-${stamp}`); left = await this.session(); }
+          catch (err) { log(`could not move ${dir}: ${short(err)}`); }
         }
-        Object.assign(run, { done: true, ok: true, state: 'done' });
-      } catch (err) { Object.assign(run, { done: true, ok: false, state: 'failed', error: `logged in, but restarting tunnels failed: ${short(err)}` }); }
-    });
+        if (left.loggedIn && !left.expired) return fail(`tsh logout left the session in place (valid until ${left.validUntil}). Close Teleport Connect if it is open, then try again.`);
+        if (left.error) return fail(`tsh still cannot read its profile after logout: ${left.error}. Close Teleport Connect if it is open, then try again.`);
+      }
+      log(`tsh ${args.join(' ')}`);
+      log('A Teleport sign-in page opens in your browser. Pick the sign-in option you normally use (GitHub).');
+      const p = spawn(this.cfg.tsh, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      this.login = p;
+      let buf = '';
+      const scan = (c: Buffer) => {
+        const s = c.toString().replace(/\r/g, ''); buf += s;
+        for (const l of s.split('\n')) if (l.trim()) log(l.trim());
+        const m = buf.match(/https?:\/\/127\.0\.0\.1:\d+\/\S+/); if (m && !run.url) run.url = m[0];
+      };
+      p.stdout!.on('data', scan); p.stderr!.on('data', scan);
+      const timer = setTimeout(() => { log('timed out after 5 minutes'); p.kill(); }, 300000);
+      p.on('error', err => { clearTimeout(timer); this.login = null; fail(`could not run tsh: ${err.message}`); });
+      p.on('exit', async code => {
+        clearTimeout(timer); this.login = null; this.cachedAt = 0; this.sessionCache = null;
+        if (code !== 0) return fail((buf.trim().split('\n').slice(-2).join(' | ') || `tsh login exited ${code}`) + (this.reopen.length ? `. ${this.reopen.length} tunnels are stopped until you log in.` : ''));
+        const after = (await this.session()).validUntil;
+        // Same expiry: tsh kept the existing session, so the tunnels already hold the current certificates.
+        if (after && after === before) {
+          log('The session was still valid, so tsh kept it. Nothing to restart.');
+          return Object.assign(run, { done: true, ok: true, state: 'done' });
+        }
+        this.note(`logged in to Teleport until ${after}`);
+        run.state = 'tunnels';
+        try {
+          this.dbsAt = 0;
+          const s = await this.status(true);
+          // Tunnels started before the login hold the old certificates, so they are restarted along with the stale ones.
+          // Plus the ones stopped for the logout, here or in an earlier attempt whose sign-in did not finish.
+          const todo = s.tunnels.filter(t => this.reopen.includes(t.alias) || (t.runningDb && (this.cfg.restartAfterLogin || t.state === 'stale')));
+          if (todo.length) log(`Starting ${todo.length} tunnel${todo.length === 1 ? '' : 's'}`);
+          for (const r of await this.startMany(todo.map(t => t.alias))) {
+            const state = r.error ? 'failed' : r.tunnel?.state || 'unknown';
+            run.restarted.push(`${r.alias}: ${state}`); log(`${r.alias}: ${state} (${r.detail})`);
+          }
+          this.reopen = [];
+          Object.assign(run, { done: true, ok: true, state: 'done' });
+        } catch (err) { fail(`logged in, but restarting tunnels failed: ${short(err)}`); }
+      });
+    })().catch(err => fail(short(err)));
     return run;
   }
 
@@ -321,6 +387,17 @@ async function listening(): Promise<Map<number, number>> {
     }, { pid: 0, rows: [] as string[] }).rows) { const m = l.match(/^(\d+) .*:(\d+)$/); if (m) map.set(Number(m[2]), Number(m[1])); }
   }
   return map;
+}
+
+// Waits until every port is listening (up) or free (!up), or the time runs out. Returns the ports that got there.
+async function waitPorts(ports: number[], up: boolean, ms: number): Promise<Set<number>> {
+  const until = Date.now() + ms, done = new Set<number>();
+  while (true) {
+    const l = await listening();
+    for (const p of ports) if (l.has(p) === up) done.add(p);
+    if (done.size === ports.length || Date.now() >= until) return done;
+    await new Promise(r => setTimeout(r, 400));
+  }
 }
 
 async function waitPort(port: number, up: boolean, ms: number) {

@@ -60,7 +60,7 @@ export const api = {
   teleportStatus: (force = false) => j<TeleportStatus>(`/api/teleport/status${force ? '?force=1' : ''}`),
   teleportSetupInfo: () => j<TeleportSetupInfo>('/api/teleport/setup'),
   teleportSetup: (body: { proxy: string; user?: string; tunnels: TunnelSpec[] }) => post<{ ok: true }>('/api/teleport/setup', body),
-  teleportLogin: () => post<TeleportRun>('/api/teleport/login'),
+  teleportLogin: (force = false) => post<TeleportRun>('/api/teleport/login', { force }),
   teleportCancel: () => post<{ ok: true }>('/api/teleport/cancel'),
   tunnelStart: (alias: string) => post<TeleportTunnel>(`/api/teleport/tunnels/${encodeURIComponent(alias)}/start`),
   tunnelStop: (alias: string) => post<TeleportTunnel>(`/api/teleport/tunnels/${encodeURIComponent(alias)}/stop`),
