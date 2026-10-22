@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportStatus, TeleportTunnel, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -54,6 +54,13 @@ export const api = {
   awsRefresh: (forceLogin = false) => post<AwsRun>('/api/aws/refresh', { forceLogin }),
   awsReset: () => post<{ ok: true }>('/api/aws/reset'),
   awsCancel: () => post<{ ok: true }>('/api/aws/cancel'),
+  teleportStatus: (force = false) => j<TeleportStatus>(`/api/teleport/status${force ? '?force=1' : ''}`),
+  teleportLogin: () => post<TeleportRun>('/api/teleport/login'),
+  teleportCancel: () => post<{ ok: true }>('/api/teleport/cancel'),
+  tunnelStart: (alias: string) => post<TeleportTunnel>(`/api/teleport/tunnels/${encodeURIComponent(alias)}/start`),
+  tunnelStop: (alias: string) => post<TeleportTunnel>(`/api/teleport/tunnels/${encodeURIComponent(alias)}/stop`),
+  tunnelStartAll: (includeProd = false) => post<{ alias: string; ok: boolean; detail: string }[]>('/api/teleport/tunnels/start-all', { includeProd }),
+  tunnelProbe: (alias?: string) => post<TeleportTunnel[]>('/api/teleport/probe', alias ? { alias } : {}),
   terminals: () => j<TerminalSummary[]>('/api/terminals'),
   openTerminal: (cwd?: string) => post<TerminalSummary>('/api/terminals', { cwd }),
   closeTerminal: (id: string) => j<{ ok: true }>(`/api/terminals/${id}`, { method: 'DELETE' }),

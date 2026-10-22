@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatManager, Chat } from './chat.js';
+import type { Teleport } from './teleport.js';
+import type { TeleportTunnel } from '../shared/types.js';
 
-export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report'].map(n => `mcp__fleet__${n}`);
+export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report', 'fleet_teleport_status', 'fleet_tunnel_restart', 'fleet_teleport_login'].map(n => `mcp__fleet__${n}`);
 
 const text = (s: unknown) => ({ content: [{ type: 'text' as const, text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const fail = (s: string) => ({ content: [{ type: 'text' as const, text: s }], isError: true });
@@ -14,7 +16,8 @@ export function createFleetServer(mgr: ChatManager, self: Chat) {
 
   return createSdkMcpServer({
     name: 'fleet', version: '0.2.0',
-    instructions: 'Other Claude chats are running on this machine, often in other repos or worktrees. Use fleet_list_chats to see them, fleet_ask when you need an answer from one, fleet_send to hand something over without waiting, and fleet_reply to answer an ask that was sent to you. Keep messages specific: say which repo, branch, file, or ticket you mean.',
+    instructions: 'Other Claude chats are running on this machine, often in other repos or worktrees. Use fleet_list_chats to see them, fleet_ask when you need an answer from one, fleet_send to hand something over without waiting, and fleet_reply to answer an ask that was sent to you. Keep messages specific: say which repo, branch, file, or ticket you mean.'
+      + (mgr.teleport?.enabled ? ' Local DB ports (3316, 3317, ...) are Teleport tunnels: when a connection to one fails, call fleet_teleport_status and fleet_tunnel_restart instead of asking for reset.sh.' : ''),
     tools: [
       tool('fleet_list_chats', 'List the other chats in the fleet with their id, title, repo, branch, working directory, and status.', {},
         async () => text(peers().map(c => ({ chat_id: c.id, title: c.title, repo: c.repo, branch: c.branch, cwd: c.cwd, status: c.status, model: c.model })))),
@@ -60,6 +63,8 @@ export function createFleetServer(mgr: ChatManager, self: Chat) {
         return text(rows.join('\n\n') || '(no messages yet)');
       }),
 
+      ...(mgr.teleport?.enabled ? teleportTools(mgr.teleport) : []),
+
       // Only task workers get this: it is how a card moves to Needs you with something worth reading on it.
       ...(self.taskId ? [tool('fleet_report', 'Report on the board task you are working on. Call it once at the end of your work with status "review" and a summary for the person, or with status "blocked" when you cannot go on without them, putting the question in the summary. Then end your turn.', {
         status: z.enum(['review', 'blocked']).describe('review: the work is ready for the person to check. blocked: you need a decision, access, or information from them.'),
@@ -70,4 +75,37 @@ export function createFleetServer(mgr: ChatManager, self: Chat) {
       })] : []),
     ],
   });
+}
+
+// DB tunnels through Teleport. A chat whose query fails with "server has gone away" or a refused connection can see why and fix its own tunnel.
+// Prod tunnels can be restarted when they are already running, but only the person opens a new one, from the Teleport chip.
+function teleportTools(tp: Teleport) {
+  const brief = (t: TeleportTunnel) => ({ alias: t.alias, port: t.port, state: t.state, note: t.note, prod: t.prod, target: t.target, probe: t.probe ? `${t.probe.ok ? 'ok' : 'FAILED'}: ${t.probe.detail}` : undefined });
+  return [
+    tool('fleet_teleport_status', 'Teleport session and the local DB tunnels (alias, localhost port, state, what each points at). Call it when a database connection fails, before suggesting reset.sh. probe=true also connects through each running tunnel and checks the database answers.', {
+      probe: z.boolean().optional().describe('Round-trip check through the tunnels. Default false.'),
+    }, async ({ probe }) => {
+      if (probe) await tp.probe();
+      const s = await tp.status(true);
+      return text({ session: s.session && { user: s.session.user, validUntil: s.session.validUntil, expired: s.session.expired, loggedIn: s.session.loggedIn },
+        tunnels: s.tunnels.map(brief), hint: !s.session?.loggedIn || s.session.expired ? 'The session is expired: call fleet_teleport_login, or ask the person to click the Teleport chip.' : undefined });
+    }),
+
+    tool('fleet_tunnel_restart', 'Start or restart one DB tunnel on its configured port, aimed at the current database (the newest dev cluster for dated ones). Use it when fleet_teleport_status shows the tunnel down, stale or failing its probe.', {
+      alias: z.string().describe('Tunnel alias from fleet_teleport_status'),
+    }, async ({ alias }) => {
+      const cur = (await tp.status(true)).tunnels.find(t => t.alias === alias);
+      if (!cur) return fail(`No tunnel named ${alias}. Call fleet_teleport_status for the list.`);
+      if (cur.prod && !cur.runningDb) return fail(`${alias} is a prod tunnel that is not running. Ask the person to start it from the Teleport chip in Fleet.`);
+      try { const r = await tp.start(alias); return text(brief(r)); } catch (err: any) { return fail(String(err.message || err)); }
+    }),
+
+    tool('fleet_teleport_login', 'Start a Teleport login when the session has expired. It opens a sign-in page in the browser that the person they must click through, so tell them it is waiting on them. Running tunnels are restarted once it succeeds.', {},
+      async () => {
+        const s = await tp.status(true);
+        if (s.session?.loggedIn && !s.session.expired) return text(`Already logged in as ${s.session.user} until ${s.session.validUntil}. No login needed.`);
+        const r = tp.startLogin();
+        return text(`Login ${r.done ? 'finished' : 'started'}. A Teleport sign-in page is open in the person's browser${r.url ? ` (${r.url})` : ''}; it needs their click. Check fleet_teleport_status in a minute.`);
+      }),
+  ];
 }

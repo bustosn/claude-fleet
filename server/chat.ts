@@ -9,6 +9,7 @@ import type { TodoItem } from '../shared/types.js';
 import type { FleetConfig } from './config.js';
 import { ShellRunner } from './shellRunner.js';
 import type { TerminalManager } from './terminals.js';
+import type { Teleport } from './teleport.js';
 import type { AskQuestion, Attachment, ChatEvent, ContextUsage, PermissionChoice, RewindPreview, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
@@ -37,6 +38,8 @@ export class ChatManager extends EventEmitter {
   locate: (cwd: string, sessionId?: string | null, title?: string) => Located = () => null;
   /** For `!` commands: the shells live in the terminal manager so they show in the sidebar and can open as tabs. */
   terminals: TerminalManager | null = null; shellDir = '';
+  /** For the fleet_teleport_* tools, so a chat can check and fix its own DB tunnel. */
+  teleport: Teleport | null = null;
   /** Dropped files that are not sent as images are saved here; every chat may read it without asking. */
   attachDir = '';
   private persistFile: string | null = null;

@@ -201,6 +201,27 @@ export type ChatEvent =
   | { t: 'shell_out'; id: string; output: string; truncated: boolean; at: number }
   | { t: 'shell_done'; id: string; exitCode: number | null; interrupted: boolean; output: string; truncated: boolean; at: number };
 
+export interface TunnelSpec { alias: string; db: string; port: number; prod?: boolean; dbUser?: string }
+export interface TeleportTunnel {
+  alias: string; port: number; db: string; prod: boolean;
+  /** The database the tunnel should point at now: `db` itself, or the newest match of its pattern. Null when nothing matches. */
+  target: string | null;
+  /** up, stale (an older match of the pattern), other (a db outside the pattern), down, busy (port held by something else), missing, expired, starting. */
+  state: 'up' | 'stale' | 'other' | 'down' | 'busy' | 'missing' | 'expired' | 'starting';
+  note: string; pid: number | null; runningDb: string | null; owner: 'fleet' | 'external' | null;
+  probe: { at: number; ok: boolean; detail: string } | null;
+}
+export interface TeleportRun {
+  id: string; startedAt: number; done: boolean; ok: boolean | null; state: string;
+  log: { at: number; line: string }[]; url: string | null; error: string | null; restarted: string[];
+}
+export interface TeleportStatus {
+  /** False without `teleport.proxy` in the config. */
+  enabled: boolean; proxy: string; tsh: string;
+  session: { loggedIn: boolean; user: string | null; roles: string[]; validUntil: string | null; expired: boolean; error: string | null } | null;
+  tunnels: TeleportTunnel[]; dbListAt: number | null; dbListError: string | null; run: TeleportRun | null; events: { at: number; line: string }[];
+}
+
 export interface AwsRun {
   id: string; startedAt: number; done: boolean; ok: boolean | null; state: string;
   log: { at: number; line: string }[]; approveUrl: string | null; code: string | null; error: string | null; forceLogin: boolean; auto: boolean;

@@ -9,6 +9,7 @@ import { loadConfig, root } from './config.js';
 import { Collector } from './collector.js';
 import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
+import { Teleport } from './teleport.js';
 import { TerminalManager, type Terminal } from './terminals.js';
 import { DialogueManager } from './dialogue.js';
 import { TaskManager } from './tasks.js';
@@ -29,9 +30,10 @@ const collector = new Collector(config, chats, path.join(stateDir, `homes-${conf
 chats.titleFor = id => collector.titleOf(id);
 chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title);
 const aws = new AwsCreds(config.aws, stateDir);
+const teleport = new Teleport(config.teleport, stateDir);
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
-chats.terminals = terminals; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
+chats.terminals = terminals; chats.teleport = teleport; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
 collector.dialogues = dialogues;
@@ -84,6 +86,18 @@ app.post('/api/aws/reset', (_req, res) => {
   aws.openReset(); res.json({ ok: true });
 });
 app.post('/api/aws/cancel', (_req, res) => { aws.login?.kill(); res.json({ ok: true }); });
+
+// Teleport session and DB tunnels
+const tp = (fn: (req: Request) => Promise<unknown> | unknown) => async (req: Request, res: Response) => {
+  try { res.json(await fn(req)); } catch (err) { res.status(400).json({ error: errText(err) }); }
+};
+app.get('/api/teleport/status', tp(req => teleport.status(req.query.force === '1')));
+app.post('/api/teleport/login', tp(() => teleport.startLogin()));
+app.post('/api/teleport/cancel', tp(() => { teleport.cancelLogin(); return { ok: true }; }));
+app.post('/api/teleport/tunnels/start-all', tp(req => teleport.startAll(!!req.body?.includeProd)));
+app.post('/api/teleport/tunnels/:alias/start', tp(req => teleport.start(req.params.alias)));
+app.post('/api/teleport/tunnels/:alias/stop', tp(req => teleport.stop(req.params.alias)));
+app.post('/api/teleport/probe', tp(req => teleport.probe(req.body?.alias)));
 
 // Background sessions
 app.get('/api/sessions/:id/logs', async (req, res) => {
