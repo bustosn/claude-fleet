@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import type { TeleportConfig } from './config.js';
-import type { TeleportRun, TeleportStatus, TeleportTunnel, TunnelSpec } from '../shared/types.js';
+import type { TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec } from '../shared/types.js';
 
 const IS_WIN = process.platform === 'win32';
 const DB_LIST_MS = 10 * 60000, STATUS_MS = 15000, TICK_MS = 2 * 60000;
@@ -23,16 +24,70 @@ export class Teleport {
   private probes = new Map<string, { pid: number | null; at: number; ok: boolean; detail: string }>();
   private busy = new Set<string>();
 
-  constructor(cfg: Partial<TeleportConfig>, stateDir: string) {
+  configFile: string | null; private timer: NodeJS.Timeout | null = null;
+
+  constructor(cfg: Partial<TeleportConfig>, stateDir: string, configFile: string | null = null) {
+    this.configFile = configFile;
     this.cfg = { proxy: '', user: '', auth: '', tsh: '', dbUser: 'developer', tunnels: [], autoRepoint: true, restartAfterLogin: true, ...cfg };
     this.cfg.tsh = this.cfg.tsh || defaultTsh();
     this.logDir = path.join(stateDir, 'teleport'); fs.mkdirSync(this.logDir, { recursive: true });
     this.pidFile = path.join(this.logDir, 'pids.json');
     try { for (const p of JSON.parse(fs.readFileSync(this.pidFile, 'utf8'))) this.ours.add(Number(p)); } catch {}
-    if (this.enabled) setInterval(() => this.tick().catch(err => this.note(`check failed: ${short(err)}`)), TICK_MS);
+    this.startTimer();
   }
 
   get enabled() { return !!this.cfg.proxy; }
+  private startTimer() {
+    if (this.enabled && !this.timer) this.timer = setInterval(() => this.tick().catch(err => this.note(`check failed: ${short(err)}`)), TICK_MS);
+  }
+
+  // What setup can fill in for you: is tsh installed, which proxies it has logged in to, which tunnels are already running
+  // (reset.sh's, say) and, when logged in, the databases you can reach. Everything comes back as ready-made tunnel rows.
+  async setupInfo(): Promise<TeleportSetupInfo> {
+    let version: string | null = null;
+    try { version = (await tsh(this.cfg.tsh, ['version', '--client'], 10000)).match(/Teleport v(\S+)/)?.[1] || 'unknown'; } catch {}
+    const info: TeleportSetupInfo = { tsh: this.cfg.tsh, version, proxies: [], loggedIn: false, user: null,
+      current: { proxy: this.cfg.proxy, user: this.cfg.user, tunnels: this.cfg.tunnels }, running: [], databases: [], dbError: null };
+    if (!version) return info;
+    try { for (const f of fs.readdirSync(path.join(os.homedir(), '.tsh'))) if (f.endsWith('.yaml')) info.proxies.push(f.slice(0, -5)); } catch {}
+    const s = await this.session();
+    info.loggedIn = s.loggedIn && !s.expired; info.user = s.user;
+    if (info.loggedIn) {
+      try { const host = new URL(JSON.parse(await tsh(this.cfg.tsh, ['status', '--format=json'])).active.profile_url).hostname; if (!info.proxies.includes(host)) info.proxies.unshift(host); } catch {}
+      await this.loadDbs();
+      info.dbError = this.dbsError;
+      info.databases = this.dbs.filter(d => !/-(old|restore)(-|$)|-custom-/.test(d.name)).map(d => ({ name: d.name, label: d.label, stage: d.stage, endpoint: d.endpoint, suggest: suggest(d.name, d.label, 0, d.stage) }));
+    }
+    const used = new Set<number>();
+    info.running = (await tshProcs()).sort((a, b) => a.port - b.port).filter(p => !used.has(p.port) && used.add(p.port)).map(p => suggest(p.db, '', p.port));
+    return info;
+  }
+
+  /** Save the proxy and tunnels to fleet.config.json and switch on. Replaces the tunnel list as a whole. */
+  async setup(input: { proxy: string; user?: string; tunnels: TunnelSpec[] }) {
+    const proxy = String(input.proxy || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:443$/, '');
+    if (!/^[\w.-]+(:\d+)?$/.test(proxy)) throw new Error('Enter the Teleport proxy address, like teleport.example.com');
+    const tunnels: TunnelSpec[] = [];
+    for (const t of input.tunnels || []) {
+      const alias = String(t.alias || '').trim(), db = String(t.db || '').trim(), port = Number(t.port);
+      if (!/^[\w.-]+$/.test(alias)) throw new Error(`"${alias}" is not a usable tunnel name: letters, numbers, dot, dash and underscore only`);
+      if (!db) throw new Error(`${alias}: pick a database`);
+      if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error(`${alias}: the port must be a number from 1024 to 65535`);
+      if (tunnels.some(x => x.alias === alias)) throw new Error(`Two tunnels are named ${alias}`);
+      if (tunnels.some(x => x.port === port)) throw new Error(`Two tunnels use port ${port}`);
+      tunnels.push({ alias, db, port, ...(typeof t.prod === 'boolean' ? { prod: t.prod } : {}), ...(t.dbUser ? { dbUser: String(t.dbUser) } : {}) });
+    }
+    const user = String(input.user || '').trim();
+    if (this.configFile) {
+      const raw = JSON.parse(fs.readFileSync(this.configFile, 'utf8'));
+      raw.teleport = { ...(raw.teleport || {}), proxy, user, tunnels };
+      fs.writeFileSync(this.configFile, JSON.stringify(raw, null, 2) + '\n');
+    }
+    Object.assign(this.cfg, { proxy, user, tunnels });
+    this.cachedAt = 0; this.dbsAt = 0;
+    this.note(`setup saved: ${proxy}, ${tunnels.length} tunnel${tunnels.length === 1 ? '' : 's'}`);
+    this.startTimer();
+  }
   private spec(alias: string) { return this.cfg.tunnels.find(t => t.alias === alias) || null; }
   private isProd(t: TunnelSpec) { return t.prod ?? /(^|-)(prd|prod)(-|$)/.test(`${t.alias}-${t.db}`); }
 
@@ -82,7 +137,8 @@ export class Teleport {
   // A pattern with * picks the newest match (the dev clusters are re-created nightly with the date in the name); anything else is used as written.
   // A running tunnel may name its db by the full resource name or by its Name label (reset.sh uses the label), so both count as the same db.
   private resolve(t: TunnelSpec): { target: string | null; same: (db: string) => boolean; matches: (db: string) => boolean } {
-    const is = (e: DbEntry | undefined, fallback: string) => (db: string) => db === fallback || (!!e && (db === e.name || db === e.label));
+    // Before the db list loads, a short name still counts when the full name is it plus the -rds-<region>-<account> suffix.
+    const is = (e: DbEntry | undefined, fallback: string) => (db: string) => db === fallback || (e ? db === e.name || db === e.label : fallback.startsWith(`${db}-rds-`));
     if (!t.db.includes('*')) {
       const e = this.dbs.find(d => d.name === t.db) || this.dbs.find(d => d.label === t.db && d.endpoint === 'primary');
       return { target: t.db, same: is(e, t.db), matches: is(e, t.db) };
@@ -296,3 +352,13 @@ function greet(port: number): Promise<{ ok: boolean; detail: string }> {
 }
 
 function short(err: any): string { return String(err?.stderr || err?.message || err).replace(/\r/g, '').trim().split('\n').filter(Boolean).slice(-2).join(' | ').slice(0, 300); }
+
+// A tunnel row for a database: a short alias, and for a nightly-recreated cluster (a timestamp in the name) a pattern that follows it.
+// Prod comes from the STAGE label when there is one, else from prd/prod in the name. Port 0 means "pick one" and is left for the UI.
+function suggest(name: string, label: string, port: number, stage = ''): TunnelSpec {
+  const base = (label && name.startsWith(label) ? label + name.slice(label.length) : name).replace(/-rds(-aurora)?-[a-z]+-[a-z]+-\d-\d+$/, '');
+  const dated = /-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}/.exec(name);
+  const db = dated ? name.slice(0, dated.index) + '-*' : name;
+  const alias = base.replace(/-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}.*$/, '').replace(/-aurora-cluster(-\d+)?/, '').replace(/^-+|-+$/g, '') || base;
+  return { alias, db, port, prod: stage ? /^(prd|prod)$/i.test(stage) : /(^|-)(prd|prod)(-|$)/.test(alias) };
+}

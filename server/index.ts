@@ -30,7 +30,7 @@ const collector = new Collector(config, chats, path.join(stateDir, `homes-${conf
 chats.titleFor = id => collector.titleOf(id);
 chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title);
 const aws = new AwsCreds(config.aws, stateDir, process.env.FLEET_CONFIG || path.join(root, 'fleet.config.json'));
-const teleport = new Teleport(config.teleport, stateDir);
+const teleport = new Teleport(config.teleport, stateDir, process.env.FLEET_CONFIG || path.join(root, 'fleet.config.json'));
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
 chats.terminals = terminals; chats.teleport = teleport; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
@@ -100,6 +100,8 @@ const tp = (fn: (req: Request) => Promise<unknown> | unknown) => async (req: Req
   try { res.json(await fn(req)); } catch (err) { res.status(400).json({ error: errText(err) }); }
 };
 app.get('/api/teleport/status', tp(req => teleport.status(req.query.force === '1')));
+app.get('/api/teleport/setup', tp(() => teleport.setupInfo()));
+app.post('/api/teleport/setup', tp(async req => { await teleport.setup(req.body || {}); return { ok: true }; }));
 app.post('/api/teleport/login', tp(() => teleport.startLogin()));
 app.post('/api/teleport/cancel', tp(() => { teleport.cancelLogin(); return { ok: true }; }));
 app.post('/api/teleport/tunnels/start-all', tp(req => teleport.startAll(!!req.body?.includeProd)));

@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportStatus, TeleportTunnel, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -58,6 +58,8 @@ export const api = {
   awsSetup: (profile: string) => post<{ ok: true }>('/api/aws/setup', { profile }),
   awsCancel: () => post<{ ok: true }>('/api/aws/cancel'),
   teleportStatus: (force = false) => j<TeleportStatus>(`/api/teleport/status${force ? '?force=1' : ''}`),
+  teleportSetupInfo: () => j<TeleportSetupInfo>('/api/teleport/setup'),
+  teleportSetup: (body: { proxy: string; user?: string; tunnels: TunnelSpec[] }) => post<{ ok: true }>('/api/teleport/setup', body),
   teleportLogin: () => post<TeleportRun>('/api/teleport/login'),
   teleportCancel: () => post<{ ok: true }>('/api/teleport/cancel'),
   tunnelStart: (alias: string) => post<TeleportTunnel>(`/api/teleport/tunnels/${encodeURIComponent(alias)}/start`),

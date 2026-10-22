@@ -215,6 +215,15 @@ export interface TeleportRun {
   id: string; startedAt: number; done: boolean; ok: boolean | null; state: string;
   log: { at: number; line: string }[]; url: string | null; error: string | null; restarted: string[];
 }
+/** What the setup panel can prefill. `running` and each database's `suggest` are ready-made tunnel rows (port 0: not chosen yet). */
+export interface TeleportSetupInfo {
+  /** Null version: tsh is not installed or not runnable at `tsh`. */
+  tsh: string; version: string | null; proxies: string[]; loggedIn: boolean; user: string | null;
+  current: { proxy: string; user: string; tunnels: TunnelSpec[] };
+  running: TunnelSpec[];
+  databases: { name: string; label: string; stage: string; endpoint: string; suggest: TunnelSpec }[];
+  dbError: string | null;
+}
 export interface TeleportStatus {
   /** False without `teleport.proxy` in the config. */
   enabled: boolean; proxy: string; tsh: string;

@@ -1,37 +1,37 @@
 import { useEffect, useRef, useState } from 'react';
-import { Cable, Play, RotateCw, Square, Stethoscope } from 'lucide-react';
+import { Cable, Play, RotateCw, Settings, Square, Stethoscope } from 'lucide-react';
 import { api, type TeleportStatus, type TeleportTunnel } from '../lib/api';
 import { timeLeft } from '../lib/format';
+import { TeleportSetup } from './TeleportSetup';
 
 const COLOR: Record<TeleportTunnel['state'], string> = {
   up: 'var(--good)', starting: 'var(--accent)', stale: 'var(--warn)', other: 'var(--warn)', down: 'var(--crit)', busy: 'var(--crit)', expired: 'var(--crit)', missing: 'var(--fg-faint)',
 };
 
-/** Status-strip chip for the Teleport session, with a panel to log in and start, restart, stop or check the DB tunnels. */
+/** Status-strip chip for the Teleport session, with a panel to log in and start, restart, stop or check the DB tunnels.
+ *  Without a proxy configured it offers setup instead, like the AWS pill; right-click edits the setup later. */
 export function TeleportChip() {
   const [st, setSt] = useState<TeleportStatus | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<null | 'panel' | 'setup'>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const running = !!st?.run && !st.run.done;
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
     document.addEventListener('mousedown', away); document.addEventListener('keydown', esc);
     return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
-  }, [open]);
+  }, [!!open]);
 
   useEffect(() => {
     let alive = true;
     const load = () => api.teleportStatus().then(s => { if (alive) setSt(s); }).catch(() => {});
     load();
-    const t = setInterval(load, open || running || busy ? 3000 : 60000);
+    const t = setInterval(load, open === 'panel' || running || busy ? 3000 : 60000);
     return () => { alive = false; clearInterval(t); };
   }, [open, running, busy]);
-
-  if (st && !st.enabled) return null;
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key); setErr(null);
@@ -43,6 +43,23 @@ export function TeleportChip() {
     act(t.alias, () => api.tunnelStart(t.alias));
   };
 
+  const toggle = (what: 'panel' | 'setup') => setOpen(o => o === what ? null : what);
+  const setupDone = () => { setOpen(null); api.teleportStatus(true).then(setSt).catch(() => {}); };
+  const setupPanel = open === 'setup' && st && (
+    <div className="panel absolute bottom-7 right-0 z-40 w-[560px] p-3 shadow-[var(--shadow)]">
+      <TeleportSetup firstTime={!st.enabled} onDone={setupDone} />
+    </div>
+  );
+
+  if (st && !st.enabled) return (
+    <div ref={box} className="relative">
+      <button className="chip" aria-expanded={open === 'setup'} onClick={() => toggle('setup')} title="Set up Teleport login and DB tunnels">
+        <Cable size={11} aria-hidden="true" /> Teleport: set up
+      </button>
+      {setupPanel}
+    </div>
+  );
+
   const s = st?.session;
   const live = !!s?.loggedIn && !s.expired;
   const left = timeLeft(s?.validUntil || null);
@@ -52,15 +69,18 @@ export function TeleportChip() {
 
   return (
     <div ref={box} className="relative">
-      <button className={`chip ${level}`} aria-expanded={open} onClick={() => setOpen(o => !o)}
-        title={live ? `Teleport session for ${s!.user} until ${new Date(s!.validUntil!).toLocaleTimeString()}` : 'Teleport session expired or not logged in'}>
+      <button className={`chip ${level}`} aria-expanded={open === 'panel'} onClick={() => toggle('panel')} onContextMenu={e => { e.preventDefault(); toggle('setup'); }}
+        title={`${live ? `Teleport session for ${s!.user} until ${new Date(s!.validUntil!).toLocaleTimeString()}` : 'Teleport session expired or not logged in'}
+Right-click to edit the proxy and tunnels.`}>
         <Cable size={11} aria-hidden="true" />{label}
       </button>
-      {open && st && (
+      {setupPanel}
+      {open === 'panel' && st && (
         <div className="panel absolute bottom-7 right-0 z-40 w-[460px] p-1 shadow-[var(--shadow)]">
           <div className="flex items-center gap-2 px-2 pt-1.5">
             <span className="grow truncate text-[12px] text-fg">{live ? <>{s!.user} · <span className="text-fg-muted">{left.text} left</span></> : s?.error || 'Not logged in'}</span>
             <button className={`btn sm ${live ? 'ghost' : 'primary'}`} disabled={running} onClick={() => act('login', () => api.teleportLogin())}>{live ? 'Log in again' : 'Log in'}</button>
+            <button className="iconbtn" style={{ width: 22, height: 22 }} title="Edit the proxy and tunnels" aria-label="Teleport setup" onClick={() => setOpen('setup')}><Settings size={12} /></button>
           </div>
 
           {st.run && (running || !st.run.ok) && (
