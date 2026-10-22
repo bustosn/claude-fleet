@@ -2,17 +2,26 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Role, DispatchDefaults } from '../shared/types.js';
+import type { Role, DispatchDefaults, TunnelSpec } from '../shared/types.js';
 
 export interface AwsConfig {
   profile: string; credProfile: string; resetScript: string; resetSh: string; teleportScript: string; ssoRegion: string; chromePath: string;
   autoApprove: boolean; autoRefresh: boolean; autoRefreshMinutesBefore: number;
 }
 
+/** Teleport session and DB tunnels. Off without a proxy. A tunnel `db` with * picks the newest match (dated dev clusters). */
+export interface TeleportConfig {
+  proxy: string; user: string; auth: string; tsh: string; dbUser: string; tunnels: TunnelSpec[];
+  /** Re-point non-prod tunnels that still aim at an older match of their pattern. */
+  autoRepoint: boolean;
+  /** Restart running tunnels after a login, since they hold the old certificates. */
+  restartAfterLogin: boolean;
+}
+
 export interface FleetConfig {
   port: number; reposRoot: string; extraRepos: string[]; claudeHome: string;
   poll: { agentsMs: number; gitMs: number; timelineLines: number; conversationsMs: number; conversationsLimit: number };
-  dispatch: DispatchDefaults; roles: Record<string, Role>; aws: Partial<AwsConfig>;
+  dispatch: DispatchDefaults; roles: Record<string, Role>; aws: Partial<AwsConfig>; teleport: Partial<TeleportConfig>;
   /** Shell for terminal tabs. Null picks powershell.exe on Windows, $SHELL elsewhere. */
   terminal: { shell: string | null };
   /** Saved conversations idle this many days move to Archived on their own. 0 turns it off. */
@@ -44,7 +53,7 @@ export function loadConfig(): FleetConfig {
     reposRoot: raw.reposRoot, extraRepos: Array.isArray(raw.extraRepos) ? raw.extraRepos.map(String) : [], claudeHome: raw.claudeHome,
     poll: { agentsMs: 3000, gitMs: 10000, timelineLines: 30, conversationsMs: 15000, conversationsLimit: 200, ...(raw.poll || {}) },
     dispatch: { permissionMode: 'auto', defaultModel: 'fable', maxConcurrent: 4, ...(raw.dispatch || {}) },
-    roles: raw.roles || {}, aws: raw.aws || {},
+    roles: raw.roles || {}, aws: raw.aws || {}, teleport: raw.teleport || {},
     terminal: { shell: raw.terminal?.shell ? String(raw.terminal.shell) : null },
     conversations: { archiveAfterDays: Number(raw.conversations?.archiveAfterDays ?? 14) || 0 },
     jira: {

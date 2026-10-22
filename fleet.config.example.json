@@ -54,6 +54,19 @@
     "autoRefresh": true,
     "autoRefreshMinutesBefore": 60
   },
+  "teleport": {
+    "proxy": "",
+    "user": "",
+    "auth": "",
+    "tsh": "",
+    "dbUser": "developer",
+    "autoRepoint": true,
+    "restartAfterLogin": true,
+    "tunnels": [
+      { "alias": "main-dev", "db": "main-dev-aurora-cluster-*", "port": 3316 },
+      { "alias": "main-prd-reader", "db": "main-prd-aurora-cluster-1-reader-rds-us-east-1-000000000000", "port": 3318, "prod": true }
+    ]
+  },
   "terminal": {
     "shell": null
   },

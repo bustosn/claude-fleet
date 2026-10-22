@@ -3,8 +3,9 @@ import { Bell, KeyRound } from 'lucide-react';
 import { api, type AwsStatus } from '../lib/api';
 import { timeLeft } from '../lib/format';
 import { actions, useStore } from '../lib/store';
+import { TeleportChip } from './TeleportChip';
 
-/** Bottom strip: fleet counts, AWS credential pill, attention list. */
+/** Bottom strip: fleet counts, Teleport and AWS credential pills, attention list. */
 export function StatusStrip() {
   const snap = useStore(s => s.snapshot);
   const [aws, setAws] = useState<AwsStatus | null>(null);
@@ -50,7 +51,9 @@ export function StatusStrip() {
       <span className="num"><b className="text-fg">{working}</b> working</span>
       {errors.length > 0 && <span className="truncate text-serious" title={errors.map(([k, v]) => `${k}: ${v}`).join('\n')}>{errors.length} collector error{errors.length > 1 ? 's' : ''}</span>}
 
-      <div ref={awsBox} className="relative ml-auto">
+      <span className="ml-auto" aria-hidden="true" />
+      <TeleportChip />
+      <div ref={awsBox} className="relative">
         {aws?.enabled !== false && (
         <button onContextMenu={e => { e.preventDefault(); openSetup(aws?.profile); }} className={`chip ${aws ? (active ? 'good' : 'crit') : ''}`} onClick={runReset} title={`Click to refresh AWS credentials. Right-click to switch profile or user. (and run reset.sh for Teleport and the DB tunnels, if you have one).\n${active ? 'AWS credentials are active.' : aws?.needsLogin ? 'SSO session expired.' : 'AWS credentials are not active.'}${aws?.arn ? `\n${aws.arn}` : ''}`}>
           <KeyRound size={11} aria-hidden="true" />
