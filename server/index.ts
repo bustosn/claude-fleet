@@ -29,7 +29,7 @@ const chats = new ChatManager(config);
 const collector = new Collector(config, chats, path.join(stateDir, `homes-${config.port}.json`), path.join(stateDir, `conversation-marks-${config.port}.json`));
 chats.titleFor = id => collector.titleOf(id);
 chats.locate = (cwd, sessionId, title) => collector.locate(cwd, sessionId, title);
-const aws = new AwsCreds(config.aws, stateDir);
+const aws = new AwsCreds(config.aws, stateDir, process.env.FLEET_CONFIG || path.join(root, 'fleet.config.json'));
 const teleport = new Teleport(config.teleport, stateDir);
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
@@ -81,9 +81,17 @@ app.get('/api/events', (req, res) => {
 // AWS credentials (Hub)
 app.get('/api/aws/status', async (req, res) => res.json(await aws.status(req.query.force === '1')));
 app.post('/api/aws/refresh', (req, res) => res.json(aws.start({ forceLogin: !!req.body?.forceLogin })));
+app.post('/api/aws/switch-user', async (_req, res) => res.json(await aws.switchUser()));
+app.get('/api/aws/profiles', async (_req, res) => res.json({ profiles: await aws.profiles() }));
+app.post('/api/aws/setup', async (req, res) => {
+  try { await aws.setup(String(req.body?.profile || '')); res.json({ ok: true }); }
+  catch (err) { res.status(400).json({ error: (err as Error).message }); }
+});
 app.post('/api/aws/reset', (_req, res) => {
-  if (!aws.enabled) return res.status(400).json({ error: 'No aws.profile configured in fleet.config.json' });
-  aws.openReset(); res.json({ ok: true });
+  if (!aws.enabled) return res.status(400).json({ error: 'No AWS profile set up yet' });
+  // reset.sh is a personal script. Without it the button runs the built-in refresh: silent first, then a browser login.
+  if (fs.existsSync(aws.cfg.resetSh)) aws.openReset(); else aws.start();
+  res.json({ ok: true });
 });
 app.post('/api/aws/cancel', (_req, res) => { aws.login?.kill(); res.json({ ok: true }); });
 

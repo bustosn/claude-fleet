@@ -51,7 +51,7 @@ export function TeleportChip() {
   const label = !st ? 'Teleport …' : running ? 'Teleport: signing in' : !live ? 'Teleport: log in' : `Teleport ${left.text}${bad ? ` · ${bad} down` : ''}`;
 
   return (
-    <div ref={box} className="relative ml-auto">
+    <div ref={box} className="relative">
       <button className={`chip ${level}`} aria-expanded={open} onClick={() => setOpen(o => !o)}
         title={live ? `Teleport session for ${s!.user} until ${new Date(s!.validUntil!).toLocaleTimeString()}` : 'Teleport session expired or not logged in'}>
         <Cable size={11} aria-hidden="true" />{label}
