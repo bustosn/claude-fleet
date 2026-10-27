@@ -21,14 +21,26 @@ const loginArgs = (shell: string) => process.platform !== 'win32' && /^(zsh|bash
 
 // node-pty's macOS prebuilds include a spawn-helper binary that npm can unpack without its execute bit;
 // every terminal then fails with "posix_spawnp failed". Put the bit back once at startup.
+const spawnHelpers: string[] = [];
 if (process.platform === 'darwin') {
   try {
     const root = path.dirname(createRequire(import.meta.url).resolve('node-pty/package.json'));
     for (const dir of ['prebuilds/darwin-arm64', 'prebuilds/darwin-x64', 'build/Release']) {
       const helper = path.join(root, dir, 'spawn-helper');
-      if (fs.existsSync(helper)) fs.chmodSync(helper, 0o755);
+      if (!fs.existsSync(helper)) continue;
+      spawnHelpers.push(helper);
+      try { fs.chmodSync(helper, 0o755); } catch (err) { console.warn(`terminals: could not make ${helper} executable: ${(err as Error).message}`); }
     }
   } catch {}
+}
+
+// The bare "posix_spawnp failed" says nothing about the cause; name the helper and the fix.
+function spawnError(err: unknown, shell: string): Error {
+  const msg = (err as Error)?.message || String(err);
+  if (!/posix_spawnp/.test(msg)) return err as Error;
+  const notExec = spawnHelpers.filter(h => { try { fs.accessSync(h, fs.constants.X_OK); return false; } catch { return true; } });
+  if (notExec.length) return new Error(`${msg}. node-pty's spawn-helper is not executable; run: chmod +x ${notExec.map(h => `"${h}"`).join(' ')}`);
+  return new Error(`${msg} (shell ${shell}). If Fleet was updated, restart it so the new server code runs: scripts/autostart.sh restart`);
 }
 
 /** One shell in a pseudo-terminal. The browser attaches over a WebSocket; closing the tab leaves the shell running. */
@@ -39,7 +51,8 @@ export class Terminal extends EventEmitter {
   constructor(opts: { cwd: string; shell: string; cols?: number; rows?: number }) {
     super();
     this.cwd = opts.cwd; this.shell = opts.shell; this.title = path.basename(this.shell).replace(/\.exe$/i, '');
-    this.p = pty.spawn(this.shell, loginArgs(this.shell), { name: 'xterm-256color', cols: opts.cols || 120, rows: opts.rows || 30, cwd: this.cwd, env: process.env as Record<string, string> });
+    try { this.p = pty.spawn(this.shell, loginArgs(this.shell), { name: 'xterm-256color', cols: opts.cols || 120, rows: opts.rows || 30, cwd: this.cwd, env: process.env as Record<string, string> }); }
+    catch (err) { throw spawnError(err, this.shell); }
     this.p.onData(d => { this.buf += d; if (this.buf.length > SCROLLBACK_CHARS) this.buf = this.buf.slice(-SCROLLBACK_CHARS); this.emit('data', d); });
     this.p.onExit(({ exitCode }) => { this.exitCode = exitCode; this.emit('exit', exitCode); });
   }
