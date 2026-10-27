@@ -4,6 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Fleet</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#090b0e" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4f1" />
     <script>
       // Apply the saved theme before first paint so there is no flash.
       try { var t = localStorage.getItem('fleet.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}

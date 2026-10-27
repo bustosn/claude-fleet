@@ -19,6 +19,10 @@ npm run build      # once, builds the web app into dist/web
 npm start          # daily instance: http://127.0.0.1:7777
 ```
 
+### As an app
+
+Open http://127.0.0.1:7777 in Edge or Chrome and choose Install Fleet (the install icon at the right of the address bar, or the browser menu > Apps > Install). Fleet then runs in its own window with its own taskbar or dock icon and Start menu entry. In Edge, the app's entry at `edge://apps` can also start it when you sign in. The window is still a view onto the local server: if the server is down it says so and reloads once the server is back. Install from 7777, not a dev port; each port is a separate app. The icons come from `web/public/icon.svg`; after changing it, run `node scripts/icons.mjs` to render the PNGs again.
+
 ## Working on Fleet
 
 Development happens in a second checkout so the daily instance never restarts mid-chat:
