@@ -17,7 +17,8 @@
     "check": "npm run typecheck && npm run build",
     "setup": "node scripts/os.mjs setup",
     "restart": "node scripts/os.mjs restart",
-    "ship": "node scripts/os.mjs ship"
+    "ship": "node scripts/os.mjs ship",
+    "desktop": "cd desktop && npm install && npm run dist"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.295",

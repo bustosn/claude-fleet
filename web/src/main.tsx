@@ -11,6 +11,21 @@ for (const type of ['dragover', 'drop'] as const) window.addEventListener(type, 
 // Built app only: under Vite's dev server it would sit in front of HMR.
 if (import.meta.env.PROD && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
+// Inside the desktop app (desktop/) the title bar doubles as the window's, and the window buttons follow the theme.
+const desktop = (window as { fleetDesktop?: { setTitleBar(color: string, symbolColor: string): void } }).fleetDesktop;
+if (desktop) {
+  document.documentElement.dataset.shell = 'desktop';
+  const systemDark = matchMedia('(prefers-color-scheme: dark)');
+  const sync = () => {
+    const pinned = document.documentElement.dataset.theme;
+    const dark = pinned ? pinned === 'dark' : systemDark.matches;
+    desktop.setTitleBar(dark ? '#0e1114' : '#fefefd', dark ? '#eceef3' : '#13151a');
+  };
+  sync();
+  systemDark.addEventListener('change', sync);
+  new MutationObserver(sync).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+}
+
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

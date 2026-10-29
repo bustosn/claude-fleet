@@ -21,7 +21,9 @@ npm start          # daily instance: http://127.0.0.1:7777
 
 ### As an app
 
-Open http://127.0.0.1:7777 in Edge or Chrome and choose Install Fleet (the install icon at the right of the address bar, or the browser menu > Apps > Install). Fleet then runs in its own window with its own taskbar or dock icon and Start menu entry. In Edge, the app's entry at `edge://apps` can also start it when you sign in. The window is still a view onto the local server: if the server is down it says so and reloads once the server is back. Install from 7777, not a dev port; each port is a separate app. The icons come from `web/public/icon.svg`; after changing it, run `node scripts/icons.mjs` to render the PNGs again.
+`npm run desktop` builds `desktop/dist/Fleet-Setup-<version>.exe` (a `.dmg` on a Mac); run it once and Fleet is in the Start menu and on the desktop as an app of its own, no browser involved. The app is only a window onto the daily server: the server keeps running from the logon task, `ship` and `restart` work as before, and closing or reinstalling the app never ends a chat. Web changes reach the app with every ship; rebuild the installer only after changing something in `desktop/`. If the server is down when the app opens, the app starts the logon task and opens Fleet once it answers. Links to anything other than Fleet open in your default browser. `FLEET_URL` points the app at another instance, e.g. a dev port. The installer is unsigned, so Windows SmartScreen asks once (More info > Run anyway).
+
+Without the installer, any Chromium browser can also install http://127.0.0.1:7777 as a web app from its address bar. The icons come from `web/public/icon.svg`; after changing it, run `node scripts/icons.mjs` to render the PNGs again.
 
 ## Working on Fleet
 

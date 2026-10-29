@@ -1,0 +1,26 @@
+{
+  "name": "fleet-desktop",
+  "productName": "Fleet",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Fleet's desktop window: opens the local Fleet server in an app of its own",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^45.1.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.fleet.desktop",
+    "productName": "Fleet",
+    "directories": { "output": "dist" },
+    "files": ["main.cjs", "preload.cjs", "offline.html"],
+    "icon": "../web/public/icon-512.png",
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": true, "perMachine": false, "shortcutName": "Fleet", "artifactName": "Fleet-Setup-${version}.exe" },
+    "mac": { "target": "dmg", "icon": "../web/public/icon-maskable-512.png", "category": "public.app-category.developer-tools" }
+  }
+}

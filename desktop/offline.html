@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fleet</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; height: 100vh; display: grid; place-items: center; background: light-dark(#f4f4f1, #090b0e); color: light-dark(#13151a, #eceef3);
+         font: 13.5px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; -webkit-app-region: drag; }
+  div { max-width: 440px; text-align: center; }
+  h1 { font-size: 16px; margin: 0 0 6px; }
+  p { margin: 0 0 4px; color: light-dark(#565c68, #a2aab8); }
+  code { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
+</style>
+</head>
+<body><div>
+  <h1>Starting Fleet's server…</h1>
+  <p>Waiting for <code id="u"></code>. This window opens Fleet as soon as it answers.</p>
+  <p>If it never does, run <code>npm run restart</code> in the Fleet folder.</p>
+</div>
+<script>document.getElementById('u').textContent = new URLSearchParams(location.search).get('url') || '';</script>
+</body>
+</html>
