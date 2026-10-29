@@ -57,7 +57,9 @@ try {
   foreach ($p in $leftover) { if ($p -ne '0') { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue } }
 }
 
-& (Join-Path $PSScriptRoot 'autostart.ps1') -Restart
+# The main checkout's copy: autostart.ps1 serves (and registers the logon task for) the checkout it lives in, so
+# running this checkout's copy from claude-fleet-dev would restart the dev instance and point the task at it.
+& (Join-Path $main 'scripts\autostart.ps1') -Restart
 Write-Host "shipped $(git log --oneline -1)"
 
 # Mirror what is running to GitHub. A failed push (offline, auth) is a warning, not a failed ship.
