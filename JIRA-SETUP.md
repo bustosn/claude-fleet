@@ -1,11 +1,45 @@
 # Connecting Fleet to Jira
 
-Once this is set up, the board can work from Jira tickets in two ways:
+Once this is set up, Fleet has a **Jira** view (title bar, or New → Jira ticket) and the board can work from Jira tickets.
+
+The Jira view shows your tickets in columns by status. Drag a card to another column, or use **Move**, to transition it in Jira. **New ticket** creates one, and **Task** on a card queues a Fleet task built from that ticket.
+
+The board can work from Jira tickets in two ways:
 
 - **Link a ticket by hand.** Paste a key (`PROJ-123`) or a ticket link into **New task**. The agent reads the ticket's description and its latest comments, then works on its own `fleet/proj-123-…` branch.
 - **Pick up tickets automatically.** Give Fleet a JQL query and it checks it every few minutes. Each new match becomes a task and starts as soon as a slot is free. Each ticket is picked up only once.
 
-Fleet only **reads** from Jira. It never comments on, moves, or edits tickets.
+Tasks and the watcher only **read** from Jira. Only the Jira view writes, and only when you move or create a ticket there.
+
+### The Jira view's settings
+
+Both are optional and go inside the `jira` section:
+
+```json
+"board": {
+  "jql": "assignee = currentUser() AND (statusCategory != Done OR resolved >= -7d) ORDER BY updated DESC",
+  "projects": [{ "key": "PROJ", "name": "My team" }, { "key": "OTHER", "name": "Other team" }],
+  "columns": { "PROJ": ["To Do", "In Progress", "Code Review", "Done"] }
+},
+"create": {
+  "project": "PROJ",
+  "issueType": "Task",
+  "assignToMe": true,
+  "template": "## Problem
+
+
+## Scope
+",
+  "fields": { "customfield_10700": { "id": "11033" } },
+  "afterCreate": [ { "customfield_10326": [ { "accountId": "..." } ] } ]
+}
+```
+
+- `board.jql`: which tickets the view shows. The default is shown above: your open tickets, plus the ones resolved in the last week.
+- `board.projects`: the project switcher at the top of the view. The first one is the default, and **All** shows every project. Leave it out for one board of everything.
+- `board.columns`: status names to show first, in this order, even when they're empty, so you can drop a card into them. Other statuses follow. Use one list for every project, or a list per project key as above.
+- `create.fields`: extra fields sent with the create call, for fields your project requires.
+- `create.afterCreate`: field sets applied one at a time after the ticket exists, for fields the create screen doesn't take. The ticket is assigned to you after all of them, because some workflows clear the assignee when another field changes.
 
 ## The short way
 

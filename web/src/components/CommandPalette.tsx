@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
+import { GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
@@ -20,6 +20,8 @@ export function CommandPalette() {
     if (!snap) return [];
     const out: Item[] = [
       { id: 'overview', label: 'Overview', hint: 'fleet board', icon: LayoutGrid, view: { kind: 'overview' } },
+      { id: 'jira', label: 'Jira', hint: 'your tickets by status; move them or start a task', icon: KanbanSquare, view: { kind: 'jira' } },
+      { id: 'jira-new', label: 'New Jira ticket', hint: 'create a ticket in Jira', icon: KanbanSquare, view: { kind: 'jira', create: true } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
       { id: 'new-task', label: 'New task', hint: 'queue work; a chat picks it up and reports back for review', icon: ListPlus, view: { kind: 'new-task' } },

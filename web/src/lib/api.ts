@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -78,6 +78,12 @@ export const api = {
   addTask: (spec: { title?: string; prompt: string; cwd: string; model?: string; permissionMode?: string; isolate?: boolean; ticket?: string }) => post<TaskSummary>('/api/tasks', spec),
   jiraIssue: (key: string) => j<JiraIssuePreview>(`/api/jira/issue/${encodeURIComponent(key)}`),
   jiraPoll: () => post<JiraStatus>('/api/jira/poll'),
+  jiraBoard: (project?: string) => j<JiraBoard>(`/api/jira/board${project ? `?project=${encodeURIComponent(project)}` : ''}`),
+  jiraTransitions: (key: string) => j<JiraTransition[]>(`/api/jira/issue/${encodeURIComponent(key)}/transitions`),
+  jiraMove: (key: string, by: { id?: string; to?: string }) => post<{ ok: true }>(`/api/jira/issue/${encodeURIComponent(key)}/transition`, by),
+  jiraCreateInfo: () => j<JiraCreateInfo>('/api/jira/create'),
+  jiraIssueTypes: (project: string) => j<{ id: string; name: string }[]>(`/api/jira/projects/${encodeURIComponent(project)}/types`),
+  jiraCreate: (spec: { project: string; issueType: string; summary: string; description: string; assignToMe: boolean }) => post<JiraCreated>('/api/jira/issues', spec),
   taskAction: (id: string, action: 'approve' | 'retry' | 'start') => post<TaskSummary>(`/api/tasks/${id}/${action}`),
   sendBackTask: (id: string, text: string) => post<TaskSummary>(`/api/tasks/${id}/send-back`, { text }),
   removeTask: (id: string) => j<{ ok: true }>(`/api/tasks/${id}`, { method: 'DELETE' }),

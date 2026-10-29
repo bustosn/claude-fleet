@@ -1,5 +1,5 @@
 import { useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { ChevronDown, ListPlus, MessageSquarePlus, Plus, SquareTerminal, Users } from 'lucide-react';
+import { ChevronDown, KanbanSquare, ListPlus, MessageSquarePlus, Plus, SquareTerminal, Users } from 'lucide-react';
 import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu } from './ContextMenu';
@@ -28,6 +28,7 @@ export function Sidebar() {
           { label: 'Task', icon: ListPlus, onSelect: () => actions.go({ kind: 'new-task' }) },
           { label: 'Terminal', icon: SquareTerminal, onSelect: () => openTerminal() },
           { label: 'Dialogue', icon: Users, onSelect: () => actions.go({ kind: 'new-dialogue' }) },
+          { label: 'Jira ticket', icon: KanbanSquare, onSelect: () => actions.go({ kind: 'jira', create: true }) },
         ])}><Plus size={14} aria-hidden="true" /> New <ChevronDown size={13} className="ml-auto text-fg-faint" aria-hidden="true" /></button>
         {menu}
         <ProjectTree />

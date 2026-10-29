@@ -78,6 +78,19 @@
       "PROJ": "C:/Users/you/Code/proj"
     },
     "jql": "",
-    "everyMinutes": 5
+    "everyMinutes": 5,
+    "board": {
+      "jql": "assignee = currentUser() AND (statusCategory != Done OR resolved >= -7d) ORDER BY updated DESC",
+      "projects": [{ "key": "PROJ", "name": "My team" }],
+      "columns": { "PROJ": ["To Do", "In Progress", "Code Review", "Done"] }
+    },
+    "create": {
+      "project": "PROJ",
+      "issueType": "Task",
+      "assignToMe": true,
+      "template": "",
+      "fields": {},
+      "afterCreate": []
+    }
   }
 }

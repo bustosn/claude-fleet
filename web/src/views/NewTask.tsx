@@ -9,10 +9,10 @@ const keyOf = (s: string) => /\b([A-Z][A-Z0-9_]{1,19}-\d{1,7})\b/.exec(s.toUpper
 
 /** Queues a task for the board. Fleet starts a chat on it when a slot is free; the chat reports back for review.
  *  With a Jira ticket the task is built from the ticket, and the text box is only extra notes. */
-export function NewTaskView({ cwd }: { cwd?: string }) {
+export function NewTaskView({ cwd, ticket: initialTicket }: { cwd?: string; ticket?: string }) {
   const snap = useStore(s => s.snapshot);
   const jira = snap?.jira;
-  const [ticket, setTicket] = useState('');
+  const [ticket, setTicket] = useState(initialTicket || '');
   const [issue, setIssue] = useState<JiraIssuePreview | null>(null);
   const [issueError, setIssueError] = useState<string | null>(null);
   const baseDirs = [...new Set([...(snap?.repos || []).flatMap(r => r.worktrees.filter(w => !w.managed).map(w => w.path)), ...(snap?.sessions.map(s => s.cwd) || [])].filter(Boolean))];

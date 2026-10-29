@@ -131,6 +131,20 @@ export interface JiraStatus {
 }
 /** A ticket as the New task form previews it. `cwd` is the folder Fleet would pick for it, if it knows one. */
 export interface JiraIssuePreview { key: string; summary: string; url: string; status: string; type: string; cwd: string | null }
+/** A ticket on the Jira view. `category` is Jira's status category: new (to do), indeterminate (in progress), done. */
+export interface JiraCard { key: string; url: string; summary: string; status: string; category: string; type: string; priority: string; project: string; updated: number }
+/** The Jira view: the board query's tickets and the status columns to lay them out in, in order. */
+export interface JiraBoard {
+  jql: string; columns: { name: string; category: string }[]; issues: JiraCard[]; fetchedAt: number;
+  /** The switcher: the configured projects, and which one this board shows (null for all of them). */
+  projects: { key: string; name: string }[]; project: string | null;
+}
+/** A move a ticket can make from its current status. */
+export interface JiraTransition { id: string; name: string; to: string; category: string }
+/** What the New ticket form starts from. */
+export interface JiraCreateInfo { projects: { key: string; name: string }[]; project: string; issueType: string; assignToMe: boolean; template: string }
+/** A created ticket. `warnings` are follow-up steps (extra fields, assignee) that failed after the ticket itself was made. */
+export interface JiraCreated { key: string; url: string; warnings: string[] }
 
 export interface Snapshot {
   jira: JiraStatus | null;

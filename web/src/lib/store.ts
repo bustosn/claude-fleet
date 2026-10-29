@@ -11,7 +11,8 @@ export type View =
   | { kind: 'terminal'; id: string }
   | { kind: 'dialogue'; id: string }
   | { kind: 'new-dialogue' }
-  | { kind: 'new-task'; cwd?: string }
+  | { kind: 'new-task'; cwd?: string; ticket?: string }
+  | { kind: 'jira'; create?: boolean }
   | { kind: 'hub' };
 
 /** Open views, like editor tabs. Overview is the home screen and never a tab. */
@@ -41,6 +42,7 @@ export function tabKey(v: View): string {
     case 'new-dialogue': return 'new-dialogue';
     case 'new-task': return 'new-task';
     case 'hub': return 'hub';
+    case 'jira': return 'jira';
   }
 }
 

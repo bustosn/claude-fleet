@@ -385,6 +385,25 @@ app.get('/api/jira/issue/:key', async (req, res) => {
   try { res.json(await jira.preview(key)); } catch (err) { res.status(400).json({ error: errText(err) }); }
 });
 app.post('/api/jira/poll', async (_req, res) => res.json(await jira.poll()));
+// The Jira view: your tickets by status, moving them, and making new ones. Unlike the watcher, these write to Jira.
+const jiraRoute = (fn: (req: Request) => Promise<unknown>) => async (req: Request, res: Response) => {
+  try { res.json(await fn(req)); } catch (err) { res.status(400).json({ error: errText(err) }); }
+};
+const keyParam = (req: Request) => { const key = ticketKey(req.params.key); if (!key) throw new Error('not a ticket key'); return key; };
+app.get('/api/jira/board', jiraRoute(req => jira.client.board(req.query.project ? String(req.query.project) : undefined)));
+app.get('/api/jira/issue/:key/transitions', jiraRoute(req => jira.client.transitions(keyParam(req))));
+app.post('/api/jira/issue/:key/transition', jiraRoute(async req => {
+  await jira.client.transition(keyParam(req), { id: req.body?.id ? String(req.body.id) : undefined, to: req.body?.to ? String(req.body.to) : undefined });
+  return { ok: true };
+}));
+app.get('/api/jira/create', jiraRoute(() => jira.client.createInfo()));
+app.get('/api/jira/projects/:project/types', jiraRoute(req => jira.client.issueTypes(String(req.params.project))));
+app.post('/api/jira/issues', jiraRoute(async req => {
+  const b = req.body || {};
+  if (!String(b.summary || '').trim()) throw new Error('A summary is required.');
+  if (!b.project || !b.issueType) throw new Error('Pick a project and an issue type.');
+  return jira.client.create({ project: String(b.project), issueType: String(b.issueType), summary: String(b.summary), description: String(b.description || ''), assignToMe: b.assignToMe !== false });
+}));
 app.post('/api/tasks/clear-done', (_req, res) => { tasks.clearDone(); res.json({ ok: true }); });
 for (const action of ['approve', 'send-back', 'retry', 'start'] as const) {
   app.post(`/api/tasks/:id/${action}`, (req, res) => {

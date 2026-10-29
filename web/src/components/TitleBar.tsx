@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Anchor, KeyRound, LayoutGrid, Moon, PanelLeft, PanelLeftClose, Search, Sun, SunMoon } from 'lucide-react';
+import { Anchor, KanbanSquare, KeyRound, LayoutGrid, Moon, PanelLeft, PanelLeftClose, Search, Sun, SunMoon } from 'lucide-react';
 import { actions, useStore } from '../lib/store';
 import { Kbd } from './ui';
 import { MOD, isMac } from '../lib/platform';
@@ -36,6 +36,7 @@ export function TitleBar() {
 
       <nav className="flex items-center gap-1">
         <button className={`btn sm ghost ${view.kind === 'overview' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'overview' })}><LayoutGrid size={14} aria-hidden="true" /> Overview</button>
+        <button className={`btn sm ghost ${view.kind === 'jira' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'jira' })}><KanbanSquare size={14} aria-hidden="true" /> Jira</button>
         <button className={`btn sm ghost ${view.kind === 'hub' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'hub' })}><KeyRound size={14} aria-hidden="true" /> Hub</button>
         <button className="iconbtn" aria-label={`Theme: ${theme}. Switch to ${nextTheme}`} title={`Theme: ${theme}`} onClick={() => actions.setTheme(nextTheme)}>
           <ThemeIcon size={16} aria-hidden="true" />

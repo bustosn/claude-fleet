@@ -9,6 +9,7 @@ import { TerminalView } from '../views/TerminalView';
 import { DialogueView } from '../views/DialogueView';
 import { NewDialogueView } from '../views/NewDialogue';
 import { NewTaskView } from '../views/NewTask';
+import { JiraView } from '../views/JiraView';
 import { TabStrip } from './TabStrip';
 
 export function Main() {
@@ -25,8 +26,9 @@ export function Main() {
       {view.kind === 'terminal' && <TerminalView key={view.id} id={view.id} />}
       {view.kind === 'dialogue' && <DialogueView key={view.id} id={view.id} />}
       {view.kind === 'new-dialogue' && <NewDialogueView />}
-      {view.kind === 'new-task' && <NewTaskView key={view.cwd || ''} cwd={view.cwd} />}
+      {view.kind === 'new-task' && <NewTaskView key={`${view.cwd || ''}|${view.ticket || ''}`} cwd={view.cwd} ticket={view.ticket} />}
       {view.kind === 'hub' && <HubView />}
+      {view.kind === 'jira' && <JiraView create={!!view.create} />}
     </main>
   );
 }

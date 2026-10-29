@@ -35,6 +35,12 @@ export interface FleetConfig {
 export interface JiraConfig {
   baseUrl: string; email: string; apiToken: string;
   repos: Record<string, string>; jql: string; everyMinutes: number;
+  /** The Jira view: which tickets it shows; `projects` are the switcher's choices, the first one the default (none means one board of everything);
+   *  `columns` are statuses to show first and in this order (even when empty, so cards can be dropped there): one list for every project, or a list per project key. */
+  board: { jql: string; projects: { key: string; name: string }[]; columns: string[] | Record<string, string[]> };
+  /** New tickets: the form's defaults, extra `fields` sent with the create, `afterCreate` field sets applied one at a time in order,
+   *  then the ticket is assigned to you when `assignToMe` (last, because some workflows clear the assignee when other fields change). */
+  create: { project: string; issueType: string; assignToMe: boolean; template: string; fields: Record<string, unknown>; afterCreate: Record<string, unknown>[] };
 }
 
 export const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -62,6 +68,19 @@ export function loadConfig(): FleetConfig {
       apiToken: String(raw.jira?.apiToken || process.env.JIRA_API_TOKEN || ''),
       repos: raw.jira?.repos && typeof raw.jira.repos === 'object' ? Object.fromEntries(Object.entries(raw.jira.repos).map(([k, v]) => [k.toUpperCase(), String(v)])) : {},
       jql: String(raw.jira?.jql || '').trim(), everyMinutes: Math.max(1, Number(raw.jira?.everyMinutes) || 5),
+      board: {
+        jql: String(raw.jira?.board?.jql || '').trim() || 'assignee = currentUser() AND (statusCategory != Done OR resolved >= -7d) ORDER BY updated DESC',
+        projects: (Array.isArray(raw.jira?.board?.projects) ? raw.jira.board.projects : []).map((p: any) => typeof p === 'string' ? { key: p, name: p } : { key: String(p?.key || ''), name: String(p?.name || p?.key || '') })
+          .map((p: { key: string; name: string }) => ({ ...p, key: p.key.toUpperCase() })).filter((p: { key: string }) => /^[A-Z][A-Z0-9_]+$/.test(p.key)),
+        columns: Array.isArray(raw.jira?.board?.columns) ? raw.jira.board.columns.map(String)
+          : raw.jira?.board?.columns && typeof raw.jira.board.columns === 'object' ? Object.fromEntries(Object.entries(raw.jira.board.columns).map(([k, v]) => [k.toUpperCase(), Array.isArray(v) ? v.map(String) : []])) : [],
+      },
+      create: {
+        project: String(raw.jira?.create?.project || '').toUpperCase(), issueType: String(raw.jira?.create?.issueType || 'Task'),
+        assignToMe: raw.jira?.create?.assignToMe !== false, template: String(raw.jira?.create?.template || ''),
+        fields: raw.jira?.create?.fields && typeof raw.jira.create.fields === 'object' ? raw.jira.create.fields : {},
+        afterCreate: Array.isArray(raw.jira?.create?.afterCreate) ? raw.jira.create.afterCreate.filter((f: unknown) => f && typeof f === 'object') : [],
+      },
     },
   };
   return cfg;
