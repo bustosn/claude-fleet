@@ -344,7 +344,7 @@ export class Chat extends EventEmitter {
     const opts: any = {
       cwd: this.cwd, model: this.model, permissionMode: this.permissionMode,
       additionalDirectories: this.mgr.attachDir ? [this.mgr.attachDir] : [],
-      includePartialMessages: true, abortController: this.abort, enableFileCheckpointing: true, agentProgressSummaries: true,
+      includePartialMessages: true, env: { ...process.env, CLAUDE_CODE_ARTIFACT: '1' }, abortController: this.abort, enableFileCheckpointing: true, agentProgressSummaries: true,
       thinking: { type: 'adaptive', display: 'summarized' },
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       mcpServers: { fleet: createFleetServer(this.mgr, this) },
