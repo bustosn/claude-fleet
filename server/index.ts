@@ -440,6 +440,8 @@ app.get('/api/sql/schema/:alias/:db/:table/indexes', sqlRoute(req => sql.indexes
 app.get('/api/sql/credentials', sqlRoute(() => sql.credentials()));
 app.put('/api/sql/credentials/:alias', sqlRoute(req => { sql.setCredentials(sqlName(req.params.alias), { user: String(req.body?.user || ''), password: req.body?.password ? String(req.body.password) : undefined }); return sql.credentials(); }));
 app.delete('/api/sql/credentials/:alias', sqlRoute(req => { sql.setCredentials(sqlName(req.params.alias), null); return sql.credentials(); }));
+app.get('/api/sql/processes/:alias', sqlRoute(req => sql.processes(sqlName(req.params.alias))));
+app.post('/api/sql/processes/:alias/:id/kill', sqlRoute(req => sql.killProcess(sqlName(req.params.alias), Number(req.params.id), req.body?.mode === 'connection' ? 'connection' : 'query')));
 app.get('/api/sql/tabs', sqlRoute(() => sql.getTabs()));
 app.put('/api/sql/tabs', sqlRoute(req => { sql.setTabs(req.body?.tabs); return { ok: true }; }));
 app.get('/api/sql/history', sqlRoute(() => sql.getHistory()));

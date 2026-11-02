@@ -275,7 +275,8 @@ export interface SqlRunRequest { alias: string; text: string; cursor: number; se
   /** Run a risky write (UPDATE or DELETE with no WHERE, TRUNCATE, DROP) that the server asked about with an error coded CONFIRM. */
   confirm?: boolean }
 export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
-export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number }
+/** A tab in the SQL view: a query editor, or the connection's live process list. */
+export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes' }
 /** A palette shortcut like "cb 123456": every ? in `sql` gets the value, escaped. `type` number passes it unquoted (for numeric ids, so the index is used).
  *  `source`: from fleet.config.json (or the built-ins), or made in the SQL view, which can also override a config one by name. */
 export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid'; type?: 'text' | 'number'; source?: 'config' | 'user' }
@@ -283,6 +284,9 @@ export interface SqlTableInfo { name: string; type: string; rows: number | null 
 export interface SqlColumnInfo { name: string; type: string; nullable: boolean; key: string; comment: string }
 export interface SqlIndexInfo { name: string; unique: boolean; columns: string[] }
 export interface SqlSchema { alias: string; target: string | null; at: number; databases: { name: string; tables: SqlTableInfo[] }[] }
+/** One row of the server's process list. `fleet` marks Fleet's own connections. */
+export interface SqlProcess { id: number; user: string; host: string; db: string | null; command: string; time: number; state: string | null; info: string | null;
+  trxStarted: string | null; rowsLocked: number | null; rowsModified: number | null; fleet: boolean }
 export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null }
 /** A connection's login as the SQL view shows it: never the password, only whether one is set. */
 export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }

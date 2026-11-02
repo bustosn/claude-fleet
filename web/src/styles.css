@@ -452,3 +452,22 @@ textarea.rich-code-body { display: block; width: 100%; padding: 10px 12px; borde
 .sql-env { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; }
 .sql-env.dev { color: var(--good); background: var(--good-soft); }
 .sql-env.prod { color: var(--crit); background: var(--crit-soft); border: 1px solid color-mix(in srgb, var(--crit) 45%, transparent); }
+
+/* SQL view: the Processes tab. A dense table like the result grid; long runners and old transactions colored, Kill buttons on hover. */
+.proc-table { flex: 1; min-height: 0; overflow: auto; background: var(--surface); font-size: 12px; }
+.proc-row { display: grid; align-items: center; min-width: 1100px; height: 26px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.proc-row:not(.proc-head):hover { background: var(--hover); }
+.proc-row.is-picked { background: var(--selected); }
+.proc-head { position: sticky; top: 0; z-index: 2; height: 30px; background: var(--raised); border-bottom: 1px solid var(--line-strong); }
+.proc-h { display: flex; align-items: center; gap: 4px; height: 100%; padding: 0 8px; font-size: 11.5px; font-weight: 600; color: var(--fg-muted); text-align: left; min-width: 0; }
+.proc-h:hover { color: var(--fg); background: var(--hover); }
+.proc-h.num { justify-content: flex-end; }
+.proc-c { display: flex; align-items: center; padding: 0 8px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proc-c.truncate { display: block; line-height: 26px; }
+.proc-c.num { justify-content: flex-end; font-variant-numeric: tabular-nums; }
+.proc-c input[type="checkbox"] { accent-color: var(--accent); }
+.proc-actions { gap: 2px; position: sticky; right: 0; height: 100%; justify-content: flex-end; background: linear-gradient(90deg, transparent, var(--surface) 30%); }
+.proc-actions .iconbtn { opacity: 0; }
+.proc-row:hover .proc-actions { background: linear-gradient(90deg, transparent, var(--hover) 30%); }
+.proc-row:hover .proc-actions .iconbtn, .proc-row.is-picked .proc-actions .iconbtn { opacity: 1; }
+.proc-row:hover .proc-actions .iconbtn:disabled { opacity: 0.3; }

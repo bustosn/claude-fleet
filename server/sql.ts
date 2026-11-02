@@ -4,13 +4,15 @@ import { randomUUID } from 'node:crypto';
 import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
-import type { SqlLookup, SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
+import type { SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
 import { classify, classifyWrite, countParams, errorOffset, limitable, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
 const SYSTEM_DBS = ['mysql', 'sys', 'performance_schema', 'information_schema'];
 const BATCH = 200, FLUSH_MS = 80, HISTORY = 500;
 const IDLE_MS = 5 * 60 * 1000;
 const serverIds = new WeakMap<object, number>();
+// The same ids by connection alias, so the process list can mark Fleet's own connections.
+const fleetIds = new Map<string, Set<number>>();
 
 interface Run { id: string; alias: string; conn: object | null; cancelled: boolean; timedOut: boolean }
 interface SchemaCache extends SqlSchema { columns: Record<string, Record<string, SqlColumnInfo[]>>; indexes: Record<string, SqlIndexInfo[]> }
@@ -106,7 +108,7 @@ export class SqlManager {
       conn.query(`SET SESSION max_execution_time = ${this.cfg.timeoutMs}`);
       conn.query(`SET SESSION wait_timeout = ${Math.max(capSec * 3, 600)}`);
       // Teleport's proxy answers the handshake itself, so conn.threadId is its id, not the server's; KILL QUERY needs the server's.
-      conn.query('SELECT CONNECTION_ID() AS id', (err: any, rows: any) => { if (!err) serverIds.set(conn, Number(rows[0].id)); });
+      conn.query('SELECT CONNECTION_ID() AS id', (err: any, rows: any) => { if (err) return; const id = Number(rows[0].id); serverIds.set(conn, id); if (!fleetIds.has(a.alias)) fleetIds.set(a.alias, new Set()); fleetIds.get(a.alias)!.add(id); });
     });
     this.pools.set(a.alias, p);
     return p;
@@ -226,6 +228,40 @@ export class SqlManager {
     } finally {
       clearTimeout(timer);
       this.runs.delete(run.id);
+    }
+  }
+
+  /** Who is connected and what they run, like DBeaver's Session Manager: the server's process list with each open transaction's age.
+   *  The connection reading the list leaves itself out. Without the rights to read INNODB_TRX, the plain list. */
+  async processes(alias: string): Promise<SqlProcess[]> {
+    const a = this.alias(alias);
+    let rows: any[];
+    try {
+      rows = await this.queryAll(a, `SELECT p.ID AS id, p.USER AS user, p.HOST AS host, p.DB AS db, p.COMMAND AS command, p.TIME AS time, p.STATE AS state, p.INFO AS info,
+        t.trx_started AS trxStarted, t.trx_rows_locked AS rowsLocked, t.trx_rows_modified AS rowsModified
+        FROM information_schema.PROCESSLIST p LEFT JOIN information_schema.INNODB_TRX t ON t.trx_mysql_thread_id = p.ID
+        WHERE p.ID <> CONNECTION_ID() ORDER BY p.TIME DESC`);
+    } catch {
+      rows = (await this.queryAll(a, 'SHOW FULL PROCESSLIST')).map((r: any) => ({ id: r.Id, user: r.User, host: r.Host, db: r.db, command: r.Command, time: r.Time, state: r.State, info: r.Info }));
+    }
+    const mine = fleetIds.get(a.alias) || new Set<number>();
+    return rows.map(r => ({ id: Number(r.id), user: String(r.user ?? ''), host: String(r.host ?? ''), db: r.db ?? null, command: String(r.command ?? ''), time: Number(r.time) || 0,
+      state: r.state || null, info: r.info == null ? null : String(r.info), trxStarted: r.trxStarted ?? null,
+      rowsLocked: r.rowsLocked == null ? null : Number(r.rowsLocked), rowsModified: r.rowsModified == null ? null : Number(r.rowsModified), fleet: mine.has(Number(r.id)) }));
+  }
+  /** KILL QUERY (stop the statement, keep the connection) or KILL (end the connection). RDS refuses a plain KILL of another user's thread
+   *  unless the login may; then its own procedures, mysql.rds_kill_query and mysql.rds_kill, are tried. Each kill goes into history. */
+  async killProcess(alias: string, id: number, mode: 'query' | 'connection'): Promise<{ ok: true; via: string }> {
+    const a = this.alias(alias);
+    if (!Number.isInteger(id) || id <= 0) throw new Error('Not a process id.');
+    const plain = mode === 'query' ? `KILL QUERY ${id}` : `KILL ${id}`;
+    const rds = mode === 'query' ? `CALL mysql.rds_kill_query(${id})` : `CALL mysql.rds_kill(${id})`;
+    const log = (sql: string, error: string | null) => this.addHistory({ at: Date.now(), alias: a.alias, db: null, sql, rows: null, ms: null, error });
+    try { await this.queryAll(a, plain); log(plain, null); return { ok: true, via: plain }; }
+    catch (err: any) {
+      if (!/denied|not owner|1095/i.test(`${err.code} ${err.errno} ${err.message}`)) { log(plain, err.message); throw err; }
+      try { await this.queryAll(a, rds); log(rds, null); return { ok: true, via: rds }; }
+      catch (e: any) { log(rds, e.message); throw new Error(`${err.message} (and ${rds}: ${e.message})`); }
     }
   }
 
@@ -368,7 +404,8 @@ export class SqlManager {
     if (!Array.isArray(tabs)) throw new Error('tabs must be a list');
     this.tabs = tabs.slice(0, 50).filter((t: any) => t && typeof t.id === 'string').map((t: any): SqlTab => ({
       id: String(t.id).slice(0, 40), title: String(t.title || 'Query').slice(0, 80), alias: String(t.alias || ''), db: t.db ? String(t.db) : null,
-      text: String(t.text || '').slice(0, 200000), split: Number.isFinite(t.split) ? Math.min(0.9, Math.max(0.1, Number(t.split))) : undefined }));
+      text: String(t.text || '').slice(0, 200000), split: Number.isFinite(t.split) ? Math.min(0.9, Math.max(0.1, Number(t.split))) : undefined,
+      ...(t.kind === 'processes' ? { kind: 'processes' as const } : {}) }));
     this.save();
   }
   getHistory() { return this.history; }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
+import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
 import { api, type SqlLookup, type SqlRunRequest, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
@@ -14,6 +14,7 @@ import { CellModal } from '../sql/CellModal';
 import { LeftPane, type PaneMode } from '../sql/LeftPane';
 import { CredentialsDialog } from '../sql/CredentialsDialog';
 import { LookupEditor } from '../sql/LookupEditor';
+import { ProcessesPanel } from '../sql/ProcessesPanel';
 import { SendToChat, type Intent, type ShareData } from '../sql/SendToChat';
 import { startRun, type SqlResult } from '../sql/run';
 
@@ -44,6 +45,11 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [share, setShare] = useState<Intent | null>(null);
   const [login, setLogin] = useState(false);
   const [confirm, setConfirm] = useState<{ tab: string; req: SqlRunRequest; reason: string } | null>(null);
+  // One Processes tab per connection: reopening focuses it.
+  const openProcesses = (a: string) => {
+    const t = tabs?.find(x => x.kind === 'processes' && x.alias === a);
+    if (t) setActiveId(t.id); else addTab({ kind: 'processes', alias: a, title: 'Processes' });
+  };
   const [lookupEdit, setLookupEdit] = useState<(Partial<SqlLookup> & { editing?: string }) | null>(null);
   const setLookups = (lookups: SqlLookup[]) => setInfo(i => i && { ...i, lookups });
   // The statement under the cursor (or the selection), to start a lookup from.
@@ -344,7 +350,10 @@ Double-click to rename; right-click for more`}>
           <button className="iconbtn h-7 w-7 flex-none" aria-label="New query tab (Alt+T)" title="New query tab (Alt+T)" onClick={() => addTab()}><Plus size={14} /></button>
         </div>
 
-        {active && <>
+        {active && active.kind === 'processes' && alias && <ProcessesPanel key={active.id} alias={alias} aliases={info.aliases} onAlias={a => patchTab(active.id, { alias: a })}
+          onLogin={() => setLogin(true)} onOpenQuery={sql => openQuery(sql, { alias: active.alias, title: 'From processes' })} />}
+        {/* Query tabs stay mounted behind a Processes tab, so their editors keep undo history. */}
+        {active && <div style={{ display: active.kind === 'processes' ? 'none' : 'contents' }}>
           <div className="sql-toolbar">
             <label className={`sql-conn ${alias?.prod ? 'prod' : 'dev'}`} title={alias?.prod ? 'Production reader: read-only' : 'Development: reads and writes, each statement committed as it runs'}>
               <Database size={13} aria-hidden="true" />
@@ -368,6 +377,7 @@ Double-click to rename; right-click for more`}>
             <button className="btn sm ghost" onClick={() => run('max')} disabled={running} title={`Run up to ${info.maxRows.toLocaleString()} rows (Ctrl+Shift+Enter)`}><PlayCircle size={13} aria-hidden="true" /> {info.maxRows.toLocaleString()}</button>
             <button className="btn sm ghost" onClick={explain} disabled={running} title="EXPLAIN the statement (Ctrl+Shift+E)"><Gauge size={13} aria-hidden="true" /> Explain</button>
             <button className="btn sm ghost" onClick={format} title="Format (Ctrl+Shift+F)"><AlignLeft size={13} aria-hidden="true" /> Format</button>
+            <button className="btn sm ghost" onClick={() => openProcesses(active.alias)} title={`Live processes on ${active.alias}: what runs, for how long, and Kill`}><Activity size={13} aria-hidden="true" /> Processes</button>
             <span className="grow" />
             <button className="btn sm ghost" onClick={sendMenu} title="Send the statement and result to a chat"><MessageSquareShare size={13} aria-hidden="true" /> Send to chat <ChevronDown size={12} aria-hidden="true" /></button>
             <div className="sql-seg" role="tablist" aria-label="Result view">
@@ -378,7 +388,7 @@ Double-click to rename; right-click for more`}>
 
           <div ref={right} className="relative flex min-h-0 flex-1 flex-col">
             <div className={`sql-editor-wrap ${alias?.prod ? 'prod' : ''}`} style={{ height: `${split * 100}%` }}>
-              {tabs.map(t => (
+              {tabs.filter(t => t.kind !== 'processes').map(t => (
                 <div key={t.id} className="h-full" style={{ display: t.id === activeId ? 'block' : 'none' }}>
                   <SqlEditor ref={h => { editors.current[t.id] = h; }} value={t.text} onChange={text => patchTab(t.id, { text })}
                     schema={t.id === activeId ? completion : {}} defaultSchema={t.db || undefined} onRun={run} onFormat={format} onExplain={explain} />
@@ -425,7 +435,7 @@ Double-click to rename; right-click for more`}>
           </div>
 
           <StatusBar alias={alias} db={active.db} result={result} autoLimit={info.autoLimit} maxRows={info.maxRows} onCancel={cancel} onRunMax={() => run('max')} />
-        </>}
+        </div>}
       </div>
 
       {cell && results[cell.tab] && <CellModal column={results[cell.tab].columns[cell.col]} value={results[cell.tab].rows[cell.row]?.[cell.col] ?? null} onClose={() => setCell(null)} />}
