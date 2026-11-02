@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { Snapshot } from './api';
+import { POPOUT, poppedWindow, post } from './popout';
 
 export type View =
   | { kind: 'overview' }
@@ -49,12 +50,13 @@ export function tabKey(v: View): string {
   }
 }
 
-const savedTabs = read<Tab[]>('fleet.tabs', []).filter(t => t && t.view && t.key === tabKey(t.view));
+// A popped-out window holds its one view and leaves the main window's saved tabs alone.
+const savedTabs = POPOUT ? [{ key: tabKey(POPOUT), view: POPOUT }] : read<Tab[]>('fleet.tabs', []).filter(t => t && t.view && t.key === tabKey(t.view));
 const savedActive = read<string | null>('fleet.tabs.active', null);
 
 let state: State = {
   snapshot: null, live: false,
-  tabs: savedTabs, view: savedTabs.find(t => t.key === savedActive)?.view || { kind: 'overview' },
+  tabs: savedTabs, view: POPOUT || savedTabs.find(t => t.key === savedActive)?.view || { kind: 'overview' },
   theme: read<Theme>('fleet.theme.mode', 'system'),
   sidebarWidth: read('fleet.sidebar.width', 300), sidebarCollapsed: read('fleet.sidebar.collapsed', false), paletteOpen: false,
   // Repos and sidebar sections start collapsed; only what you open stays open.
@@ -68,15 +70,20 @@ function set(patch: Partial<State> | ((s: State) => Partial<State>)) {
 export const useStore = <T,>(sel: (s: State) => T): T => useSyncExternalStore(l => { listeners.add(l); return () => listeners.delete(l); }, () => sel(state), () => sel(state));
 export const getState = () => state;
 
-function persistTabs(tabs: Tab[], view: View) { write('fleet.tabs', tabs); write('fleet.tabs.active', view.kind === 'overview' ? null : tabKey(view)); }
+function persistTabs(tabs: Tab[], view: View) { if (POPOUT) return; write('fleet.tabs', tabs); write('fleet.tabs.active', view.kind === 'overview' ? null : tabKey(view)); }
 
 export const actions = {
   setSnapshot: (snapshot: Snapshot) => set({ snapshot }),
   setLive: (live: boolean) => set({ live }),
   /** Opens a view in its tab, creating the tab if needed. `replace` swaps an existing tab in place (resume → chat). */
   go: (view: View, opts: { replace?: string } = {}) => set(s => {
+    // In a popped-out window, any other view opens in the main window.
+    if (POPOUT && (view.kind === 'overview' || tabKey(view) !== tabKey(POPOUT))) { post({ t: 'go', view }); return { paletteOpen: false }; }
     if (view.kind === 'overview') { persistTabs(s.tabs, view); return { view, paletteOpen: false }; }
     const key = tabKey(view);
+    // A view that lives in a popped-out window goes there (a SQL lookup runs in the popped-out SQL view), and that window comes to the front.
+    const popped = POPOUT ? null : poppedWindow(key);
+    if (popped) { post({ t: 'go', view, to: key }); popped.focus(); return { paletteOpen: false }; }
     let tabs = s.tabs;
     const at = tabs.findIndex(t => t.key === key);
     const replaceAt = opts.replace ? tabs.findIndex(t => t.key === opts.replace) : -1;

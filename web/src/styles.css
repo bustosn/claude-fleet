@@ -322,6 +322,8 @@ dialog label { display: grid; gap: 4px; margin-bottom: 10px; font-size: 12px; co
 
 /* ---- Chrome ------------------------------------------------------------------------------------------ */
 .titlebar { display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 78%, transparent); backdrop-filter: blur(14px) saturate(1.4); position: relative; z-index: 20; }
+/* A popped-out window's header: what it shows and Pop back in. */
+.popout-head { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 78%, transparent); font-size: 12.5px; }
 /* In the desktop app (desktop/) the title bar is the window's: drag the window by it, and keep clear of the window buttons drawn over its right end. */
 :root[data-shell="desktop"] .titlebar { -webkit-app-region: drag; padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 14px); }
 :root[data-shell="desktop"] .titlebar :is(button, a, input, nav) { -webkit-app-region: no-drag; }

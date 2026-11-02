@@ -1,10 +1,11 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
-import { Bot, Database, FolderGit2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
+import { Bot, Database, FolderGit2, PictureInPicture2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
 import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { actions, tabKey, useStore, type Tab, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
+import { POPOUT, popOut } from '../lib/popout';
 
 /** Open views as editor-style tabs. Middle-click closes; the active tab carries the accent line. */
 export function TabStrip() {
@@ -16,7 +17,7 @@ export function TabStrip() {
 
   useEffect(() => { strip.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [active]);
 
-  if (tabs.length === 0) return null;
+  if (tabs.length === 0 || POPOUT) return null;
   return (
     <div ref={strip} role="tablist" aria-label="Open views" className="tabstrip shrink-0">
       {tabs.map(t => <TabButton key={t.key} tab={t} active={t.key === active} label={tabLabel(t.view, snap)} />)}
@@ -29,6 +30,12 @@ export function TabStrip() {
 function TabButton({ tab, active, label }: { tab: Tab; active: boolean; label: { text: string; hint: string; state?: string } }) {
   const Icon = iconFor(tab.view, label.state);
   const close = (e: MouseEvent) => { e.stopPropagation(); actions.closeTab(tab.key); };
+  // Moves the tab into its own window; it comes back with Pop back in there.
+  const pop = (e: MouseEvent) => {
+    e.stopPropagation();
+    if (popOut(tab.view, tab.key)) actions.closeTab(tab.key);
+    else actions.toast('The browser blocked the new window. Allow pop-ups for Fleet and try again.', 'error');
+  };
   const onAux = (e: MouseEvent) => { if (e.button === 1) { e.preventDefault(); actions.closeTab(tab.key); } };
   // Middle mousedown would start the browser's autoscroll on an overflowing strip; cancel it so auxclick can close.
   const onDown = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
@@ -41,6 +48,9 @@ function TabButton({ tab, active, label }: { tab: Tab; active: boolean; label: {
     >
       {label.state ? <span className="dot shrink-0" data-s={label.state} aria-hidden="true" /> : <Icon size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />}
       <span className="min-w-0 flex-1 truncate">{label.text}</span>
+      <button className="iconbtn shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" style={{ width: 20, height: 20 }} aria-label={`Pop out ${label.text}`} title="Pop out into its own window" onClick={pop}>
+        <PictureInPicture2 size={12} aria-hidden="true" />
+      </button>
       <button className={`iconbtn shrink-0 ${active ? '' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'}`} style={{ width: 20, height: 20 }} aria-label={`Close ${label.text}`} title="Close" onClick={close}>
         <X size={12} aria-hidden="true" />
       </button>
@@ -48,7 +58,7 @@ function TabButton({ tab, active, label }: { tab: Tab; active: boolean; label: {
   );
 }
 
-function iconFor(v: View, state?: string) {
+export function iconFor(v: View, state?: string) {
   if (v.kind === 'worktree') return GitBranch;
   if (v.kind === 'hub') return KeyRound;
   if (v.kind === 'jira') return KanbanSquare;

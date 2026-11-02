@@ -56,10 +56,12 @@ function createWindow() {
   // Fleet's own pages stay in the app; every other link opens in the default browser.
   const ours = url => { try { return new URL(url).origin === base.origin; } catch { return false; } };
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (ours(url)) return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true } };
+    if (ours(url)) return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: false, backgroundColor: '#090b0e' } };
     if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+  // A popped-out tab: its own window, with the menu bar kept hidden like the main one's.
+  win.webContents.on('did-create-window', child => child.setMenuBarVisibility(false));
   win.webContents.on('will-navigate', (e, url) => {
     if (ours(url) || url.startsWith('file:')) return;
     e.preventDefault();
