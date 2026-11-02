@@ -79,6 +79,7 @@ A restart ends the daily instance's live chat processes; they reopen from their 
 | Jira | paste a ticket key or link into New task and the agent works from the ticket (description, latest comments). With `jira.jql` set, Fleet polls that query every `everyMinutes` and starts a task for each new match, once per ticket. Tickets go to the folder in `jira.repos` for their project, or to a repo named by one of their labels. Read-only: Fleet never writes to Jira. Setup: [JIRA-SETUP.md](JIRA-SETUP.md) |
 | Dialogues | two chats talk a topic through: the server relays each message, counts rounds, and you steer, pause, extend, or stop. Transcript as markdown |
 | AWS credentials | `~/bin/awsreset` for the silent path; `aws sso login --use-device-code` with the approval page opened in your browser as the fallback |
+| SQL | read-only MySQL over the Teleport tunnels named in `sql.aliases` (prod only through its reader tunnels): CodeMirror with schema completion, a streamed grid, record view, history, lookups like `cb 123456` in the palette, and Send to chat. Every connection is `READ ONLY` and every statement is checked first (`shared/sqlClassify.ts`, tests: `npm test`). Credentials are read from `sql.envFile` (`DB_MAIN_*`, `DB_DATA_*`) and kept nowhere else. Chats get the same runner as `fleet_sql` |
 | Terminals | `node-pty` shells in the server, `xterm.js` in a tab, a WebSocket between them. Closing the tab keeps the shell; Kill ends it. A `claude` started in one shows up as a session like any other |
 
 ## What a chat does like Claude Code
@@ -98,6 +99,6 @@ Design and roadmap: [`docs/plans/`](docs/plans/). If you are an agent working on
 
 ## Config
 
-`fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), the `aws` section, and `terminal.shell` (null picks PowerShell on Windows, `$SHELL` elsewhere).
+`fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), the `aws` section, the `sql` section (`envFile`, `aliases`, `defaultAlias`, `autoLimit`, `maxRows`, `timeoutMs`, `lookups`), and `terminal.shell` (null picks PowerShell on Windows, `$SHELL` elsewhere).
 
 It is not tracked: each machine (and each worktree) keeps its own copy, made from `fleet.config.example.json`. `reposRoot` is the only value that has to change; `claudeHome` defaults to `~/.claude`. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.

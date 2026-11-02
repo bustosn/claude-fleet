@@ -257,3 +257,28 @@ export interface AwsStatus {
   /** The timer found the SSO session expired. It stays quiet until you click Refresh, so no browser tabs pop up on their own. */
   needsLogin: boolean;
 }
+
+// SQL view. A connection is a Teleport tunnel alias; prod ones are readers only, and every statement is read-only.
+export interface SqlAlias { alias: string; port: number; prod: boolean; label: string }
+export type SqlKind = 'number' | 'string' | 'date' | 'json' | 'blob';
+export interface SqlColumn { name: string; table: string; kind: SqlKind; type: string }
+export type SqlValue = string | number | null;
+/** What a run streams: an id first, then the columns, rows in batches, and done or error. */
+export type SqlEvent =
+  | { t: 'start'; id: string; statement: string; offset: number }
+  | { t: 'notice'; text: string }
+  | { t: 'columns'; columns: SqlColumn[] }
+  | { t: 'rows'; rows: SqlValue[][] }
+  | { t: 'done'; ms: number; rowCount: number; truncated: boolean; autoLimited: boolean; affected: number | null }
+  | { t: 'error'; message: string; code: string | null; offset: number | null; length: number; line: number | null };
+export interface SqlRunRequest { alias: string; text: string; cursor: number; selection?: { from: number; to: number } | null; db?: string | null; limit?: 'auto' | 'max' }
+export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
+export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number }
+export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid' }
+export interface SqlTableInfo { name: string; type: string; rows: number | null }
+export interface SqlColumnInfo { name: string; type: string; nullable: boolean; key: string; comment: string }
+export interface SqlIndexInfo { name: string; unique: boolean; columns: string[] }
+export interface SqlSchema { alias: string; target: string | null; at: number; databases: { name: string; tables: SqlTableInfo[] }[] }
+export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null }
+/** A connection's login as the SQL view shows it: never the password, only whether one is set. */
+export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }

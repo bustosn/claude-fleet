@@ -13,6 +13,8 @@ export type View =
   | { kind: 'new-dialogue' }
   | { kind: 'new-task'; cwd?: string; ticket?: string }
   | { kind: 'jira'; create?: boolean }
+  /** The SQL workbench. `lookup` opens a new query tab already run, like "cb 123456" from the palette; `at` makes each one distinct. */
+  | { kind: 'sql'; lookup?: { name: string; value: string; at: number } }
   | { kind: 'hub' };
 
 /** Open views, like editor tabs. Overview is the home screen and never a tab. */
@@ -43,6 +45,7 @@ export function tabKey(v: View): string {
     case 'new-task': return 'new-task';
     case 'hub': return 'hub';
     case 'jira': return 'jira';
+    case 'sql': return 'sql';
   }
 }
 

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
+import { Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
+import { api, type SqlLookup } from '../lib/api';
 
 /** An item either opens a view or runs an action. */
 interface Item { id: string; label: string; hint: string; icon: typeof Search; view?: View; run?: () => void }
@@ -15,6 +16,9 @@ export function CommandPalette() {
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (open) { setQ(''); setCursor(0); setTimeout(() => input.current?.focus(), 0); } }, [open]);
+  // The SQL view's lookups ("cb 123456"), read once the first time the palette opens.
+  const [lookups, setLookups] = useState<SqlLookup[]>([]);
+  useEffect(() => { if (open && !lookups.length) api.sqlInfo().then(i => setLookups(i.lookups)).catch(() => {}); }, [open]);
 
   const items = useMemo<Item[]>(() => {
     if (!snap) return [];
@@ -23,6 +27,8 @@ export function CommandPalette() {
       { id: 'jira', label: 'Jira', hint: 'your tickets by status; move them or start a task', icon: KanbanSquare, view: { kind: 'jira' } },
       { id: 'jira-new', label: 'New Jira ticket', hint: 'create a ticket in Jira', icon: KanbanSquare, view: { kind: 'jira', create: true } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
+      { id: 'sql', label: 'SQL', hint: 'read-only queries over the Teleport tunnels', icon: Database, view: { kind: 'sql' } },
+      { id: 'sql-new', label: 'New SQL tab', hint: 'a blank query tab', icon: Database, view: { kind: 'sql', lookup: { name: '', value: '', at: 0 } } },
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
       { id: 'new-task', label: 'New task', hint: 'queue work; a chat picks it up and reports back for review', icon: ListPlus, view: { kind: 'new-task' } },
       { id: 'terminal', label: 'New terminal', hint: 'open a shell in the folder you are looking at', icon: Terminal, run: () => openTerminal() },
@@ -39,12 +45,24 @@ export function CommandPalette() {
 
   const hits = useMemo(() => {
     const t = q.trim().toLowerCase();
+    // "cb 123456", "case ABC-1": a lookup that opens a SQL tab already run. Typing just the name lists it with what to type next.
+    const m = /^(\S+)\s+(\S+)$/.exec(q.trim());
+    const look: Item[] = lookups.flatMap((l): Item[] => {
+      if (m && m[1].toLowerCase() === l.name && new RegExp(l.pattern).test(m[2]))
+        return [{ id: `l:${l.name}`, label: `${l.label}: ${m[2]}`, hint: `SQL · ${l.alias}`, icon: Database, view: { kind: 'sql' as const, lookup: { name: l.name, value: m[2], at: Date.now() } } }];
+      if (t && !m && l.name.startsWith(t)) return [{ id: `lh:${l.name}`, label: `${l.name} <value>`, hint: `SQL lookup · ${l.label.toLowerCase()}`, icon: Database, run: () => { setQ(`${l.name} `); setCursor(0); input.current?.focus(); } }];
+      return [];
+    });
     if (!t) return items.slice(0, 14);
-    return items.filter(i => `${i.label} ${i.hint}`.toLowerCase().includes(t)).slice(0, 14);
-  }, [items, q]);
+    return [...look, ...items.filter(i => `${i.label} ${i.hint}`.toLowerCase().includes(t))].slice(0, 14);
+  }, [items, q, lookups]);
 
   if (!open) return null;
-  const pick = (i: Item) => { if (i.run) { actions.setPalette(false); i.run(); } else if (i.view) actions.go(i.view); };
+  const pick = (i: Item) => {
+    if (i.id.startsWith('lh:')) i.run!();
+    else if (i.run) { actions.setPalette(false); i.run(); }
+    else if (i.view) actions.go(i.view.kind === 'sql' && i.view.lookup ? { ...i.view, lookup: { ...i.view.lookup, at: Date.now() } } : i.view);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[12vh]" onPointerDown={e => { if (e.target === e.currentTarget) actions.setPalette(false); }}>

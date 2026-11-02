@@ -1,13 +1,13 @@
 // Fleet's desktop window. The server keeps running on its own (logon task / launch agent, `npm run ship`, restarts);
 // this app is only a window onto it, so closing or updating the app never ends a chat. If the server is down when the
 // app opens, it starts the logon task and shows a waiting page until the server answers.
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const base = new URL(process.env.FLEET_URL || 'http://127.0.0.1:7777/');
-const isWin = process.platform === 'win32';
+const isWin = process.platform === 'win32', isMac = process.platform === 'darwin';
 const stateFile = path.join(app.getPath('userData'), 'window.json');
 let win = null;
 
@@ -43,11 +43,12 @@ function createWindow() {
   const s = readState();
   win = new BrowserWindow({
     x: s.x, y: s.y, width: s.width || 1440, height: s.height || 900, minWidth: 720, minHeight: 480,
-    title: 'Fleet', backgroundColor: '#090b0e', show: false, autoHideMenuBar: true,
+    title: 'Fleet', backgroundColor: '#090b0e', show: false, autoHideMenuBar: false,
     // Windows: Fleet's own title bar is the window's title bar, with the system buttons drawn over its right end.
     ...(isWin ? { titleBarStyle: 'hidden', titleBarOverlay: { color: '#0f1216', symbolColor: '#eceef3', height: 43 } } : {}),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
+  win.setMenuBarVisibility(false);
   if (s.maximized) win.maximize();
   win.once('ready-to-show', () => win.show());
   for (const ev of ['resize', 'move', 'close']) win.on(ev, saveState);
@@ -74,6 +75,10 @@ ipcMain.on('fleet:titlebar', (_e, color, symbolColor) => {
   if (isWin && win && !win.isDestroyed() && /^#[0-9a-f]{6}$/i.test(color) && /^#[0-9a-f]{6}$/i.test(symbolColor)) win.setTitleBarOverlay({ color, symbolColor });
 });
 
-app.whenReady().then(createWindow);
+// Windows and Linux: Edit roles only, so copy, paste and undo keep their shortcuts while the default menu's Alt mnemonics (Alt+W, Alt+V, ...)
+// no longer reach for a menu bar; the window keeps the bar hidden even when Alt is pressed. A Mac keeps its default menu, which owns Cmd+Q.
+const editMenu = () => isMac || Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }]));
+
+app.whenReady().then(() => { editMenu(); createWindow(); });
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

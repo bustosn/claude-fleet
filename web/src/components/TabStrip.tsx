@@ -1,5 +1,5 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
-import { Bot, FolderGit2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
+import { Bot, Database, FolderGit2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
 import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
@@ -52,6 +52,7 @@ function iconFor(v: View, state?: string) {
   if (v.kind === 'worktree') return GitBranch;
   if (v.kind === 'hub') return KeyRound;
   if (v.kind === 'jira') return KanbanSquare;
+  if (v.kind === 'sql') return Database;
   if (v.kind === 'session') return state ? Terminal : Bot;
   if (v.kind === 'terminal') return Terminal;
   if (v.kind === 'dialogue' || v.kind === 'new-dialogue') return Users;
@@ -66,6 +67,7 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
     case 'overview': return { text: 'Overview', hint: 'Overview' };
     case 'hub': return { text: 'Hub', hint: 'AWS credentials and other chores' };
     case 'jira': return { text: 'Jira', hint: 'Your Jira tickets by status' };
+    case 'sql': return { text: 'SQL', hint: 'Read-only SQL over the Teleport tunnels' };
     case 'new-chat': return { text: 'New chat', hint: v.cwd ? `New chat in ${shortPath(v.cwd)}` : 'New chat' };
     case 'resume': return { text: v.title, hint: `Opening ${v.title}` };
     case 'chat': {

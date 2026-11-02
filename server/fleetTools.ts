@@ -2,9 +2,10 @@ import { z } from 'zod';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatManager, Chat } from './chat.js';
 import type { Teleport } from './teleport.js';
+import type { SqlManager } from './sql.js';
 import type { TeleportTunnel } from '../shared/types.js';
 
-export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report', 'fleet_teleport_status', 'fleet_tunnel_restart', 'fleet_teleport_login'].map(n => `mcp__fleet__${n}`);
+export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report', 'fleet_teleport_status', 'fleet_tunnel_restart', 'fleet_teleport_login', 'fleet_sql'].map(n => `mcp__fleet__${n}`);
 
 const text = (s: unknown) => ({ content: [{ type: 'text' as const, text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const fail = (s: string) => ({ content: [{ type: 'text' as const, text: s }], isError: true });
@@ -64,6 +65,7 @@ export function createFleetServer(mgr: ChatManager, self: Chat) {
       }),
 
       ...(mgr.teleport?.enabled ? teleportTools(mgr.teleport) : []),
+      ...(mgr.sql && mgr.sql.aliases().length ? [sqlTool(mgr.sql)] : []),
 
       // Only task workers get this: it is how a card moves to Needs you with something worth reading on it.
       ...(self.taskId ? [tool('fleet_report', 'Report on the board task you are working on. Call it once at the end of your work with status "review" and a summary for the person, or with status "blocked" when you cannot go on without them, putting the question in the summary. Then end your turn.', {
@@ -108,4 +110,26 @@ function teleportTools(tp: Teleport) {
         return text(`Login ${r.done ? 'finished' : 'started'}. A Teleport sign-in page is open in the person's browser${r.url ? ` (${r.url})` : ''}; it needs their click. Check fleet_teleport_status in a minute.`);
       }),
   ];
+}
+
+// The SQL view's runner for chats: the same classifier and READ ONLY session, dev and reader tunnels only, and a small row cap since the answer lands in context.
+function sqlTool(sql: SqlManager) {
+  const aliases = sql.aliases();
+  return tool('fleet_sql', `Run one read-only SQL statement (SELECT, WITH, SHOW, EXPLAIN, DESCRIBE) against a local DB tunnel and get the rows back as a markdown table. Connections: ${aliases.map(a => `${a.alias}${a.prod ? ' (prod reader)' : ''}`).join(', ')}. Fully qualify tables (cb911.cb_chargebacks). A statement without a LIMIT gets LIMIT 200.`, {
+    alias: z.enum(aliases.map(a => a.alias) as [string, ...string[]]).describe('Which connection'),
+    sql: z.string().describe('One read-only statement'),
+  }, async ({ alias, sql: stmt }) => {
+    const r = await sql.collect(alias, stmt, 200);
+    const env = aliases.find(a => a.alias === alias)?.prod ? 'PRD reader' : 'dev';
+    const head = `${alias} (${env}) · ${r.statement ? '`' + r.statement.replace(/\s+/g, ' ').slice(0, 300) + '`' : ''}`;
+    if (r.error) return fail(`${head}\nError: ${r.error}`);
+    const note = r.truncated ? ' (capped at 200; add a narrower WHERE)' : r.autoLimited ? ' (LIMIT 200 added)' : '';
+    return text(`${head}\n${r.rows.length} row(s), ${r.ms} ms${note}\n\n${markdownTable(r.columns.map(c => c.name), r.rows)}`);
+  });
+}
+function markdownTable(cols: string[], rows: (string | number | null)[][]): string {
+  if (!cols.length) return '(no result set)';
+  if (!rows.length) return `| ${cols.join(' | ')} |\n(no rows)`;
+  const esc = (v: string | number | null) => v == null ? 'NULL' : String(v).replace(/\|/g, '\|').replace(/\r?\n/g, ' ').slice(0, 300);
+  return [`| ${cols.join(' | ')} |`, `| ${cols.map(() => '---').join(' | ')} |`, ...rows.map(r => `| ${r.map(esc).join(' | ')} |`)].join('\n');
 }

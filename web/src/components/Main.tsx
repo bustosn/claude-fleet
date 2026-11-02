@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { useStore } from '../lib/store';
 import { OverviewView } from '../views/OverviewView';
 import { ChatView } from '../views/ChatView';
@@ -11,6 +12,9 @@ import { NewDialogueView } from '../views/NewDialogue';
 import { NewTaskView } from '../views/NewTask';
 import { JiraView } from '../views/JiraView';
 import { TabStrip } from './TabStrip';
+
+// The SQL view brings CodeMirror and its grid; loaded the first time it is opened.
+const SqlView = lazy(() => import('../views/SqlView').then(m => ({ default: m.SqlView })));
 
 export function Main() {
   const view = useStore(s => s.view);
@@ -29,6 +33,7 @@ export function Main() {
       {view.kind === 'new-task' && <NewTaskView key={`${view.cwd || ''}|${view.ticket || ''}`} cwd={view.cwd} ticket={view.ticket} />}
       {view.kind === 'hub' && <HubView />}
       {view.kind === 'jira' && <JiraView create={!!view.create} />}
+      {view.kind === 'sql' && <Suspense fallback={<div className="m-auto text-[12px] text-fg-faint">Loading…</div>}><SqlView lookup={view.lookup} /></Suspense>}
     </main>
   );
 }

@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -88,6 +88,18 @@ export const api = {
   sendBackTask: (id: string, text: string) => post<TaskSummary>(`/api/tasks/${id}/send-back`, { text }),
   removeTask: (id: string) => j<{ ok: true }>(`/api/tasks/${id}`, { method: 'DELETE' }),
   clearDoneTasks: () => post<{ ok: true }>('/api/tasks/clear-done'),
+  sqlInfo: () => j<SqlInfo>('/api/sql/info'),
+  sqlSchema: (alias: string, refresh = false) => j<SqlSchema>(`/api/sql/schema/${encodeURIComponent(alias)}${refresh ? '?refresh=1' : ''}`),
+  sqlColumns: (alias: string, db: string) => j<Record<string, SqlColumnInfo[]>>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/columns`),
+  sqlIndexes: (alias: string, db: string, table: string) => j<SqlIndexInfo[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/indexes`),
+  sqlTabs: () => j<SqlTab[]>('/api/sql/tabs'),
+  sqlSaveTabs: (tabs: SqlTab[]) => j<{ ok: true }>('/api/sql/tabs', { method: 'PUT', body: JSON.stringify({ tabs }) }),
+  sqlHistory: () => j<SqlHistoryEntry[]>('/api/sql/history'),
+  sqlLookup: (name: string, value: string) => post<{ alias: string; sql: string; view: 'record' | 'grid'; title: string }>('/api/sql/lookup', { name, value }),
+  sqlCredentials: () => j<SqlCredential[]>('/api/sql/credentials'),
+  sqlSetCredentials: (alias: string, user: string, password?: string) => j<SqlCredential[]>(`/api/sql/credentials/${encodeURIComponent(alias)}`, { method: 'PUT', body: JSON.stringify({ user, password }) }),
+  sqlForgetCredentials: (alias: string) => j<SqlCredential[]>(`/api/sql/credentials/${encodeURIComponent(alias)}`, { method: 'DELETE' }),
+  sqlCancel: (id: string) => j<{ ok: boolean }>(`/api/sql/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
 /** Server-sent events with a typed handler. Reconnects on its own; the browser handles that. */

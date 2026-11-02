@@ -70,6 +70,13 @@
   "terminal": {
     "shell": null
   },
+  "sql": {
+    "envFile": "C:/Users/you/Code/COR3/.env",
+    "aliases": ["main-dev", "data-dev", "main-prd-reader", "data-prd-reader"],
+    "defaultAlias": "main-prd-reader",
+    "autoLimit": 500,
+    "maxRows": 5000
+  },
   "jira": {
     "baseUrl": "",
     "email": "",

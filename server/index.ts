@@ -14,6 +14,7 @@ import { TerminalManager, type Terminal } from './terminals.js';
 import { DialogueManager } from './dialogue.js';
 import { TaskManager } from './tasks.js';
 import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
+import { SqlManager } from './sql.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
 import { run, errText } from './util.js';
@@ -33,7 +34,8 @@ const aws = new AwsCreds(config.aws, stateDir, process.env.FLEET_CONFIG || path.
 const teleport = new Teleport(config.teleport, stateDir, process.env.FLEET_CONFIG || path.join(root, 'fleet.config.json'));
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
-chats.terminals = terminals; chats.teleport = teleport; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
+const sql = new SqlManager(config.sql, teleport, stateDir);
+chats.terminals = terminals; chats.teleport = teleport; chats.sql = sql; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
 collector.dialogues = dialogues;
@@ -415,6 +417,34 @@ for (const action of ['approve', 'send-back', 'retry', 'start'] as const) {
 }
 app.delete('/api/tasks/:id', (req, res) => { try { tasks.remove(req.params.id); res.json({ ok: true }); } catch (err) { res.status(404).json({ error: errText(err) }); } });
 
+// SQL view: read-only queries over the Teleport tunnels. A run is a POST whose answer is an event stream (columns, row batches, done or error).
+const sqlRoute = (fn: (req: Request) => Promise<unknown> | unknown) => async (req: Request, res: Response) => {
+  try { res.json(await fn(req)); } catch (err) { res.status(400).json({ error: errText(err) }); }
+};
+const sqlName = (v: unknown) => { const s = String(v || ''); if (!/^[\w$.-]+$/.test(s)) throw new Error(`Not a name: ${s}`); return s; };
+app.get('/api/sql/info', sqlRoute(() => sql.info()));
+app.post('/api/sql/run', (req, res) => {
+  const s = sse(res);
+  let runId: string | null = null, finished = false;
+  // Closing the tab or navigating away mid-run stops the query on the server too.
+  res.on('close', () => { if (!finished && runId) sql.cancel(runId); s.stop(); });
+  sql.run(req.body || {}, ev => { if (ev.t === 'start') runId = ev.id; s.send(ev); })
+    .catch(err => s.send({ t: 'error', message: errText(err), code: null, offset: null, length: 0, line: null }))
+    .finally(() => { finished = true; s.stop(); res.end(); });
+});
+app.delete('/api/sql/runs/:id', (req, res) => res.json({ ok: sql.cancel(String(req.params.id)) }));
+app.get('/api/sql/schema/:alias', sqlRoute(req => sql.schema(sqlName(req.params.alias), req.query.refresh === '1')));
+app.get('/api/sql/schema/:alias/:db/columns', sqlRoute(req => sql.columns(sqlName(req.params.alias), sqlName(req.params.db))));
+app.get('/api/sql/schema/:alias/:db/:table/indexes', sqlRoute(req => sql.indexes(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
+// Per-connection logins, like DBeaver's. Passwords are written, never read back.
+app.get('/api/sql/credentials', sqlRoute(() => sql.credentials()));
+app.put('/api/sql/credentials/:alias', sqlRoute(req => { sql.setCredentials(sqlName(req.params.alias), { user: String(req.body?.user || ''), password: req.body?.password ? String(req.body.password) : undefined }); return sql.credentials(); }));
+app.delete('/api/sql/credentials/:alias', sqlRoute(req => { sql.setCredentials(sqlName(req.params.alias), null); return sql.credentials(); }));
+app.get('/api/sql/tabs', sqlRoute(() => sql.getTabs()));
+app.put('/api/sql/tabs', sqlRoute(req => { sql.setTabs(req.body?.tabs); return { ok: true }; }));
+app.get('/api/sql/history', sqlRoute(() => sql.getHistory()));
+app.post('/api/sql/lookup', sqlRoute(req => sql.lookup(String(req.body?.name || ''), String(req.body?.value || ''))));
+
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.
 app.get('/api/terminals', (_req, res) => res.json(terminals.list()));
 app.post('/api/terminals', (req, res) => {
@@ -458,6 +488,7 @@ if (fs.existsSync(webDist)) {
 
 collector.start();
 chats.persistTo(path.join(stateDir, `chats-${config.port}.json`));
+sql.persistTo(path.join(stateDir, `sql-${config.port}.json`));
 dialogues.persistTo(path.join(stateDir, `dialogues-${config.port}.json`));
 tasks.persistTo(path.join(stateDir, `tasks-${config.port}.json`));
 const server = createServer(app);

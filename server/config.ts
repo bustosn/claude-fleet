@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Role, DispatchDefaults, TunnelSpec } from '../shared/types.js';
+import type { Role, DispatchDefaults, TunnelSpec, SqlLookup } from '../shared/types.js';
 
 export interface AwsConfig {
   profile: string; credProfile: string; resetScript: string; resetSh: string; teleportScript: string; ssoRegion: string; chromePath: string;
@@ -27,7 +27,24 @@ export interface FleetConfig {
   /** Saved conversations idle this many days move to Archived on their own. 0 turns it off. */
   conversations: { archiveAfterDays: number };
   jira: JiraConfig;
+  sql: SqlConfig;
 }
+
+/** The SQL view: which tunnels it offers, where the DB credentials are read from (never stored here), and its limits.
+ *  A prod tunnel is offered only when it points at a reader. `lookups` are palette shortcuts like "cb 123456"; their `sql` takes one ? for the value. */
+export interface SqlConfig {
+  envFile: string; credentialsFile: string;
+  /** Logins per connection alias, like DBeaver's: { "main-prd-reader": { "user": "…", "password": "…" } }. This file is not tracked. */
+  credentials: Record<string, { user: string; password: string }>;
+  aliases: string[]; defaultAlias: string; autoLimit: number; maxRows: number; timeoutMs: number;
+  lookups: SqlLookup[];
+}
+
+const DEFAULT_LOOKUPS: SqlLookup[] = [
+  { name: 'cb', label: 'Chargeback by id', pattern: '^\\d+$', alias: 'main-prd-reader', sql: 'SELECT * FROM cb911.cb_chargebacks WHERE id = ?', view: 'record' },
+  { name: 'case', label: 'Chargebacks by case_no', pattern: '^\\S+$', alias: 'main-prd-reader', sql: 'SELECT * FROM cb911.cb_chargebacks WHERE case_no = ? ORDER BY ordinal', view: 'grid' },
+  { name: 'temp', label: 'Temp rows by case_no', pattern: '^\\S+$', alias: 'main-prd-reader', sql: 'SELECT * FROM cb911.cb_chargebacks_temp WHERE case_no = ? ORDER BY ordinal', view: 'grid' },
+];
 
 /** Jira Cloud (email + API token, REST v3) or Data Center (personal access token only, REST v2). Off without a baseUrl and token.
  *  `repos` maps a project key to the folder its tickets are worked in; a ticket label naming a repo under reposRoot also works.
@@ -81,6 +98,20 @@ export function loadConfig(): FleetConfig {
         fields: raw.jira?.create?.fields && typeof raw.jira.create.fields === 'object' ? raw.jira.create.fields : {},
         afterCreate: Array.isArray(raw.jira?.create?.afterCreate) ? raw.jira.create.afterCreate.filter((f: unknown) => f && typeof f === 'object') : [],
       },
+    },
+    sql: {
+      // The example's placeholder path counts as unset, like claudeHome's.
+      envFile: raw.sql?.envFile && !/[\\/]you[\\/]/.test(raw.sql.envFile) ? String(raw.sql.envFile) : path.join(os.homedir(), 'Code', 'COR3', '.env'),
+      credentialsFile: String(raw.sql?.credentialsFile || path.join(os.homedir(), '.fleet', 'sql-credentials.json')),
+      credentials: Object.fromEntries(Object.entries(raw.sql?.credentials && typeof raw.sql.credentials === 'object' ? raw.sql.credentials : {})
+        .filter(([, v]: [string, any]) => v && v.user).map(([k, v]: [string, any]) => [k, { user: String(v.user), password: String(v.password ?? '') }])),
+      aliases: Array.isArray(raw.sql?.aliases) ? raw.sql.aliases.map(String) : ['main-dev', 'data-dev', 'main-prd-reader', 'data-prd-reader'],
+      defaultAlias: String(raw.sql?.defaultAlias || 'main-prd-reader'),
+      autoLimit: Math.max(1, Number(raw.sql?.autoLimit) || 500), maxRows: Math.max(1, Number(raw.sql?.maxRows) || 5000),
+      timeoutMs: Math.max(1000, Number(raw.sql?.timeoutMs) || 120000),
+      lookups: (Array.isArray(raw.sql?.lookups) ? raw.sql.lookups : DEFAULT_LOOKUPS)
+        .filter((l: any) => l && l.name && l.sql)
+        .map((l: any): SqlLookup => ({ name: String(l.name).toLowerCase(), label: String(l.label || l.name), pattern: String(l.pattern || '^\\S+$'), alias: String(l.alias || raw.sql?.defaultAlias || 'main-prd-reader'), sql: String(l.sql), view: l.view === 'grid' ? 'grid' : 'record' })),
     },
   };
   return cfg;
