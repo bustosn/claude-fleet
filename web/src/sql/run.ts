@@ -6,11 +6,13 @@ export interface SqlResult {
   runId: string | null; statement: string; offset: number; startedAt: number;
   columns: SqlColumn[]; rows: SqlValue[][];
   ms: number | null; truncated: boolean; autoLimited: boolean;
+  /** Rows a write changed; null for reads. */
+  affected: number | null;
   error: { message: string; code: string | null; offset: number | null; length: number; line: number | null } | null;
   notice: string | null; version: number;
 }
 
-export const emptyResult = (): SqlResult => ({ status: 'running', runId: null, statement: '', offset: 0, startedAt: Date.now(), columns: [], rows: [], ms: null, truncated: false, autoLimited: false, error: null, notice: null, version: 0 });
+export const emptyResult = (): SqlResult => ({ status: 'running', runId: null, statement: '', offset: 0, startedAt: Date.now(), columns: [], rows: [], ms: null, truncated: false, autoLimited: false, affected: null, error: null, notice: null, version: 0 });
 
 /** POSTs a run and reads its event stream (EventSource cannot POST). Rows are pushed into the result as they come;
  *  `onChange` fires at most once per frame, so a 5,000-row result re-renders a handful of times, not once per batch. */
@@ -30,7 +32,7 @@ export function startRun(req: SqlRunRequest, onChange: (r: SqlResult) => void): 
       // Columns again means the tunnel was restarted and the statement re-run: start the rows over.
       case 'columns': r.columns = ev.columns; r.rows = []; break;
       case 'rows': for (const row of ev.rows) r.rows.push(row); break;
-      case 'done': r.status = 'done'; r.ms = ev.ms; r.truncated = ev.truncated; r.autoLimited = ev.autoLimited; break;
+      case 'done': r.status = 'done'; r.ms = ev.ms; r.truncated = ev.truncated; r.autoLimited = ev.autoLimited; r.affected = ev.affected; break;
       case 'error': r.status = 'error'; r.ms = Date.now() - r.startedAt; r.error = { message: ev.message, code: ev.code, offset: ev.offset, length: ev.length, line: ev.line }; break;
     }
     changed(ev.t !== 'rows');

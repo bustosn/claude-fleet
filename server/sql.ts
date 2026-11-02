@@ -5,7 +5,7 @@ import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
 import type { SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
-import { classify, errorOffset, limitable, split, statementAt, withLimit } from '../shared/sqlClassify.js';
+import { classify, classifyWrite, errorOffset, limitable, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
 const SYSTEM_DBS = ['mysql', 'sys', 'performance_schema', 'information_schema'];
 const BATCH = 200, FLUSH_MS = 80, HISTORY = 500;
@@ -101,7 +101,8 @@ export class SqlManager {
     p = mysql.createPool({ ...this.connOpts(a), connectionLimit: 4, maxIdle: 0, idleTimeout: IDLE_MS, waitForConnections: true, queueLimit: 20 });
     const capSec = Math.ceil(this.cfg.timeoutMs / 1000);
     p.on('connection', conn => {
-      conn.query('SET SESSION TRANSACTION READ ONLY');
+      // Prod is read-only at the session too; dev connections may write.
+      if (a.prod) conn.query('SET SESSION TRANSACTION READ ONLY');
       conn.query(`SET SESSION max_execution_time = ${this.cfg.timeoutMs}`);
       conn.query(`SET SESSION wait_timeout = ${Math.max(capSec * 3, 600)}`);
       // Teleport's proxy answers the handshake itself, so conn.threadId is its id, not the server's; KILL QUERY needs the server's.
@@ -138,8 +139,10 @@ export class SqlManager {
     return this.withConn(a, c => new Promise((res, rej) => c.query(sql, params, (err, rows) => err ? rej(err) : res(rows as T[]))));
   }
 
-  /** Picks the statement (selection, or the one under the cursor), checks it, limits it, runs it, and streams what comes back. */
-  async run(req: SqlRunRequest, emit: Emit, opts: { maxRows?: number } = {}): Promise<void> {
+  /** Picks the statement (selection, or the one under the cursor), checks it, limits it, runs it, and streams what comes back.
+   *  Prod connections, and any run with `readOnly` (the fleet_sql tool), take reads only; dev connections take any one statement,
+   *  and the risky ones (UPDATE or DELETE with no WHERE, TRUNCATE, DROP) only with `confirm`. */
+  async run(req: SqlRunRequest, emit: Emit, opts: { maxRows?: number; readOnly?: boolean } = {}): Promise<void> {
     const t0 = Date.now();
     const text = String(req.text || '');
     let stmtText = '', offset = 0;
@@ -161,8 +164,11 @@ export class SqlManager {
       stmtText = s.text; offset = s.start;
     }
     entry.sql = stmtText;
-    const c = classify(stmtText);
+    const writable = !a.prod && !opts.readOnly;
+    const c = writable ? classifyWrite(stmtText) : { ...classify(stmtText), write: false, danger: null };
     if (!c.ok) return fail(c.reason || 'Not a read.');
+    // Asked once, answered in the browser: the same request again with confirm set.
+    if (c.danger && !req.confirm) return emit({ t: 'error', message: c.danger, code: 'CONFIRM', offset: null, length: 0, line: null });
     const db = req.db ? String(req.db) : null;
     if (db && !/^[\w$]+$/.test(db)) return fail(`Not a database name: ${db}`);
 
@@ -174,7 +180,7 @@ export class SqlManager {
     this.runs.set(run.id, run);
     emit({ t: 'start', id: run.id, statement: stmtText, offset });
 
-    let rowCount = 0, truncated = false;
+    let rowCount = 0, truncated = false, affected: number | null = null;
     const timer = setTimeout(() => { run.timedOut = true; this.kill(a, run); }, this.cfg.timeoutMs + 2000);
     try {
       await this.withConn(a, conn => new Promise<void>((resolve, reject) => {
@@ -185,15 +191,16 @@ export class SqlManager {
           const flush = () => { if (buf.length) { emit({ t: 'rows', rows: buf }); buf = []; sent = true; } };
           const tick = setInterval(flush, FLUSH_MS);
           const q = conn.query({ sql: exec, rowsAsArray: true });
-          q.on('fields', (f: mysql.FieldPacket[]) => { fields = f; emit({ t: 'columns', columns: f.map(column) }); });
+          // A write fires 'fields' too, with nothing in it.
+          q.on('fields', (f: mysql.FieldPacket[] | undefined) => { if (!f) return; fields = f; emit({ t: 'columns', columns: f.map(column) }); });
           q.on('result', (row: any) => {
-            if (!Array.isArray(row)) return;
+            if (!Array.isArray(row)) { if (row && typeof row.affectedRows === 'number') affected = (affected || 0) + row.affectedRows; return; }
             if (rowCount >= maxRows) { if (!truncated) { truncated = true; this.kill(a, run, true); } return; }
             rowCount++;
             buf.push(row.map(cell));
             if (buf.length >= BATCH) flush();
           });
-          q.on('error', (err: any) => { failed = true; clearInterval(tick); flush(); err.rowsSent = sent || rowCount > 0; reject(err); });
+          q.on('error', (err: any) => { failed = true; clearInterval(tick); flush(); err.rowsSent = sent || rowCount > 0 || c.write; reject(err); });
           q.on('end', () => { if (failed) return; clearInterval(tick); flush(); if (!fields) emit({ t: 'columns', columns: [] }); resolve(); });
         };
         if (db) conn.query(`USE \`${db}\``, err => err ? reject(err) : go()); else go();
@@ -201,8 +208,8 @@ export class SqlManager {
       // A killed SLEEP or a query stopped between rows can still end cleanly; it was stopped all the same.
       if (run.cancelled || run.timedOut) throw Object.assign(new Error('Cancelled.'), { code: 'CANCELLED' });
       const ms = Date.now() - t0;
-      emit({ t: 'done', ms, rowCount, truncated, autoLimited: appended && req.limit !== 'max' && rowCount >= limit, affected: null });
-      entry.rows = rowCount; entry.ms = ms; this.addHistory(entry);
+      emit({ t: 'done', ms, rowCount, truncated, autoLimited: appended && req.limit !== 'max' && rowCount >= limit, affected });
+      entry.rows = affected ?? rowCount; entry.ms = ms; this.addHistory(entry);
     } catch (err: any) {
       // Hitting the row cap kills the query on purpose; what was read is the result.
       if (truncated && /interrupted/i.test(String(err.message))) {
@@ -248,7 +255,7 @@ export class SqlManager {
       else if (ev.t === 'rows') out.rows.push(...ev.rows);
       else if (ev.t === 'done') { out.ms = ev.ms; out.truncated = ev.truncated; out.autoLimited = ev.autoLimited; }
       else if (ev.t === 'error') out.error = ev.message;
-    }, { maxRows });
+    }, { maxRows, readOnly: true });
     return out;
   }
 

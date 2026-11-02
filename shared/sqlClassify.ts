@@ -109,7 +109,7 @@ export function classify(stmt: string): Classified {
   if (!head) return { ok: false, kind: '', reason: 'Nothing to run.' };
   const kind = head.type === 'word' ? head.value : head.value.slice(0, 20);
   if (head.type !== 'word' || !READ_STARTS.has(head.value) || (at > 0 && head.value !== 'SELECT' && head.value !== 'WITH'))
-    return { ok: false, kind, reason: `${kind || 'This'} is not a read. The SQL view runs SELECT, WITH, SHOW, EXPLAIN and DESCRIBE only.` };
+    return { ok: false, kind, reason: `${kind || 'This'} is not a read. This connection runs SELECT, WITH, SHOW, EXPLAIN and DESCRIBE only.` };
   // SHOW and DESCRIBE cannot write, and SHOW CREATE TABLE or SHOW CHARACTER SET contain write words.
   if (head.value === 'SHOW' || head.value === 'DESCRIBE' || head.value === 'DESC') return { ok: true, kind };
   for (let i = at + 1; i < toks.length; i++) {
@@ -117,11 +117,38 @@ export function classify(stmt: string): Classified {
     if (t.type !== 'word') continue;
     const next = toks[i + 1];
     if (WRITES.has(t.value) && !(FUNCTIONS.has(t.value) && next?.type === 'punct' && next.value === '('))
-      return { ok: false, kind, reason: `${t.value} is not allowed: the SQL view is read-only.` };
+      return { ok: false, kind, reason: `${t.value} is not allowed: this connection is read-only.` };
     if (t.value === 'FOR' && next?.type === 'word' && (next.value === 'UPDATE' || next.value === 'SHARE'))
-      return { ok: false, kind, reason: `FOR ${next.value} takes locks; the SQL view is read-only.` };
+      return { ok: false, kind, reason: `FOR ${next.value} takes locks; this connection is read-only.` };
   }
   return { ok: true, kind };
+}
+
+// Transaction control: each run may land on a different pooled connection and every statement commits on its own,
+// so a BEGIN in one run and a COMMIT in the next would not be the same transaction.
+const TX = new Set(['BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'XA', 'LOCK', 'UNLOCK']);
+
+export interface WriteClassified extends Classified { write: boolean; danger: string | null }
+
+/** For a connection that may write (dev): any one statement except transaction control. `write` says whether it changes anything;
+ *  `danger` names the ones worth a second look before they run: UPDATE or DELETE with no WHERE, TRUNCATE, DROP. */
+export function classifyWrite(stmt: string): WriteClassified {
+  const toks = tokenize(stmt);
+  if (toks.some(t => t.type === 'punct' && t.value === ';')) return { ok: false, kind: '', reason: 'One statement at a time.', write: false, danger: null };
+  const words = toks.filter(t => t.type === 'word');
+  const head = toks.find(t => !(t.type === 'punct' && t.value === '('));
+  if (!head) return { ok: false, kind: '', reason: 'Nothing to run.', write: false, danger: null };
+  const kind = head.type === 'word' ? head.value : head.value.slice(0, 20);
+  if (TX.has(kind) || (kind === 'SET' && words[1] && ['AUTOCOMMIT', 'TRANSACTION'].includes(words[1].value)) || (kind === 'SET' && words.some(w => w.value === 'AUTOCOMMIT')))
+    return { ok: false, kind, reason: `${kind} is not supported here: every statement commits on its own, and the next run may use another connection. Run the statements one by one.`, write: true, danger: null };
+  const read = classify(stmt);
+  if (read.ok) return { ok: true, kind, write: false, danger: null };
+  const top = (w: string) => toks.some(t => t.type === 'word' && t.value === w && t.depth === 0);
+  let danger: string | null = null;
+  if (kind === 'TRUNCATE') danger = 'TRUNCATE empties the whole table.';
+  else if (kind === 'DROP') danger = `DROP ${words[1]?.value || ''} removes it for good.`.replace('  ', ' ');
+  else if ((top('DELETE') || top('UPDATE')) && !top('WHERE')) danger = `${top('DELETE') ? 'DELETE' : 'UPDATE'} without a WHERE changes every row in the table.`;
+  return { ok: true, kind, write: true, danger };
 }
 
 /** True when the statement already has a LIMIT outside any parentheses. */

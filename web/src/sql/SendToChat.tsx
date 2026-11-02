@@ -7,7 +7,7 @@ import { csv, markdown } from './copy';
 export type Intent = 'result' | 'write' | 'explain' | 'fix';
 const INTENTS: { id: Intent; label: string; lead: string }[] = [
   { id: 'result', label: 'Share the result', lead: 'Here is a query I ran and what it returned.' },
-  { id: 'write', label: 'Write a query for…', lead: 'Write a read-only MySQL query for what I describe below. Use the statement and result as context for the schema. Fully qualify tables.' },
+  { id: 'write', label: 'Write a query for…', lead: 'Write a MySQL query for what I describe below. Use the statement and result as context for the schema. Fully qualify tables.' },
   { id: 'explain', label: 'Explain this query', lead: 'Explain what this query does, whether it will use an index on these tables, and anything in the result that looks off.' },
   { id: 'fix', label: 'Fix this error', lead: 'This query failed. Tell me why and give me a corrected version.' },
 ];
@@ -80,7 +80,7 @@ export function SendToChat({ data, intent: first, onClose }: { data: ShareData; 
 
 function build(d: ShareData, lead: string, note: string) {
   const parts = [`${lead}${note.trim() ? `\n\n${note.trim()}` : ''}`, '',
-    `**Connection:** ${d.alias} (${d.prod ? 'PRD reader' : 'dev'}, read-only)${d.db ? ` · default database ${d.db}` : ''}`, '', '```sql', d.statement, '```'];
+    `**Connection:** ${d.alias} (${d.prod ? 'PRD reader, read-only' : 'dev'})${d.db ? ` · default database ${d.db}` : ''}`, '', '```sql', d.statement, '```'];
   let attachment: { name: string; mediaType: string; data: string } | null = null;
   const sample = { rows: 0, cut: false };
   if (d.error) parts.push('', `**Error:** ${d.error}`);

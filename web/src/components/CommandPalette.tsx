@@ -27,7 +27,7 @@ export function CommandPalette() {
       { id: 'jira', label: 'Jira', hint: 'your tickets by status; move them or start a task', icon: KanbanSquare, view: { kind: 'jira' } },
       { id: 'jira-new', label: 'New Jira ticket', hint: 'create a ticket in Jira', icon: KanbanSquare, view: { kind: 'jira', create: true } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
-      { id: 'sql', label: 'SQL', hint: 'read-only queries over the Teleport tunnels', icon: Database, view: { kind: 'sql' } },
+      { id: 'sql', label: 'SQL', hint: 'queries over the Teleport tunnels: dev read-write, prod read-only', icon: Database, view: { kind: 'sql' } },
       { id: 'sql-new', label: 'New SQL tab', hint: 'a blank query tab', icon: Database, view: { kind: 'sql', lookup: { name: '', value: '', at: 0 } } },
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
       { id: 'new-task', label: 'New task', hint: 'queue work; a chat picks it up and reports back for review', icon: ListPlus, view: { kind: 'new-task' } },

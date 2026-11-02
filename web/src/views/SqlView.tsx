@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { AlignLeft, Ban, ChevronDown, Columns3, Database, Gauge, KeyRound, LayoutList, MessageSquareShare, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
-import { api, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
+import { api, type SqlRunRequest, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { Empty, Kbd } from '../components/ui';
@@ -42,6 +42,7 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [cell, setCell] = useState<{ tab: string; row: number; col: number } | null>(null);
   const [share, setShare] = useState<Intent | null>(null);
   const [login, setLogin] = useState(false);
+  const [confirm, setConfirm] = useState<{ tab: string; req: SqlRunRequest; reason: string } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [, tick] = useState(0);
   const editors = useRef<Record<string, EditorHandle | null>>({});
@@ -137,18 +138,21 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   // Running.
   const run = (limit: 'auto' | 'max' = 'auto', override?: { text: string; cursor: number; selection: null }) => {
     if (!active || !alias) return;
-    const ed = editors.current[active.id];
-    const snap = override || ed?.snapshot();
+    const snap = override || editors.current[active.id]?.snapshot();
     if (!snap) return;
-    const id = active.id;
+    launch(active.id, { alias: alias.alias, text: snap.text, cursor: snap.cursor, selection: snap.selection, db: active.db, limit }, !override);
+  };
+  const launch = (id: string, req: SqlRunRequest, markErrors: boolean) => {
     aborts.current[id]?.();
-    ed?.markError(null);
-    const { abort } = startRun({ alias: alias.alias, text: snap.text, cursor: snap.cursor, selection: snap.selection, db: active.db, limit }, r => {
+    editors.current[id]?.markError(null);
+    const { abort } = startRun(req, r => {
+      // A risky write on dev: the server asks first, and the same request goes again with confirm once you say so.
+      if (r.status === 'error' && r.error?.code === 'CONFIRM') { delete aborts.current[id]; setResults(x => { const { [id]: _, ...rest } = x; return rest; }); setConfirm({ tab: id, req, reason: r.error.message }); return; }
       setResults(x => ({ ...x, [id]: r }));
       if (r.status === 'running') return;
       delete aborts.current[id];
       api.sqlHistory().then(setHistory).catch(() => {});
-      if (r.status === 'error' && r.error?.offset != null && !override) editors.current[id]?.markError({ from: r.error.offset, to: r.error.offset + Math.max(1, r.error.length) });
+      if (r.status === 'error' && r.error?.offset != null && markErrors) editors.current[id]?.markError({ from: r.error.offset, to: r.error.offset + Math.max(1, r.error.length) });
       setUi(u => {
         const cur = u[id] || freshUi();
         const mode = cur.preferRecord && r.status === 'done' && r.rows.length === 1 ? 'record' : r.status === 'done' && r.rows.length !== 1 && cur.mode === 'record' && cur.preferRecord ? 'grid' : cur.mode;
@@ -321,7 +325,7 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
 
         {active && <>
           <div className="sql-toolbar">
-            <label className={`sql-conn ${alias?.prod ? 'prod' : 'dev'}`} title={alias?.prod ? 'Production reader: read-only' : 'Development: read-only'}>
+            <label className={`sql-conn ${alias?.prod ? 'prod' : 'dev'}`} title={alias?.prod ? 'Production reader: read-only' : 'Development: reads and writes, each statement committed as it runs'}>
               <Database size={13} aria-hidden="true" />
               <select value={active.alias} onChange={e => patchTab(active.id, { alias: e.target.value, db: null })} aria-label="Connection">
                 {info.aliases.map(a => <option key={a.alias} value={a.alias}>{a.alias}{a.prod ? ' (PRD)' : ''}</option>)}
@@ -394,7 +398,7 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
                   : <RecordView columns={columns} row={recordRow} position={recordPos} count={order.length} onMove={to => patchUi(active.id, { record: to, selection: null })}
                     onOpenCell={col => { const row = result.rows.indexOf(recordRow!); if (row >= 0) setCell({ tab: active.id, row, col }); }} />}
               </>}
-              {result && result.status === 'done' && !result.columns.length && <div className="m-auto text-[12px] text-fg-faint">The statement ran and returned no result set.</div>}
+              {result && result.status === 'done' && !result.columns.length && <div className="m-auto text-[12px] text-fg-muted">{result.affected != null ? <><b className="num text-fg">{result.affected.toLocaleString()}</b> row{result.affected === 1 ? '' : 's'} affected. Committed.</> : 'The statement ran and returned no result set.'}</div>}
               {result && result.status === 'done' && result.columns.length > 0 && !result.rows.length && <div className="p-6 text-center text-[12px] text-fg-faint">No rows.</div>}
             </div>
           </div>
@@ -406,6 +410,8 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
       {cell && results[cell.tab] && <CellModal column={results[cell.tab].columns[cell.col]} value={results[cell.tab].rows[cell.row]?.[cell.col] ?? null} onClose={() => setCell(null)} />}
       {login && alias && <CredentialsDialog alias={alias.alias} prod={alias.prod} onClose={() => setLogin(false)}
         onSaved={() => { setSchemaErr(x => { const { [alias.alias]: _, ...rest } = x; return rest; }); if (schemaErr[alias.alias]) loadSchema(alias.alias); }} />}
+      {confirm && <ConfirmWrite reason={confirm.reason} statement={confirm.req.selection ? confirm.req.text.slice(confirm.req.selection.from, confirm.req.selection.to).trim() : statementAt(confirm.req.text, confirm.req.cursor)?.text || ''} alias={confirm.req.alias}
+        onClose={() => setConfirm(null)} onRun={() => { const c = confirm; setConfirm(null); launch(c.tab, { ...c.req, confirm: true }, true); }} />}
       {share && (() => { const d = shareData(); return d ? <SendToChat data={d} intent={share} onClose={() => setShare(null)} /> : null; })()}
       {menu}
     </div>
@@ -417,12 +423,14 @@ function StatusBar({ alias, db, result, autoLimit, maxRows, onCancel, onRunMax }
   const ms = running ? Date.now() - result!.startedAt : result?.ms;
   return (
     <div className={`sql-status ${alias?.prod ? 'prod' : ''}`} role="status">
-      <span className={`sql-env ${alias?.prod ? 'prod' : 'dev'}`}><ShieldCheck size={11} aria-hidden="true" /> {alias?.prod ? 'PRD' : 'DEV'} · read-only</span>
+      <span className={`sql-env ${alias?.prod ? 'prod' : 'dev'}`}><ShieldCheck size={11} aria-hidden="true" /> {alias?.prod ? 'PRD · read-only' : 'DEV · read-write'}</span>
       <span className="text-fg-muted">{alias?.alias}{db ? ` / ${db}` : ''}</span>
       <span className="grow" />
       {result?.autoLimited && <button className="chip warn" onClick={onRunMax} title={`Run again with up to ${maxRows.toLocaleString()} rows`}>LIMIT {autoLimit} added · Ctrl+Shift+Enter for {maxRows.toLocaleString()}</button>}
       {result?.truncated && <span className="chip warn" title="The query was stopped at the row cap. Narrow the WHERE or add a LIMIT.">capped at {maxRows.toLocaleString()} rows</span>}
-      {result && <span className="num">{result.rows.length.toLocaleString()} row{result.rows.length === 1 ? '' : 's'}</span>}
+      {result && (result.affected != null
+        ? <span className="num">{result.affected.toLocaleString()} row{result.affected === 1 ? '' : 's'} affected</span>
+        : <span className="num">{result.rows.length.toLocaleString()} row{result.rows.length === 1 ? '' : 's'}</span>)}
       {ms != null && <span className="num text-fg-muted">{ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`}</span>}
       {running && <button className="chip crit" onClick={onCancel}>Cancel · Esc</button>}
     </div>
@@ -437,11 +445,29 @@ function EmptyResult({ history, onOpen, autoLimit }: { history: SqlHistoryEntry[
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1.5">
         {keys.map(([k, what]) => <div key={what} className="contents"><span className="flex gap-1">{k.map(x => <Kbd key={x}>{x}</Kbd>)}</span><span>{what}</span></div>)}
       </div>
-      <div className="text-fg-faint">Every connection is read-only. A SELECT without a LIMIT gets LIMIT {autoLimit}.</div>
+      <div className="text-fg-faint">Prod connections are read-only. Dev connections run anything, each statement committed as it runs, and ask first before an UPDATE or DELETE with no WHERE, a TRUNCATE or a DROP. A SELECT without a LIMIT gets LIMIT {autoLimit}.</div>
       {history.length > 0 && <div className="grid gap-1">
         <div className="section-title !m-0 !h-auto !p-0"><LayoutList size={11} aria-hidden="true" /> Recent on this connection</div>
         {history.map(h => <button key={h.at} className="sql-hist" onClick={() => onOpen(h)}><div className="text-[10.5px] text-fg-faint">{age(h.at)} ago</div><div className="sql-hist-sql">{h.sql}</div></button>)}
       </div>}
     </div>
+  );
+}
+
+/** The second look before a risky write on dev. Cancel is the default button; running it takes a click or Ctrl+Enter. */
+function ConfirmWrite({ reason, statement, alias, onClose, onRun }: { reason: string; statement: string; alias: string; onClose: () => void; onRun: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { ref.current?.showModal(); }, []);
+  return (
+    <dialog ref={ref} className="w-[min(620px,94vw)]" onClose={onClose}
+      onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); onRun(); } }}>
+      <h2>Run this on {alias}?</h2>
+      <p className="mb-3 text-[12.5px] text-fg">{reason} It commits as soon as it runs.</p>
+      <pre className="sql-pre mb-4 max-h-[240px] overflow-auto rounded-lg border border-line bg-raised">{statement}</pre>
+      <div className="flex justify-end gap-2">
+        <button className="btn" autoFocus onClick={() => ref.current?.close()}>Cancel</button>
+        <button className="btn danger" onClick={onRun}>Run it</button>
+      </div>
+    </dialog>
   );
 }

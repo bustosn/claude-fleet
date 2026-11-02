@@ -271,7 +271,9 @@ export type SqlEvent =
   | { t: 'rows'; rows: SqlValue[][] }
   | { t: 'done'; ms: number; rowCount: number; truncated: boolean; autoLimited: boolean; affected: number | null }
   | { t: 'error'; message: string; code: string | null; offset: number | null; length: number; line: number | null };
-export interface SqlRunRequest { alias: string; text: string; cursor: number; selection?: { from: number; to: number } | null; db?: string | null; limit?: 'auto' | 'max' }
+export interface SqlRunRequest { alias: string; text: string; cursor: number; selection?: { from: number; to: number } | null; db?: string | null; limit?: 'auto' | 'max';
+  /** Run a risky write (UPDATE or DELETE with no WHERE, TRUNCATE, DROP) that the server asked about with an error coded CONFIRM. */
+  confirm?: boolean }
 export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
 export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number }
 export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid' }

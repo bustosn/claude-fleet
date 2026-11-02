@@ -67,7 +67,7 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
     case 'overview': return { text: 'Overview', hint: 'Overview' };
     case 'hub': return { text: 'Hub', hint: 'AWS credentials and other chores' };
     case 'jira': return { text: 'Jira', hint: 'Your Jira tickets by status' };
-    case 'sql': return { text: 'SQL', hint: 'Read-only SQL over the Teleport tunnels' };
+    case 'sql': return { text: 'SQL', hint: 'SQL over the Teleport tunnels: dev read-write, prod read-only' };
     case 'new-chat': return { text: 'New chat', hint: v.cwd ? `New chat in ${shortPath(v.cwd)}` : 'New chat' };
     case 'resume': return { text: v.title, hint: `Opening ${v.title}` };
     case 'chat': {

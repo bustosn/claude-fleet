@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
+import { classify, classifyWrite, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
 
 const reads = [
   'SELECT * FROM cb911.cb_chargebacks WHERE id = 1',
@@ -104,4 +104,16 @@ test('error position from the MySQL message', () => {
   assert.equal(e.offset, stmt.indexOf('WHER'));
   assert.equal(e.length, 4);
   assert.deepEqual(errorOffset(stmt, 'Unknown column x'), { line: null, offset: null, length: 0 });
+});
+
+test('dev connections: any one statement, transactions refused, risky writes flagged', () => {
+  for (const r of ['SELECT 1', 'SHOW TABLES']) assert.deepEqual([classifyWrite(r).ok, classifyWrite(r).write], [true, false], r);
+  const fine = ["UPDATE cb911.t SET a = 1 WHERE id = 5", 'DELETE FROM t WHERE id IN (1, 2)', "INSERT INTO t (a) VALUES (1)", 'CREATE TABLE x (id INT)', 'ALTER TABLE x ADD COLUMN b INT', 'INSERT INTO t SELECT * FROM u'];
+  for (const w of fine) { const c = classifyWrite(w); assert.equal(c.ok, true, w); assert.equal(c.write, true, w); assert.equal(c.danger, null, w); }
+  const risky = ['UPDATE t SET a = 1', 'DELETE FROM t', 'UPDATE t SET a = (SELECT b FROM u WHERE u.id = 1)', 'TRUNCATE TABLE t', 'DROP TABLE t', 'WITH x AS (SELECT 1) DELETE FROM t'];
+  for (const w of risky) { const c = classifyWrite(w); assert.equal(c.ok, true, w); assert.ok(c.danger, w); }
+  for (const t of ['BEGIN', 'START TRANSACTION', 'COMMIT', 'ROLLBACK', 'SET autocommit = 0', 'LOCK TABLES t WRITE', 'UPDATE t SET a = 1 WHERE id = 1; DELETE FROM t'])
+    assert.equal(classifyWrite(t).ok, false, t);
+  // Prod keeps the read-only check.
+  assert.equal(classify('UPDATE t SET a = 1 WHERE id = 5').ok, false);
 });
