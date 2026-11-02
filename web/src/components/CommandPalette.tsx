@@ -16,9 +16,9 @@ export function CommandPalette() {
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (open) { setQ(''); setCursor(0); setTimeout(() => input.current?.focus(), 0); } }, [open]);
-  // The SQL view's lookups ("cb 123456"), read once the first time the palette opens.
+  // The SQL view's lookups ("cb 123456"), read each time the palette opens so new ones show up.
   const [lookups, setLookups] = useState<SqlLookup[]>([]);
-  useEffect(() => { if (open && !lookups.length) api.sqlInfo().then(i => setLookups(i.lookups)).catch(() => {}); }, [open]);
+  useEffect(() => { if (open) api.sqlInfo().then(i => setLookups(i.lookups)).catch(() => {}); }, [open]);
 
   const items = useMemo<Item[]>(() => {
     if (!snap) return [];

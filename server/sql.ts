@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto';
 import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
-import type { SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
-import { classify, classifyWrite, errorOffset, limitable, split, statementAt, withLimit } from '../shared/sqlClassify.js';
+import type { SqlLookup, SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
+import { classify, classifyWrite, countParams, errorOffset, limitable, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
 const SYSTEM_DBS = ['mysql', 'sys', 'performance_schema', 'information_schema'];
 const BATCH = 200, FLUSH_MS = 80, HISTORY = 500;
@@ -38,7 +38,7 @@ export class SqlManager {
     let error: string | null = null;
     if (!aliases.length) error = 'No tunnels to offer. The SQL view uses the Teleport tunnels named in sql.aliases (main-dev, data-dev, main-prd-reader, data-prd-reader by default).';
     const defaultAlias = aliases.find(a => a.alias === this.cfg.defaultAlias)?.alias || aliases[0]?.alias || '';
-    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.cfg.lookups, error };
+    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error };
   }
   private alias(name: string): SqlAlias {
     const a = this.aliases().find(x => x.alias === name);
@@ -313,14 +313,53 @@ export class SqlManager {
     return c.indexes[key];
   }
 
-  /** A configured lookup turned into a statement. The value goes in through mysql2's escaping, never pasted. */
+  // Lookups: the configured ones (fleet.config.json, or the built-ins), plus the ones made in the SQL view, kept in state/sql-lookups.json
+  // and shared by every Fleet instance. One made in the view replaces a configured one of the same name.
+  private lookupsFile() { return path.join(this.stateDir, 'sql-lookups.json'); }
+  private userLookups(): SqlLookup[] {
+    try { const j = JSON.parse(fs.readFileSync(this.lookupsFile(), 'utf8')); return Array.isArray(j) ? j.map((l: SqlLookup) => ({ ...l, source: 'user' as const })) : []; } catch { return []; }
+  }
+  lookups(): SqlLookup[] {
+    const mine = this.userLookups(), names = new Set(mine.map(l => l.name));
+    return [...this.cfg.lookups.filter(l => !names.has(l.name)), ...mine];
+  }
+  /** Saves a lookup made or edited in the SQL view. It must be one read with at least one ?, since lookups run on prod readers too. */
+  saveLookup(name: string, v: Partial<SqlLookup>, rename?: string) {
+    const n = String(name || '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_-]{0,23}$/.test(n)) throw new Error('The name is what you type in the palette: letters, digits, - or _, starting with a letter (like cb or client).');
+    const sql = String(v.sql || '').trim().replace(/;\s*$/, '');
+    if (!sql) throw new Error('The lookup needs SQL.');
+    if (split(sql, { blankLines: false }).length !== 1) throw new Error('A lookup is one statement.');
+    if (!countParams(sql)) throw new Error('Put a ? where the value goes, like WHERE c.case_no = ?. Every ? gets the value.');
+    const c = classify(sql);
+    if (!c.ok) throw new Error(`Lookups only read: ${c.reason}`);
+    const alias = String(v.alias || this.info().defaultAlias);
+    this.alias(alias);
+    const type = v.type === 'number' ? 'number' : 'text';
+    const l: SqlLookup = { name: n, label: String(v.label || '').trim() || n, pattern: type === 'number' ? '^\\d+$' : '^\\S+$', alias, sql, view: v.view === 'grid' ? 'grid' : 'record', type };
+    const all = this.userLookups().filter(x => x.name !== n && x.name !== rename).map(({ source: _, ...x }) => x);
+    all.push(l);
+    fs.writeFileSync(this.lookupsFile(), JSON.stringify(all, null, 2));
+    return this.lookups();
+  }
+  /** Removes a lookup made in the view; a configured one of the same name shows again. */
+  deleteLookup(name: string) {
+    const all = this.userLookups().filter(x => x.name !== name.toLowerCase()).map(({ source: _, ...x }) => x);
+    fs.writeFileSync(this.lookupsFile(), JSON.stringify(all, null, 2));
+    return this.lookups();
+  }
+
+  /** A lookup turned into a statement. Every ? gets the value through mysql2's escaping, never pasted. */
   lookup(name: string, value: string) {
-    const l = this.cfg.lookups.find(x => x.name === name.toLowerCase());
+    const l = this.lookups().find(x => x.name === name.toLowerCase());
     if (!l) throw new Error(`No lookup named ${name}.`);
     const v = value.trim();
     if (!new RegExp(l.pattern).test(v)) throw new Error(`"${v}" does not look like a ${l.label.toLowerCase()} value.`);
     const alias = this.aliases().some(a => a.alias === l.alias) ? l.alias : this.info().defaultAlias;
-    return { alias, sql: mysql.format(l.sql, [/^\d+$/.test(v) && l.pattern.includes('\\d') ? Number(v) : v]), view: l.view, title: `${l.name} ${v}` };
+    // Numbers unquoted for numeric ids, so the comparison uses the index; quoted for text, so a varchar column is not compared to a number.
+    const asNumber = l.type ? l.type === 'number' && /^-?\d+$/.test(v) : /^\d+$/.test(v) && l.pattern.includes('\\d');
+    const arg = asNumber ? Number(v) : v;
+    return { alias, sql: mysql.format(l.sql, Array(countParams(l.sql)).fill(arg)), view: l.view, title: `${l.name} ${v}` };
   }
 
   // Tabs and history, kept per Fleet port like every other state file so a dev instance never overwrites the daily one's.

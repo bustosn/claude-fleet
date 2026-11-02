@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, classifyWrite, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
+import { classify, classifyWrite, countParams, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
 
 const reads = [
   'SELECT * FROM cb911.cb_chargebacks WHERE id = 1',
@@ -116,4 +116,10 @@ test('dev connections: any one statement, transactions refused, risky writes fla
     assert.equal(classifyWrite(t).ok, false, t);
   // Prod keeps the read-only check.
   assert.equal(classify('UPDATE t SET a = 1 WHERE id = 5').ok, false);
+});
+
+test('lookup placeholders: every ? outside strings and comments', () => {
+  assert.equal(countParams('SELECT * FROM t WHERE a = ? OR b = ?'), 2);
+  assert.equal(countParams("SELECT '?' AS q, x FROM t /* ? */ WHERE id = ? -- ?"), 1);
+  assert.equal(countParams('SELECT 1'), 0);
 });

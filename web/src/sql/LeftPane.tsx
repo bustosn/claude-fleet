@@ -1,5 +1,5 @@
 import { useMemo, useState, type MouseEvent as RMouseEvent } from 'react';
-import { ChevronRight, Clock, Database, Eye, KeyRound, Play, RefreshCw, Search, Table2, Zap } from 'lucide-react';
+import { ChevronRight, Clock, Copy, Database, Eye, FilePlus2, KeyRound, Pencil, Play, Plus, RefreshCw, Search, Table2, Trash2, Zap } from 'lucide-react';
 import { api, type SqlColumnInfo, type SqlHistoryEntry, type SqlIndexInfo, type SqlLookup, type SqlSchema } from '../lib/api';
 import { age } from '../lib/format';
 import { actions } from '../lib/store';
@@ -15,6 +15,8 @@ interface Props {
   history: SqlHistoryEntry[]; lookups: SqlLookup[];
   onInsert: (text: string) => void; onQuery: (sql: string, opts?: { run?: boolean; title?: string; alias?: string; db?: string | null }) => void;
   onLookup: (name: string, value: string) => void;
+  /** Opens the lookup editor: a lookup to edit, a copy to start from, or the current query as the SQL. */
+  onEditLookup: (l: Partial<SqlLookup> & { editing?: string }) => void; onDeleteLookup: (name: string) => void; currentSql: () => string;
 }
 
 export function LeftPane(p: Props) {
@@ -27,7 +29,7 @@ export function LeftPane(p: Props) {
       </div>
       {p.mode === 'schema' && <SchemaTree {...p} />}
       {p.mode === 'history' && <History history={p.history} alias={p.alias} onQuery={p.onQuery} />}
-      {p.mode === 'lookups' && <Lookups lookups={p.lookups} onLookup={p.onLookup} />}
+      {p.mode === 'lookups' && <Lookups lookups={p.lookups} onLookup={p.onLookup} onEdit={p.onEditLookup} onDelete={p.onDeleteLookup} currentSql={p.currentSql} alias={p.alias} />}
     </div>
   );
 }
@@ -170,16 +172,29 @@ function History({ history, alias, onQuery }: { history: SqlHistoryEntry[]; alia
   );
 }
 
-function Lookups({ lookups, onLookup }: { lookups: SqlLookup[]; onLookup: Props['onLookup'] }) {
+function Lookups({ lookups, onLookup, onEdit, onDelete, currentSql, alias }: { lookups: SqlLookup[]; onLookup: Props['onLookup']; onEdit: Props['onEditLookup']; onDelete: Props['onDeleteLookup']; currentSql: () => string; alias: string }) {
   const [vals, setVals] = useState<Record<string, string>>({});
   return (
     <div className="sql-tree px-2">
-      <p className="mb-2 px-1 text-[11.5px] text-fg-faint">Also from the palette: Ctrl+K, then <span className="kbd">cb 123456</span>. Set them in <span className="mono">sql.lookups</span> in fleet.config.json.</p>
+      <div className="mb-2 flex gap-1">
+        <button className="btn sm flex-1" onClick={() => onEdit({ alias })}><Plus size={12} aria-hidden="true" /> New lookup</button>
+        <button className="btn sm flex-1" title="Start a lookup from the statement under the cursor; put ? where the value goes" onClick={() => onEdit({ alias, sql: currentSql() })}><FilePlus2 size={12} aria-hidden="true" /> From this query</button>
+      </div>
+      <p className="mb-2 px-1 text-[11.5px] text-fg-faint">Also from the palette: Ctrl+K, then <span className="kbd">cb 123456</span>.</p>
       {lookups.map(l => (
-        <form key={l.name} className="mb-2 grid gap-1 rounded-lg border border-line p-2" onSubmit={e => { e.preventDefault(); if (vals[l.name]?.trim()) onLookup(l.name, vals[l.name]); }}>
-          <div className="flex items-center gap-1.5 text-[12px]"><span className="mono font-semibold">{l.name}</span><span className="text-fg-muted">{l.label}</span><span className="grow" /><span className="text-[10.5px] text-fg-faint">{l.alias}</span></div>
+        <form key={l.name} className="group mb-2 flex min-w-0 flex-col gap-1 rounded-lg border border-line p-2" onSubmit={e => { e.preventDefault(); if (vals[l.name]?.trim()) onLookup(l.name, vals[l.name]); }}>
+          <div className="flex min-w-0 items-center gap-1.5 text-[12px]">
+            <span className="mono flex-none font-semibold">{l.name}</span><span className="truncate text-fg-muted" title={l.label}>{l.label}</span><span className="grow" />
+            <span className="flex-none text-[10.5px] text-fg-faint group-hover:hidden">{l.alias}</span>
+            <span className="hidden flex-none gap-0.5 group-hover:flex">
+              {l.source === 'user'
+                ? <button type="button" className="iconbtn h-5 w-5" title="Edit" aria-label={`Edit ${l.name}`} onClick={() => onEdit({ ...l, editing: l.name })}><Pencil size={11} /></button>
+                : <button type="button" className="iconbtn h-5 w-5" title="Customize: saves your own copy under the same name" aria-label={`Customize ${l.name}`} onClick={() => onEdit({ ...l })}><Copy size={11} /></button>}
+              {l.source === 'user' && <button type="button" className="iconbtn h-5 w-5" title="Delete" aria-label={`Delete ${l.name}`} onClick={() => { if (confirm(`Delete the lookup "${l.name}"?`)) onDelete(l.name); }}><Trash2 size={11} /></button>}
+            </span>
+          </div>
           <div className="flex gap-1">
-            <input className="input h-7 flex-1 mono" value={vals[l.name] || ''} onChange={e => setVals(v => ({ ...v, [l.name]: e.target.value }))} placeholder="value" aria-label={`${l.label} value`} />
+            <input className="input h-7 min-w-0 flex-1 mono" value={vals[l.name] || ''} onChange={e => setVals(v => ({ ...v, [l.name]: e.target.value }))} placeholder="value" aria-label={`${l.label} value`} />
             <button className="btn sm" type="submit"><Play size={12} aria-hidden="true" /> Run</button>
           </div>
         </form>

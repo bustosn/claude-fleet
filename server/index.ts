@@ -443,6 +443,8 @@ app.delete('/api/sql/credentials/:alias', sqlRoute(req => { sql.setCredentials(s
 app.get('/api/sql/tabs', sqlRoute(() => sql.getTabs()));
 app.put('/api/sql/tabs', sqlRoute(req => { sql.setTabs(req.body?.tabs); return { ok: true }; }));
 app.get('/api/sql/history', sqlRoute(() => sql.getHistory()));
+app.put('/api/sql/lookups/:name', sqlRoute(req => sql.saveLookup(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
+app.delete('/api/sql/lookups/:name', sqlRoute(req => sql.deleteLookup(String(req.params.name))));
 app.post('/api/sql/lookup', sqlRoute(req => sql.lookup(String(req.body?.name || ''), String(req.body?.value || ''))));
 
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.

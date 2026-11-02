@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -99,6 +99,8 @@ export const api = {
   sqlCredentials: () => j<SqlCredential[]>('/api/sql/credentials'),
   sqlSetCredentials: (alias: string, user: string, password?: string) => j<SqlCredential[]>(`/api/sql/credentials/${encodeURIComponent(alias)}`, { method: 'PUT', body: JSON.stringify({ user, password }) }),
   sqlForgetCredentials: (alias: string) => j<SqlCredential[]>(`/api/sql/credentials/${encodeURIComponent(alias)}`, { method: 'DELETE' }),
+  sqlSaveLookup: (name: string, l: Partial<SqlLookup> & { rename?: string }) => j<SqlLookup[]>(`/api/sql/lookups/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(l) }),
+  sqlDeleteLookup: (name: string) => j<SqlLookup[]>(`/api/sql/lookups/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   sqlCancel: (id: string) => j<{ ok: boolean }>(`/api/sql/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 

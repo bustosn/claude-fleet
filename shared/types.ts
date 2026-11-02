@@ -276,7 +276,9 @@ export interface SqlRunRequest { alias: string; text: string; cursor: number; se
   confirm?: boolean }
 export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
 export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number }
-export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid' }
+/** A palette shortcut like "cb 123456": every ? in `sql` gets the value, escaped. `type` number passes it unquoted (for numeric ids, so the index is used).
+ *  `source`: from fleet.config.json (or the built-ins), or made in the SQL view, which can also override a config one by name. */
+export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid'; type?: 'text' | 'number'; source?: 'config' | 'user' }
 export interface SqlTableInfo { name: string; type: string; rows: number | null }
 export interface SqlColumnInfo { name: string; type: string; nullable: boolean; key: string; comment: string }
 export interface SqlIndexInfo { name: string; unique: boolean; columns: string[] }

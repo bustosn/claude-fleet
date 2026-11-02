@@ -151,6 +151,11 @@ export function classifyWrite(stmt: string): WriteClassified {
   return { ok: true, kind, write: true, danger };
 }
 
+/** How many ? placeholders a statement has, outside strings and comments. */
+export function countParams(stmt: string): number {
+  return tokenize(stmt).filter(t => t.type === 'punct' && t.value === '?').length;
+}
+
 /** True when the statement already has a LIMIT outside any parentheses. */
 export function hasTopLevelLimit(stmt: string): boolean {
   return tokenize(stmt).some(t => t.type === 'word' && t.value === 'LIMIT' && t.depth === 0);

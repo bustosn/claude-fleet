@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { AlignLeft, Ban, ChevronDown, Columns3, Database, Gauge, KeyRound, LayoutList, MessageSquareShare, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
+import { AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
-import { api, type SqlRunRequest, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
+import { api, type SqlLookup, type SqlRunRequest, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { Empty, Kbd } from '../components/ui';
@@ -13,6 +13,7 @@ import { RecordView } from '../sql/RecordView';
 import { CellModal } from '../sql/CellModal';
 import { LeftPane, type PaneMode } from '../sql/LeftPane';
 import { CredentialsDialog } from '../sql/CredentialsDialog';
+import { LookupEditor } from '../sql/LookupEditor';
 import { SendToChat, type Intent, type ShareData } from '../sql/SendToChat';
 import { startRun, type SqlResult } from '../sql/run';
 
@@ -43,6 +44,22 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [share, setShare] = useState<Intent | null>(null);
   const [login, setLogin] = useState(false);
   const [confirm, setConfirm] = useState<{ tab: string; req: SqlRunRequest; reason: string } | null>(null);
+  const [lookupEdit, setLookupEdit] = useState<(Partial<SqlLookup> & { editing?: string }) | null>(null);
+  const setLookups = (lookups: SqlLookup[]) => setInfo(i => i && { ...i, lookups });
+  // The statement under the cursor (or the selection), to start a lookup from.
+  const currentSql = () => {
+    const snap = active && editors.current[active.id]?.snapshot();
+    if (!snap) return '';
+    return snap.selection ? snap.text.slice(snap.selection.from, snap.selection.to).trim() : statementAt(snap.text, snap.cursor)?.text || '';
+  };
+  const tabMenu = (e: React.MouseEvent, t: SqlTab) => openMenu(e, [
+    // After the menu has closed: closing it hands focus back to the tab, which would blur the rename box at once.
+    { label: 'Rename', icon: Pencil, onSelect: () => { setActiveId(t.id); setTimeout(() => setRenaming(t.id), 60); } },
+    { label: 'Duplicate', icon: Copy, onSelect: () => addTab({ alias: t.alias, db: t.db, text: t.text, title: `${t.title} copy` }) },
+    'separator',
+    { label: 'Close', icon: X, onSelect: () => closeTab(t.id) },
+    { label: 'Close others', disabled: (tabs?.length || 0) < 2, onSelect: () => { for (const o of tabs || []) if (o.id !== t.id) aborts.current[o.id]?.(); setTabs(ts => ts && ts.filter(o => o.id === t.id)); setActiveId(t.id); } },
+  ]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [, tick] = useState(0);
   const editors = useRef<Record<string, EditorHandle | null>>({});
@@ -301,7 +318,9 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
       <LeftPane mode={pane} onMode={m => { setPane(m); writeLs('fleet.sql.pane', m); }}
         alias={alias?.alias || ''} schema={schema || null} schemaError={alias ? schemaErr[alias.alias] || null : null} loading={!!(alias && schemaBusy[alias.alias])}
         onRefresh={() => alias && loadSchema(alias.alias, true)} columns={(alias && cols[alias.alias]) || {}} loadColumns={db => alias && loadColumns(alias.alias, db)}
-        history={history} lookups={info.lookups} onInsert={t => active && editors.current[active.id]?.insert(t)} onQuery={openQuery} onLookup={openLookup} />
+        history={history} lookups={info.lookups} onInsert={t => active && editors.current[active.id]?.insert(t)} onQuery={openQuery} onLookup={openLookup}
+        onEditLookup={setLookupEdit} currentSql={currentSql}
+        onDeleteLookup={name => api.sqlDeleteLookup(name).then(l => { setLookups(l); actions.toast(`Deleted ${name}`); }).catch(err => actions.toast(err.message, 'error'))} />
       <div className="sql-vsplit" onPointerDown={dragLeft} role="separator" aria-orientation="vertical" aria-label="Resize the schema pane" />
 
       <div className="flex min-h-0 min-w-0 flex-col">
@@ -310,7 +329,9 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
             const env = envOf(t.alias), r = results[t.id];
             return (
               <div key={t.id} role="tab" aria-selected={t.id === activeId} className={`sql-tab ${t.id === activeId ? 'is-active' : ''} ${env?.prod ? 'prod' : ''}`}
-                onClick={() => setActiveId(t.id)} onDoubleClick={() => setRenaming(t.id)} onAuxClick={e => { if (e.button === 1) closeTab(t.id); }} title={`${t.title} · ${t.alias}${i < 9 ? `  (Alt+${i + 1})` : ''}`}>
+                onClick={() => setActiveId(t.id)} onDoubleClick={() => setRenaming(t.id)} onAuxClick={e => { if (e.button === 1) closeTab(t.id); }} onContextMenu={e => tabMenu(e, t)}
+                title={`${t.title} · ${t.alias}${i < 9 ? `  (Alt+${i + 1})` : ''}
+Double-click to rename; right-click for more`}>
                 <span className={`dot ${r?.status === 'running' ? '' : ''}`} data-s={r?.status === 'running' ? 'running' : env?.prod ? 'failed' : 'done'} aria-hidden="true" />
                 {renaming === t.id
                   ? <input autoFocus className="sql-tab-input" defaultValue={t.title} onBlur={e => { patchTab(t.id, { title: e.target.value.trim() || t.title }); setRenaming(null); }}
@@ -410,6 +431,7 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
       {cell && results[cell.tab] && <CellModal column={results[cell.tab].columns[cell.col]} value={results[cell.tab].rows[cell.row]?.[cell.col] ?? null} onClose={() => setCell(null)} />}
       {login && alias && <CredentialsDialog alias={alias.alias} prod={alias.prod} onClose={() => setLogin(false)}
         onSaved={() => { setSchemaErr(x => { const { [alias.alias]: _, ...rest } = x; return rest; }); if (schemaErr[alias.alias]) loadSchema(alias.alias); }} />}
+      {lookupEdit && <LookupEditor initial={lookupEdit} aliases={info.aliases} schema={completion} onClose={() => setLookupEdit(null)} onSaved={setLookups} />}
       {confirm && <ConfirmWrite reason={confirm.reason} statement={confirm.req.selection ? confirm.req.text.slice(confirm.req.selection.from, confirm.req.selection.to).trim() : statementAt(confirm.req.text, confirm.req.cursor)?.text || ''} alias={confirm.req.alias}
         onClose={() => setConfirm(null)} onRun={() => { const c = confirm; setConfirm(null); launch(c.tab, { ...c.req, confirm: true }, true); }} />}
       {share && (() => { const d = shareData(); return d ? <SendToChat data={d} intent={share} onClose={() => setShare(null)} /> : null; })()}
