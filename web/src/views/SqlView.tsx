@@ -14,6 +14,7 @@ import { CellModal } from '../sql/CellModal';
 import { LeftPane, type PaneMode } from '../sql/LeftPane';
 import { CredentialsDialog } from '../sql/CredentialsDialog';
 import { LookupEditor } from '../sql/LookupEditor';
+import { columnCompletion } from '../sql/columnCompletion';
 import { ProcessesPanel } from '../sql/ProcessesPanel';
 import { SendToChat, type Intent, type ShareData } from '../sql/SendToChat';
 import { startRun, type SqlResult } from '../sql/run';
@@ -70,7 +71,6 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [, tick] = useState(0);
   const editors = useRef<Record<string, EditorHandle | null>>({});
   const aborts = useRef<Record<string, () => void>>({});
-  const colsLoading = useRef(new Set<string>());
   const [menu, openMenu] = useContextMenu();
 
   // Load: connections, saved tabs, history.
@@ -127,17 +127,23 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
     try {
       const s = await api.sqlSchema(a, refresh);
       setSchemas(x => ({ ...x, [a]: s })); setSchemaErr(x => { const { [a]: _, ...rest } = x; return rest; });
-      if (refresh) { setCols(c => ({ ...c, [a]: {} })); for (const k of [...colsLoading.current]) if (k.startsWith(`${a}/`)) colsLoading.current.delete(k); }
+      if (refresh) { setCols(c => ({ ...c, [a]: {} })); for (const k of [...colPromises.current.keys()]) if (k.startsWith(`${a}/`)) colPromises.current.delete(k); }
     } catch (err: any) { setSchemaErr(x => ({ ...x, [a]: err.message })); }
     finally { setSchemaBusy(b => ({ ...b, [a]: false })); }
   }, []);
-  const loadColumns = useCallback(async (a: string, db: string) => {
+  // Columns of one database, fetched once per connection and shared by the schema tree and column completion.
+  const colPromises = useRef(new Map<string, Promise<Record<string, SqlColumnInfo[]>>>());
+  const columnsFor = useCallback((a: string, db: string) => {
     const k = `${a}/${db}`;
-    if (colsLoading.current.has(k)) return;
-    colsLoading.current.add(k);
-    try { const c = await api.sqlColumns(a, db); setCols(x => ({ ...x, [a]: { ...(x[a] || {}), [db]: c } })); }
-    catch { colsLoading.current.delete(k); }
+    let p = colPromises.current.get(k);
+    if (!p) {
+      p = api.sqlColumns(a, db).then(c => { setCols(x => ({ ...x, [a]: { ...(x[a] || {}), [db]: c } })); return c; });
+      p.catch(() => colPromises.current.delete(k));
+      colPromises.current.set(k, p);
+    }
+    return p;
   }, []);
+  const loadColumns = useCallback((a: string, db: string) => { columnsFor(a, db).catch(() => {}); }, [columnsFor]);
   useEffect(() => { if (alias && !schemas[alias.alias] && !schemaBusy[alias.alias] && !schemaErr[alias.alias]) loadSchema(alias.alias); }, [alias?.alias]);
   const schema = alias ? schemas[alias.alias] : undefined;
   useEffect(() => {
@@ -146,17 +152,13 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
     if (db) loadColumns(alias.alias, db);
   }, [alias?.alias, schema, active?.db]);
 
+  // Databases and tables for the SQL language's completion; columns come from columnCompletion, which reads the statement's own tables and aliases.
   const completion = useMemo<SQLNamespace>(() => {
     if (!schema) return {};
-    const loaded = (alias && cols[alias.alias]) || {};
     const ns: Record<string, SQLNamespace> = {};
-    for (const d of schema.databases) {
-      const tables: Record<string, SQLNamespace> = {};
-      for (const t of d.tables) tables[t.name] = (loaded[d.name]?.[t.name] || []).map(c => ({ label: c.name, type: 'property', detail: `${c.key ? `${c.key === 'PRI' ? '🔑' : '⚡'} ` : ''}${c.type}`, boost: c.key ? 1 : 0 }));
-      ns[d.name] = tables;
-    }
+    for (const d of schema.databases) ns[d.name] = Object.fromEntries(d.tables.map(t => [t.name, []]));
     return ns;
-  }, [schema, alias?.alias, cols]);
+  }, [schema]);
 
   // Running.
   const run = (limit: 'auto' | 'max' = 'auto', override?: { text: string; cursor: number; selection: null }) => {
@@ -391,7 +393,8 @@ Double-click to rename; right-click for more`}>
               {tabs.filter(t => t.kind !== 'processes').map(t => (
                 <div key={t.id} className="h-full" style={{ display: t.id === activeId ? 'block' : 'none' }}>
                   <SqlEditor ref={h => { editors.current[t.id] = h; }} value={t.text} onChange={text => patchTab(t.id, { text })}
-                    schema={t.id === activeId ? completion : {}} defaultSchema={t.db || undefined} onRun={run} onFormat={format} onExplain={explain} />
+                    schema={t.id === activeId ? completion : {}} defaultSchema={t.db || undefined} onRun={run} onFormat={format} onExplain={explain}
+                    columns={columnCompletion(db => columnsFor(t.alias, db), () => t.db)} />
                 </div>
               ))}
             </div>
@@ -441,7 +444,7 @@ Double-click to rename; right-click for more`}>
       {cell && results[cell.tab] && <CellModal column={results[cell.tab].columns[cell.col]} value={results[cell.tab].rows[cell.row]?.[cell.col] ?? null} onClose={() => setCell(null)} />}
       {login && alias && <CredentialsDialog alias={alias.alias} prod={alias.prod} onClose={() => setLogin(false)}
         onSaved={() => { setSchemaErr(x => { const { [alias.alias]: _, ...rest } = x; return rest; }); if (schemaErr[alias.alias]) loadSchema(alias.alias); }} />}
-      {lookupEdit && <LookupEditor initial={lookupEdit} aliases={info.aliases} schema={completion} onClose={() => setLookupEdit(null)} onSaved={setLookups} />}
+      {lookupEdit && <LookupEditor initial={lookupEdit} aliases={info.aliases} schema={completion} columnsFor={columnsFor} onClose={() => setLookupEdit(null)} onSaved={setLookups} />}
       {confirm && <ConfirmWrite reason={confirm.reason} statement={confirm.req.selection ? confirm.req.text.slice(confirm.req.selection.from, confirm.req.selection.to).trim() : statementAt(confirm.req.text, confirm.req.cursor)?.text || ''} alias={confirm.req.alias}
         onClose={() => setConfirm(null)} onRun={() => { const c = confirm; setConfirm(null); launch(c.tab, { ...c.req, confirm: true }, true); }} />}
       {share && (() => { const d = shareData(); return d ? <SendToChat data={d} intent={share} onClose={() => setShare(null)} /> : null; })()}

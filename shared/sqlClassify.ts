@@ -186,3 +186,35 @@ export function errorOffset(stmt: string, message: string): { line: number | nul
   const word = /^\S+/.exec(frag)?.[0] || frag;
   return { line, offset: at, length: word.length };
 }
+
+export interface TableRef { db: string | null; table: string; alias: string | null }
+// Words that end a table reference instead of naming its alias.
+const NOT_ALIAS = new Set(['WHERE', 'ON', 'USING', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'NATURAL', 'STRAIGHT_JOIN', 'GROUP', 'ORDER', 'HAVING',
+  'LIMIT', 'UNION', 'SET', 'WINDOW', 'FOR', 'LOCK', 'VALUES', 'SELECT', 'PARTITION', 'USE', 'FORCE', 'IGNORE', 'AS', 'WITH', 'INTO', 'FROM']);
+const ENDS_FROM = new Set(['WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'UNION', 'SET', 'WINDOW', 'ON', 'USING', 'SELECT', 'VALUES']);
+
+/** The tables a statement reads or writes, with their aliases: FROM a.b x, JOIN c AS y, UPDATE d, INSERT INTO e, and comma lists after FROM.
+ *  Subqueries in FROM are skipped; their own FROM is read like any other. Names keep their case, backticks removed. */
+export function tableRefs(stmt: string): TableRef[] {
+  const toks = tokenize(stmt);
+  const text = (t: Token) => t.type === 'ident' ? t.value.slice(1, -1).replace(/``/g, '`') : stmt.slice(t.start, t.end);
+  const isName = (t: Token | undefined) => !!t && (t.type === 'ident' || (t.type === 'word' && !NOT_ALIAS.has(t.value)));
+  const out: TableRef[] = [];
+  let inFrom = false;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    const starts = t.type === 'word' && (t.value === 'FROM' || t.value === 'JOIN' || t.value === 'UPDATE' || t.value === 'INTO');
+    if (t.type === 'word' && ENDS_FROM.has(t.value)) inFrom = false;
+    if (!(starts || (inFrom && t.type === 'punct' && t.value === ','))) continue;
+    if (t.type === 'word' && t.value === 'FROM') inFrom = true;
+    let j = i + 1;
+    if (!isName(toks[j])) continue;
+    let db: string | null = null, table = text(toks[j]);
+    if (toks[j + 1]?.value === '.' && isName(toks[j + 2])) { db = table; table = text(toks[j + 2]); j += 2; }
+    j++;
+    if (toks[j]?.type === 'word' && toks[j].value === 'AS') j++;
+    const alias = isName(toks[j]) ? text(toks[j]) : null;
+    out.push({ db, table, alias });
+  }
+  return out;
+}

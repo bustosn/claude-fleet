@@ -4,10 +4,13 @@ import type { SQLNamespace } from '@codemirror/lang-sql';
 import { api, type SqlAlias, type SqlLookup } from '../lib/api';
 import { actions } from '../lib/store';
 import { SqlEditor, type EditorHandle } from './SqlEditor';
+import { columnCompletion } from './columnCompletion';
+import type { SqlColumnInfo } from '../lib/api';
 
 /** Makes or edits a lookup: the palette word, the SQL with ? where the value goes (joins welcome, completion included), where it runs, and how it shows. */
-export function LookupEditor({ initial, aliases, schema, onClose, onSaved }: {
+export function LookupEditor({ initial, aliases, schema, columnsFor, onClose, onSaved }: {
   initial: Partial<SqlLookup> & { editing?: string }; aliases: SqlAlias[]; schema: SQLNamespace;
+  columnsFor: (alias: string, db: string) => Promise<Record<string, SqlColumnInfo[]>>;
   onClose: () => void; onSaved: (lookups: SqlLookup[]) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -77,7 +80,8 @@ export function LookupEditor({ initial, aliases, schema, onClose, onSaved }: {
         </div>
         <div className="mb-4 h-[300px] overflow-hidden rounded-lg border border-line-strong">
           <SqlEditor ref={editor} value={sql} onChange={setSql} schema={schema} defaultSchema={undefined}
-            onRun={() => save()} onFormat={async () => { const { format } = await import('sql-formatter'); try { editor.current?.replaceAll(format(sql.replace(/\?/g, '__P__'), { language: 'mysql', keywordCase: 'upper', tabWidth: 2 }).replace(/__P__/g, '?')); } catch {} }} onExplain={() => {}} />
+            onRun={() => save()} onFormat={async () => { const { format } = await import('sql-formatter'); try { editor.current?.replaceAll(format(sql.replace(/\?/g, '__P__'), { language: 'mysql', keywordCase: 'upper', tabWidth: 2 }).replace(/__P__/g, '?')); } catch {} }} onExplain={() => {}}
+            columns={columnCompletion(db => columnsFor(alias, db), () => null)} />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-fg-faint">Ctrl+Shift+F formats. Ctrl+Enter saves.</span>

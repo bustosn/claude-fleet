@@ -3,9 +3,9 @@ import { Compartment, EditorState, StateEffect, StateField, type Extension, type
 import { Decoration, EditorView, ViewPlugin, drawSelection, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, placeholder, rectangularSelection, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionSource } from '@codemirror/autocomplete';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
-import { MySQL, sql, type SQLNamespace } from '@codemirror/lang-sql';
+import { MySQL, keywordCompletionSource, schemaCompletionSource, sql, type SQLNamespace } from '@codemirror/lang-sql';
 import { tags as t } from '@lezer/highlight';
 import { statementAt } from '../../../shared/sqlClassify';
 
@@ -23,6 +23,8 @@ interface Props {
   value: string; onChange: (text: string) => void;
   schema: SQLNamespace; defaultSchema: string | undefined;
   onRun: (limit: 'auto' | 'max') => void; onFormat: () => void; onExplain: () => void;
+  /** Column completion from the statement's tables and aliases (columnCompletion). */
+  columns?: CompletionSource;
 }
 
 // Fleet's palette: the same keyword/string/number colors as chat code blocks, everything else from the theme tokens.
@@ -97,12 +99,13 @@ const errorField = StateField.define<DecorationSet>({
   provide: f => EditorView.decorations.from(f),
 });
 
-export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ value, onChange, schema, defaultSchema, onRun, onFormat, onExplain }, ref) {
+export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ value, onChange, schema, defaultSchema, onRun, onFormat, onExplain, columns }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
+  const schemaComp = useRef(schemaCompletionSource({ dialect: MySQL, upperCaseKeywords: true, schema, defaultSchema }));
   // Handlers change every render; the keymap reads them through this ref instead of being rebuilt.
-  const cb = useRef({ onChange, onRun, onFormat, onExplain }); cb.current = { onChange, onRun, onFormat, onExplain };
+  const cb = useRef({ onChange, onRun, onFormat, onExplain, columns }); cb.current = { onChange, onRun, onFormat, onExplain, columns };
 
   useEffect(() => {
     const keys = keymap.of([
@@ -111,13 +114,21 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ va
       { key: 'Shift-Mod-f', preventDefault: true, run: () => { cb.current.onFormat(); return true; } },
       { key: 'Shift-Mod-e', preventDefault: true, run: () => { cb.current.onExplain(); return true; } },
     ]);
+    // The completion list, in order: columns of the statement's tables (columnCompletion), then databases and tables, then keywords.
+    // Each is one function for the editor's life, since completion tells sources apart by identity; they read the latest props through refs.
+    const columnSource = (ctx: CompletionContext) => cb.current.columns ? cb.current.columns(ctx) : null;
+    const schemaSource = (ctx: CompletionContext) => schemaComp.current(ctx);
+    const keywords = keywordCompletionSource(MySQL, true);
+    // No keywords right after a qualifier: f.ca wants columns, not CASE.
+    const keywordSource = (ctx: CompletionContext) => /[\w$`]\.[\w$]*$/.test(ctx.state.sliceDoc(Math.max(0, ctx.pos - 100), ctx.pos)) ? null : keywords(ctx);
     const extensions: Extension[] = [
       keys, lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(), drawSelection(), EditorState.allowMultipleSelections.of(true),
-      indentOnInput(), bracketMatching(), closeBrackets(), autocompletion({ activateOnTyping: true, maxRenderedOptions: 80 }), rectangularSelection(),
+      indentOnInput(), bracketMatching(), closeBrackets(), autocompletion({ activateOnTyping: true, maxRenderedOptions: 80, override: [columnSource, schemaSource, keywordSource] }), rectangularSelection(),
       highlightActiveLine(), highlightSelectionMatches(), search({ top: true }), syntaxHighlighting(highlight), theme, currentStatement, errorField,
       placeholder('SELECT … — Ctrl+Enter runs the statement under the cursor'),
       keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
       lang.current.of(sql({ dialect: MySQL, upperCaseKeywords: true, schema, defaultSchema })),
+      // Beside the language's own completion (keywords, databases, tables): columns of the tables the statement uses.
       EditorView.updateListener.of(u => { if (u.docChanged) cb.current.onChange(u.state.doc.toString()); }),
     ];
     const v = new EditorView({ parent: host.current!, state: EditorState.create({ doc: value, extensions }) });
@@ -128,6 +139,7 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ va
   }, []);
 
   useEffect(() => {
+    schemaComp.current = schemaCompletionSource({ dialect: MySQL, upperCaseKeywords: true, schema, defaultSchema });
     view.current?.dispatch({ effects: lang.current.reconfigure(sql({ dialect: MySQL, upperCaseKeywords: true, schema, defaultSchema })) });
   }, [schema, defaultSchema]);
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, classifyWrite, countParams, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
+import { classify, classifyWrite, countParams, tableRefs, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
 
 const reads = [
   'SELECT * FROM cb911.cb_chargebacks WHERE id = 1',
@@ -122,4 +122,14 @@ test('lookup placeholders: every ? outside strings and comments', () => {
   assert.equal(countParams('SELECT * FROM t WHERE a = ? OR b = ?'), 2);
   assert.equal(countParams("SELECT '?' AS q, x FROM t /* ? */ WHERE id = ? -- ?"), 1);
   assert.equal(countParams('SELECT 1'), 0);
+});
+
+test('table references and aliases, for column completion', () => {
+  assert.deepEqual(tableRefs('SELECT * FROM cb911_imports.fiserv f where f.'), [{ db: 'cb911_imports', table: 'fiserv', alias: 'f' }]);
+  assert.deepEqual(tableRefs('SELECT * FROM cb911.cb_chargebacks AS c LEFT JOIN cb911.cb_status s ON s.id = c.status_id JOIN `cb911`.`cb_clients` cl ON cl.id = 1 WHERE c.id = 1'),
+    [{ db: 'cb911', table: 'cb_chargebacks', alias: 'c' }, { db: 'cb911', table: 'cb_status', alias: 's' }, { db: 'cb911', table: 'cb_clients', alias: 'cl' }]);
+  assert.deepEqual(tableRefs('SELECT a.x FROM t1 a, t2 b WHERE a.id = b.id'), [{ db: null, table: 't1', alias: 'a' }, { db: null, table: 't2', alias: 'b' }]);
+  assert.deepEqual(tableRefs('SELECT * FROM t WHERE x = 1'), [{ db: null, table: 't', alias: null }]);
+  assert.deepEqual(tableRefs('UPDATE cb911.t x SET x.a = 1'), [{ db: 'cb911', table: 't', alias: 'x' }]);
+  assert.deepEqual(tableRefs('SELECT * FROM (SELECT id FROM u) sub'), [{ db: null, table: 'u', alias: null }]);
 });
