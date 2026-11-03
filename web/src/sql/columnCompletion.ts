@@ -2,7 +2,8 @@ import type { Completion, CompletionContext, CompletionResult, CompletionSource 
 import type { SqlColumnInfo } from '../lib/api';
 import { statementAt, tableRefs, type TableRef } from '../../../shared/sqlClassify';
 
-export type ColumnsFor = (db: string) => Promise<Record<string, SqlColumnInfo[]>>;
+/** One table's columns; an empty list when there is no such table. */
+export type ColumnsFor = (db: string, table: string) => Promise<SqlColumnInfo[]>;
 
 // After these a table name comes, not a column.
 const TABLE_POSITION = /\b(from|join|update|into|table|describe|desc)\s+[\w$`.]*$/i;
@@ -49,11 +50,10 @@ async function optionsFor(refs: TableRef[], columnsFor: ColumnsFor, defaultDb: (
   for (const r of refs) {
     const db = r.db || defaultDb();
     if (!db) continue;
-    let all: Record<string, SqlColumnInfo[]>;
-    try { all = await columnsFor(db); } catch { continue; }
-    const key = Object.keys(all).find(k => k.toLowerCase() === r.table.toLowerCase());
-    if (!key) continue;
-    for (const c of all[key]) out.push({
+    let cols: SqlColumnInfo[];
+    try { cols = await columnsFor(db, r.table); } catch { continue; }
+    const key = r.table;
+    for (const c of cols) out.push({
       label: c.name, type: 'property',
       detail: `${label ? `${r.alias || r.table} · ` : ''}${keyMark(c.key)}${c.type}`,
       info: c.comment ? `${key}.${c.name}: ${c.comment}` : undefined,

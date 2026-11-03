@@ -91,6 +91,7 @@ export const api = {
   sqlInfo: () => j<SqlInfo>('/api/sql/info'),
   sqlSchema: (alias: string, refresh = false) => j<SqlSchema>(`/api/sql/schema/${encodeURIComponent(alias)}${refresh ? '?refresh=1' : ''}`),
   sqlColumns: (alias: string, db: string) => j<Record<string, SqlColumnInfo[]>>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/columns`),
+  sqlTableColumns: (alias: string, db: string, table: string) => j<SqlColumnInfo[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/columns`),
   sqlIndexes: (alias: string, db: string, table: string) => j<SqlIndexInfo[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/indexes`),
   sqlTabs: () => j<SqlTab[]>('/api/sql/tabs'),
   sqlSaveTabs: (tabs: SqlTab[]) => j<{ ok: true }>('/api/sql/tabs', { method: 'PUT', body: JSON.stringify({ tabs }) }),

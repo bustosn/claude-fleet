@@ -24,6 +24,8 @@ export class SqlManager {
   private pools = new Map<string, mysql.Pool>();
   private runs = new Map<string, Run>();
   private schemas = new Map<string, SchemaCache>();
+  // One table's columns, for completion, by alias/db.table; dropped with the schema on Refresh.
+  private tableCols = new Map<string, SqlColumnInfo[]>();
   private tabs: SqlTab[] = []; private history: SqlHistoryEntry[] = [];
   private persistFile: string | null = null; private saveTimer: NodeJS.Timeout | null = null;
 
@@ -307,6 +309,7 @@ export class SqlManager {
     let c = this.schemas.get(alias);
     if (!c) { try { c = JSON.parse(fs.readFileSync(this.cacheFile(alias), 'utf8')); } catch {} }
     if (c && !refresh && (!target || !c.target || c.target === target)) { this.schemas.set(alias, c); return c; }
+    for (const k of [...this.tableCols.keys()]) if (k.startsWith(`${alias.toLowerCase()}/`)) this.tableCols.delete(k);
     const rows = await this.queryAll<{ TABLE_SCHEMA: string; TABLE_NAME: string; TABLE_TYPE: string; TABLE_ROWS: number | null }>(a,
       `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN (${SYSTEM_DBS.map(() => '?').join(',')}) ORDER BY TABLE_SCHEMA, TABLE_NAME`, SYSTEM_DBS);
     const dbs = new Map<string, SqlSchema['databases'][number]>();
@@ -323,6 +326,22 @@ export class SqlManager {
   async schema(alias: string, refresh = false): Promise<SqlSchema> {
     const c = await this.cached(alias, refresh);
     return { alias: c.alias, target: c.target, at: c.at, databases: c.databases };
+  }
+  /** One table's columns, for completion: a few rows from information_schema, where a whole database (cb911_imports: 874 tables, 3 MB) takes seconds. */
+  async tableColumns(alias: string, db: string, table: string): Promise<SqlColumnInfo[]> {
+    // Memory only, no schema-cache lookup: that asks Teleport which cluster the tunnel points at, which is most of the wait.
+    const c = this.schemas.get(alias);
+    const whole = c?.columns[db] && Object.entries(c.columns[db]).find(([t]) => t.toLowerCase() === table.toLowerCase());
+    if (whole) return whole[1];
+    const key = `${alias}/${db}.${table}`.toLowerCase();
+    const hit = this.tableCols.get(key);
+    if (hit) return hit;
+    const rows = await this.queryAll<{ COLUMN_NAME: string; COLUMN_TYPE: string; IS_NULLABLE: string; COLUMN_KEY: string; COLUMN_COMMENT: string }>(this.alias(alias),
+      'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION', [db, table]);
+    const cols = rows.map(r => ({ name: r.COLUMN_NAME, type: String(r.COLUMN_TYPE), nullable: r.IS_NULLABLE === 'YES', key: r.COLUMN_KEY || '', comment: r.COLUMN_COMMENT || '' }));
+    // An empty answer is a table that does not exist (or a typo still being typed): not worth keeping.
+    if (cols.length) this.tableCols.set(key, cols);
+    return cols;
   }
   async columns(alias: string, db: string): Promise<Record<string, SqlColumnInfo[]>> {
     const c = await this.cached(alias);

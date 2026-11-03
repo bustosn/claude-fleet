@@ -434,6 +434,7 @@ app.post('/api/sql/run', (req, res) => {
 });
 app.delete('/api/sql/runs/:id', (req, res) => res.json({ ok: sql.cancel(String(req.params.id)) }));
 app.get('/api/sql/schema/:alias', sqlRoute(req => sql.schema(sqlName(req.params.alias), req.query.refresh === '1')));
+app.get('/api/sql/schema/:alias/:db/:table/columns', sqlRoute(req => sql.tableColumns(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 app.get('/api/sql/schema/:alias/:db/columns', sqlRoute(req => sql.columns(sqlName(req.params.alias), sqlName(req.params.db))));
 app.get('/api/sql/schema/:alias/:db/:table/indexes', sqlRoute(req => sql.indexes(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 // Per-connection logins, like DBeaver's. Passwords are written, never read back.
