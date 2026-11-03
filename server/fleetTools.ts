@@ -3,9 +3,10 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { ChatManager, Chat } from './chat.js';
 import type { Teleport } from './teleport.js';
 import type { SqlManager } from './sql.js';
+import type { DialogueManager } from './dialogue.js';
 import type { TeleportTunnel } from '../shared/types.js';
 
-export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report', 'fleet_teleport_status', 'fleet_tunnel_restart', 'fleet_teleport_login', 'fleet_sql'].map(n => `mcp__fleet__${n}`);
+export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report', 'fleet_teleport_status', 'fleet_tunnel_restart', 'fleet_teleport_login', 'fleet_sql', 'fleet_dialogue_start', 'fleet_dialogue_read'].map(n => `mcp__fleet__${n}`);
 
 const text = (s: unknown) => ({ content: [{ type: 'text' as const, text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const fail = (s: string) => ({ content: [{ type: 'text' as const, text: s }], isError: true });
@@ -18,6 +19,7 @@ export function createFleetServer(mgr: ChatManager, self: Chat) {
   return createSdkMcpServer({
     name: 'fleet', version: '0.2.0',
     instructions: 'Other Claude chats are running on this machine, often in other repos or worktrees. Use fleet_list_chats to see them, fleet_ask when you need an answer from one, fleet_send to hand something over without waiting, and fleet_reply to answer an ask that was sent to you. Keep messages specific: say which repo, branch, file, or ticket you mean.'
+      + (mgr.dialogues ? ' To have a design or plan argued out from two sides before building it, start a dialogue with fleet_dialogue_start (two new chats, watched live in Fleet) and read it back with fleet_dialogue_read.' : '')
       + (mgr.teleport?.enabled ? ' Local DB ports (3316, 3317, ...) are Teleport tunnels: when a connection to one fails, call fleet_teleport_status and fleet_tunnel_restart instead of asking for reset.sh.' : ''),
     tools: [
       tool('fleet_list_chats', 'List the other chats in the fleet with their id, title, repo, branch, working directory, and status.', {},
@@ -66,6 +68,7 @@ export function createFleetServer(mgr: ChatManager, self: Chat) {
 
       ...(mgr.teleport?.enabled ? teleportTools(mgr.teleport) : []),
       ...(mgr.sql && mgr.sql.aliases().length ? [sqlTool(mgr.sql)] : []),
+      ...(mgr.dialogues ? dialogueTools(mgr.dialogues, self) : []),
 
       // Only task workers get this: it is how a card moves to Needs you with something worth reading on it.
       ...(self.taskId ? [tool('fleet_report', 'Report on the board task you are working on. Call it once at the end of your work with status "review" and a summary for the person, or with status "blocked" when you cannot go on without them, putting the question in the summary. Then end your turn.', {
@@ -132,4 +135,48 @@ function markdownTable(cols: string[], rows: (string | number | null)[][]): stri
   if (!rows.length) return `| ${cols.join(' | ')} |\n(no rows)`;
   const esc = (v: string | number | null) => v == null ? 'NULL' : String(v).replace(/\|/g, '\|').replace(/\r?\n/g, ' ').slice(0, 300);
   return [`| ${cols.join(' | ')} |`, `| ${cols.map(() => '---').join(' | ')} |`, ...rows.map(r => `| ${r.map(esc).join(' | ')} |`)].join('\n');
+}
+
+
+// Dialogues: two new chats talk a topic through, Fleet relaying each turn, and the person watches and steers in Fleet's Dialogues.
+// Starting one is how a chat gets a design or a plan argued out from two sides before building it.
+function dialogueTools(dm: DialogueManager, self: Chat) {
+  return [
+    tool('fleet_dialogue_start', 'Start a dialogue: two new chats, each with a name and a persona, discuss a topic for a number of rounds while Fleet relays their messages. The person sees it live in Fleet (Dialogues in the sidebar) and can pause, steer, extend or stop it. Use it to have a design, plan or trade-off argued from two sides before acting; ask for an agreed plan in the last messages. It returns at once with an id; the dialogue takes several minutes. Read the result with fleet_dialogue_read.', {
+      topic: z.string().describe('The full brief both chats read first: the goal, the context and files to read, what they must settle, and how to end (for example "end with an agreed plan and open questions"). Be specific; they know nothing else.'),
+      participants: z.array(z.object({
+        name: z.string().describe('Short name, like Architect or Designer'),
+        persona: z.string().describe('Who this side is and what it argues for'),
+        model: z.string().optional().describe("Model for this side (fable, opus, sonnet...). Default: Fleet's default model."),
+      })).length(2).describe('Exactly two sides'),
+      rounds: z.number().int().min(1).max(50).optional().describe('Exchanges; each side speaks once per round. Default 6.'),
+      max_words: z.number().int().min(50).max(2000).optional().describe('Rough cap per message. Default 250.'),
+      cwd: z.string().optional().describe("Folder both chats work in, usually the repo the topic is about. Default: this chat's folder."),
+      read_only: z.boolean().optional().describe('Plan mode for both chats, so they read code but change nothing. Default true.'),
+    }, async ({ topic, participants, rounds, max_words, cwd, read_only }) => {
+      try {
+        const d = dm.start({ topic, rounds, maxWords: max_words, cwd: cwd || self.cwd, permissionMode: read_only === false ? undefined : 'plan', participants });
+        const s = d.summary();
+        return text(`Started dialogue ${s.id}: ${s.participants.map(p => `${p.name} (${p.model})`).join(' and ')}, ${s.rounds} rounds, in ${s.cwd}. The person can watch it under Dialogues in Fleet. It takes a while; check it with fleet_dialogue_read("${s.id}").`);
+      } catch (err: any) { return fail(String(err.message || err)); }
+    }),
+
+    tool('fleet_dialogue_read', 'Read a dialogue: its status and turns so far, and the transcript (the whole thing once it is done). Without an id, lists the recent dialogues.', {
+      id: z.string().optional().describe('Dialogue id from fleet_dialogue_start or the list'),
+      tail_messages: z.number().int().min(1).max(100).optional().describe('Only the last N messages of the transcript, to save context. Default: all of it.'),
+    }, async ({ id, tail_messages }) => {
+      if (!id) return text(dm.list().slice(0, 15).map(d => ({ id: d.id, status: d.status, turns: `${d.turns}/${d.rounds * 2}`, participants: d.participants.map(p => p.name).join(' and '), topic: d.topic.slice(0, 120) })));
+      const d = dm.get(id);
+      if (!d) return fail(`No dialogue with id ${id}. Call fleet_dialogue_read without an id for the list.`);
+      const s = d.summary();
+      let md = d.transcript();
+      if (tail_messages) {
+        // The header (topic, line of who and how long), then only the last messages.
+        const parts = md.split(/\n(?=## \d+\. )/);
+        md = [parts[0], ...parts.slice(1).slice(-tail_messages)].join('\n');
+      }
+      const writing = s.speaking ? `, ${s.participants.find(p => p.side === s.speaking)?.name} is writing` : '';
+      return text(`Dialogue ${s.id}: ${s.status}, ${s.turns} of ${s.rounds * 2} messages${writing}${s.error ? `. Error: ${s.error}` : ''}.\n\n${md}`);
+    }),
+  ];
 }
