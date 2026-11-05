@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { deleteSession, renameSession } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig, root } from './config.js';
+import { CASE_JOINS, loadConfig, root } from './config.js';
 import { Collector } from './collector.js';
 import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
@@ -15,6 +15,7 @@ import { DialogueManager } from './dialogue.js';
 import { TaskManager } from './tasks.js';
 import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
 import { SqlManager } from './sql.js';
+import { SavedQueries, Snippets, defaultSnippets } from './sqlSaved.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
 import { run, errText } from './util.js';
@@ -35,6 +36,8 @@ const teleport = new Teleport(config.teleport, stateDir, process.env.FLEET_CONFI
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
 const sql = new SqlManager(config.sql, teleport, stateDir);
+const saved = new SavedQueries(stateDir, a => sql.aliases().some(x => x.alias === a));
+const snippets = new Snippets(stateDir, defaultSnippets(CASE_JOINS));
 chats.terminals = terminals; chats.teleport = teleport; chats.sql = sql; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
@@ -475,6 +478,12 @@ app.put('/api/sql/tabs', sqlRoute(req => { sql.setTabs(req.body?.tabs); return {
 app.get('/api/sql/history', sqlRoute(() => sql.getHistory()));
 app.put('/api/sql/lookups/:name', sqlRoute(req => sql.saveLookup(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
 app.delete('/api/sql/lookups/:name', sqlRoute(req => sql.deleteLookup(String(req.params.name))));
+app.get('/api/sql/saved', sqlRoute(req => { const all = saved.list(); const k = String(req.query.jira || '').toUpperCase(); return k ? all.filter(s => s.jira === k) : all; }));
+app.put('/api/sql/saved/:id', sqlRoute(req => saved.save(String(req.params.id), req.body || {})));
+app.delete('/api/sql/saved/:id', sqlRoute(req => saved.remove(String(req.params.id))));
+app.get('/api/sql/snippets', sqlRoute(() => snippets.list()));
+app.put('/api/sql/snippets/:name', sqlRoute(req => snippets.save(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
+app.delete('/api/sql/snippets/:name', sqlRoute(req => snippets.remove(String(req.params.name))));
 app.post('/api/sql/lookup', sqlRoute(req => sql.lookup(String(req.body?.name || ''), String(req.body?.value || ''))));
 
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.

@@ -7,7 +7,7 @@ import { useContextMenu } from '../components/ContextMenu';
 import { copy } from './copy';
 import { TableInfo } from './TableInfo';
 
-export type PaneMode = 'schema' | 'history' | 'lookups';
+export type PaneMode = 'schema' | 'history' | 'lookups' | 'saved';
 
 interface Props {
   mode: PaneMode; onMode: (m: PaneMode) => void;
@@ -18,18 +18,21 @@ interface Props {
   onLookup: (name: string, value: string) => void;
   /** Opens the lookup editor: a lookup to edit, a copy to start from, or the current query as the SQL. */
   onEditLookup: (l: Partial<SqlLookup> & { editing?: string }) => void; onDeleteLookup: (name: string) => void; currentSql: () => string;
+  /** The Saved mode's content (SavedPane), built by the view that owns saved queries and snippets. */
+  saved?: React.ReactNode;
 }
 
 export function LeftPane(p: Props) {
   return (
     <div className="sql-left">
       <div className="sql-seg m-2" role="tablist" aria-label="Left pane">
-        {(['schema', 'history', 'lookups'] as const).map(m => (
-          <button key={m} role="tab" aria-selected={p.mode === m} onClick={() => p.onMode(m)}>{m === 'schema' ? 'Schema' : m === 'history' ? 'History' : 'Lookups'}</button>
+        {(['schema', 'saved', 'history', 'lookups'] as const).map(m => (
+          <button key={m} role="tab" aria-selected={p.mode === m} onClick={() => p.onMode(m)}>{m === 'schema' ? 'Schema' : m === 'saved' ? 'Saved' : m === 'history' ? 'History' : 'Lookups'}</button>
         ))}
       </div>
       {p.mode === 'schema' && <SchemaTree {...p} />}
       {p.mode === 'history' && <History history={p.history} alias={p.alias} onQuery={p.onQuery} />}
+      {p.mode === 'saved' && p.saved}
       {p.mode === 'lookups' && <Lookups lookups={p.lookups} onLookup={p.onLookup} onEdit={p.onEditLookup} onDelete={p.onDeleteLookup} currentSql={p.currentSql} alias={p.alias} />}
     </div>
   );

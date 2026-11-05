@@ -525,7 +525,7 @@ export class SqlManager {
     this.tabs = tabs.slice(0, 50).filter((t: any) => t && typeof t.id === 'string').map((t: any): SqlTab => ({
       id: String(t.id).slice(0, 40), title: String(t.title || 'Query').slice(0, 80), alias: String(t.alias || ''), db: t.db ? String(t.db) : null,
       text: String(t.text || '').slice(0, 200000), split: Number.isFinite(t.split) ? Math.min(0.9, Math.max(0.1, Number(t.split))) : undefined,
-      ...(t.kind === 'processes' ? { kind: 'processes' as const } : {}) }));
+      ...(t.kind === 'processes' ? { kind: 'processes' as const } : {}), ...(typeof t.savedId === 'string' && t.savedId ? { savedId: t.savedId.slice(0, 40) } : {}) }));
     this.save();
   }
   getHistory() { return this.history; }

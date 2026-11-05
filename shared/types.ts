@@ -279,7 +279,9 @@ export interface SqlRunRequest { alias: string; text: string; cursor: number; se
   params?: Record<string, string> }
 export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
 /** A tab in the SQL view: a query editor, or the connection's live process list. */
-export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes' }
+export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes';
+  /** The saved query this tab was opened from or saved as: Ctrl+S updates it. */
+  savedId?: string }
 /** A palette shortcut like "cb 123456": every ? in `sql` gets the value, escaped. `type` number passes it unquoted (for numeric ids, so the index is used).
  *  `source`: from fleet.config.json (or the built-ins), or made in the SQL view, which can also override a config one by name. */
 export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid'; type?: 'text' | 'number'; source?: 'config' | 'user' }
@@ -303,5 +305,9 @@ export interface SqlTableMeta { db: string; table: string; type: 'table' | 'view
 /** A column in another table that points at this one. `indexed` when it leads an index, so looking it up is cheap. */
 export interface SqlReference { db: string; table: string; column: string; refColumn: string; indexed: boolean; source: 'fk' | 'guess' }
 export interface SqlColumnHit { db: string; table: string; column: string; type: string; key: string }
+/** A saved query. `alias` and `db` are where it opens (null: the current tab's); `jira` ties it to a ticket card. */
+export interface SqlSaved { id: string; name: string; folder: string; jira: string | null; alias: string | null; db: string | null; sql: string; created: number; updated: number }
+/** A Tab-expanded template: type `name`, press Tab. ${field} placeholders are filled in turn (Tab moves on); fields with one name change together. */
+export interface SqlSnippet { name: string; label: string; body: string; source?: 'config' | 'user' }
 /** A connection's login as the SQL view shows it: never the password, only whether one is set. */
 export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }

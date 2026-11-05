@@ -33,7 +33,7 @@ export function Main() {
       {view.kind === 'new-task' && <NewTaskView key={`${view.cwd || ''}|${view.ticket || ''}`} cwd={view.cwd} ticket={view.ticket} />}
       {view.kind === 'hub' && <HubView />}
       {view.kind === 'jira' && <JiraView create={!!view.create} />}
-      {view.kind === 'sql' && <Suspense fallback={<div className="m-auto text-[12px] text-fg-faint">Loading…</div>}><SqlView lookup={view.lookup} /></Suspense>}
+      {view.kind === 'sql' && <Suspense fallback={<div className="m-auto text-[12px] text-fg-faint">Loading…</div>}><SqlView lookup={view.lookup} open={view.open} /></Suspense>}
     </main>
   );
 }

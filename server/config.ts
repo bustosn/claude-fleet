@@ -45,7 +45,7 @@ export interface SqlConfig {
 }
 
 // The case joined to what is usually looked up next: its status name, client, MID and import parser.
-const CASE_JOINS = `SELECT s.name AS status_name, m.client_id, cl.business_name AS client_name, m.mid, p.name AS parser_name, c.*
+export const CASE_JOINS = `SELECT s.name AS status_name, m.client_id, cl.business_name AS client_name, m.mid, p.name AS parser_name, c.*
 FROM cb911.cb_chargebacks c
 LEFT JOIN cb911.cb_status s ON s.id = c.status_id
 LEFT JOIN cb911.cb_client_mids m ON m.id = c.mid_id

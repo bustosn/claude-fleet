@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Download, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
-import { api, type SqlFk, type SqlLookup, type SqlReference, type SqlRunRequest, type SqlValue, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
+import { api, type SqlFk, type SqlLookup, type SqlSaved, type SqlSnippet, type SqlReference, type SqlRunRequest, type SqlValue, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { Empty, Kbd } from '../components/ui';
@@ -21,6 +21,8 @@ import { startRun, type SqlResult } from '../sql/run';
 import { fkOf, forgetMeta, keyLiteral, pkOf, resultTables, tableMeta } from '../sql/meta';
 import { ReferencedBy } from '../sql/ReferencedBy';
 import { ParamsDialog } from '../sql/ParamsDialog';
+import { SavedPane } from '../sql/SavedPane';
+import { SaveDialog, SnippetEditor } from '../sql/SaveDialog';
 import { download, exportName, xlsx } from '../sql/xlsx';
 import { exportOnServer } from '../sql/exportServer';
 import { csv } from '../sql/copy';
@@ -34,7 +36,7 @@ const writeLs = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.
 // Lookups already opened, so the same palette pick (kept in the tab list across a reload) never opens a second tab.
 const handledLookups = new Set<number>();
 
-export function SqlView({ lookup }: { lookup?: { name: string; value: string; at: number } }) {
+export function SqlView({ lookup, open }: { lookup?: { name: string; value: string; at: number }; open?: { saved: string; at: number } }) {
   const [info, setInfo] = useState<SqlInfo | null>(null);
   const [infoError, setInfoError] = useState<string | null>(null);
   const [tabs, setTabs] = useState<SqlTab[] | null>(null);
@@ -56,6 +58,10 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [refsOf, setRefsOf] = useState<{ alias: string; prod: boolean; target: { db: string; table: string; column: string }; value: SqlValue } | null>(null);
   // Bumped when table facts for a result arrive, so its key columns are known.
   const [metaTick, setMetaTick] = useState(0);
+  const [saved, setSaved] = useState<SqlSaved[]>([]);
+  const [snippets, setSnippets] = useState<SqlSnippet[]>([]);
+  const [saveEdit, setSaveEdit] = useState<(Partial<SqlSaved> & { sql: string; tab?: string }) | null>(null);
+  const [snippetEdit, setSnippetEdit] = useState<(Partial<SqlSnippet> & { editing?: string }) | null>(null);
   // A server export in progress: bytes written so far, and how to stop it.
   const [exporting, setExporting] = useState<{ bytes: number; abort: () => void } | null>(null);
   // The request behind each tab's result, values included, so an export runs exactly what produced it.
@@ -92,6 +98,8 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
     api.sqlInfo().then(i => { setInfo(i); if (i.error) setInfoError(i.error); }).catch(err => setInfoError(err.message));
     api.sqlTabs().then(t => setTabs(t)).catch(() => setTabs([]));
     api.sqlHistory().then(setHistory).catch(() => {});
+    api.sqlSaved().then(setSaved).catch(() => {});
+    api.sqlSnippets().then(setSnippets).catch(() => {});
   }, []);
   const tabsReady = tabs != null && info != null;
   // At least one tab, on the default connection.
@@ -288,6 +296,30 @@ FROM ${r.db}.${r.table}
 WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
     setTimeout(() => runTab(t.id), 60);
   };
+  // Saved queries: Ctrl+S updates the one the tab came from, or asks for a name; Ctrl+Shift+S always asks.
+  const saveCurrent = (saveAs = false) => {
+    if (!active || active.kind === 'processes') return;
+    const text = editors.current[active.id]?.snapshot().text ?? active.text;
+    if (!text.trim()) { actions.toast('Nothing to save yet', 'error'); return; }
+    const s = !saveAs && active.savedId ? saved.find(x => x.id === active.savedId) : undefined;
+    if (s) { api.sqlSaveQuery(s.id, { ...s, sql: text }).then(all => { setSaved(all); actions.toast(`Saved ${s.name}`); }).catch(err => actions.toast(err.message, 'error')); return; }
+    setSaveEdit({ sql: text, name: saveAs ? '' : active.title.replace(/^Query \d+$/, ''), alias: active.alias, db: active.db, tab: active.id });
+  };
+  const openSaved = (s: SqlSaved, runIt = false) => {
+    // Already open and unchanged: that tab, not a second copy.
+    const open = tabs?.find(x => x.savedId === s.id && x.text === s.sql);
+    if (open) { setActiveId(open.id); if (runIt) runTab(open.id); return; }
+    const t = addTab({ text: s.sql, title: s.name, alias: s.alias && info?.aliases.some(a => a.alias === s.alias) ? s.alias : active?.alias, db: s.db ?? active?.db ?? null, savedId: s.id });
+    if (runIt) setTimeout(() => runTab(t.id), 60);
+  };
+  // From a Jira card: open the saved query it lists.
+  const handledOpens = useRef(new Set<number>());
+  useEffect(() => {
+    if (!open || !tabsReady || handledOpens.current.has(open.at) || Date.now() - open.at > 15000) return;
+    handledOpens.current.add(open.at);
+    api.sqlSaved().then(all => { setSaved(all); const s = all.find(x => x.id === open.saved); if (s) openSaved(s); else actions.toast('That saved query is gone', 'error'); }).catch(() => {});
+  }, [open?.at, tabsReady]);
+
   // Export: what the grid shows (its columns, filter and sort), or the read run again on the server for more rows.
   const exportMenu = (e: React.MouseEvent) => {
     if (!active || !result) return;
@@ -402,6 +434,10 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
         onRefresh={() => alias && loadSchema(alias.alias, true)} columns={(alias && cols[alias.alias]) || {}} loadColumns={db => alias && loadColumns(alias.alias, db)}
         history={history} lookups={info.lookups} onInsert={t => active && editors.current[active.id]?.insert(t)} onQuery={openQuery} onLookup={openLookup}
         onEditLookup={setLookupEdit} currentSql={currentSql}
+        saved={<SavedPane saved={saved} snippets={snippets} onOpen={openSaved} onEdit={s => setSaveEdit({ ...s })} onSaveCurrent={() => saveCurrent()}
+          onDelete={s => api.sqlDeleteSaved(s.id).then(all => { setSaved(all); actions.toast(`Deleted ${s.name}`); }).catch(err => actions.toast(err.message, 'error'))}
+          onEditSnippet={setSnippetEdit} onInsertSnippet={s => active && editors.current[active.id]?.insertSnippet(s.body)}
+          onDeleteSnippet={name => api.sqlDeleteSnippet(name).then(setSnippets).catch(err => actions.toast(err.message, 'error'))} />}
         onDeleteLookup={name => api.sqlDeleteLookup(name).then(l => { setLookups(l); actions.toast(`Deleted ${name}`); }).catch(err => actions.toast(err.message, 'error'))} />
       <div className="sql-vsplit" onPointerDown={dragLeft} role="separator" aria-orientation="vertical" aria-label="Resize the schema pane" />
 
@@ -467,7 +503,7 @@ Double-click to rename; right-click for more`}>
               {tabs.filter(t => t.kind !== 'processes').map(t => (
                 <div key={t.id} className="h-full" style={{ display: t.id === activeId ? 'block' : 'none' }}>
                   <SqlEditor ref={h => { editors.current[t.id] = h; }} value={t.text} onChange={text => patchTab(t.id, { text })}
-                    schema={t.id === activeId ? completion : {}} defaultSchema={t.db || undefined} onRun={run} onFormat={format} onExplain={explain}
+                    schema={t.id === activeId ? completion : {}} defaultSchema={t.db || undefined} onRun={run} onFormat={format} onExplain={explain} snippets={snippets} onSave={saveCurrent}
                     columns={columnCompletion((db, table) => tableColumnsFor(t.alias, db, table), () => t.db)} />
                 </div>
               ))}
@@ -526,6 +562,9 @@ Double-click to rename; right-click for more`}>
       {lookupEdit && <LookupEditor initial={lookupEdit} aliases={info.aliases} schema={completion} columnsFor={tableColumnsFor} onClose={() => setLookupEdit(null)} onSaved={setLookups} />}
       {confirm && <ConfirmWrite reason={confirm.reason} statement={confirm.req.selection ? confirm.req.text.slice(confirm.req.selection.from, confirm.req.selection.to).trim() : statementAt(confirm.req.text, confirm.req.cursor)?.text || ''} alias={confirm.req.alias}
         onClose={() => setConfirm(null)} onRun={() => { const c = confirm; setConfirm(null); launch(c.tab, { ...c.req, confirm: true }, true); }} />}
+      {saveEdit && <SaveDialog initial={saveEdit} folders={[...new Set(saved.map(s => s.folder))]} aliases={info.aliases} onClose={() => setSaveEdit(null)}
+        onSaved={(all, id) => { setSaved(all); const s = all.find(x => x.id === id); if (saveEdit.tab && s) patchTab(saveEdit.tab, { savedId: s.id, title: s.name }); actions.toast(`Saved ${s?.name || ''}`); }} />}
+      {snippetEdit && <SnippetEditor initial={snippetEdit} onClose={() => setSnippetEdit(null)} onSaved={setSnippets} />}
       {ask && <ParamsDialog params={ask.params} statement={ask.statement} onClose={() => setAsk(null)} onRun={values => { const a = ask; setAsk(null); launch(a.tab, { ...a.req, params: values }, a.markErrors); }} />}
       {refsOf && <ReferencedBy alias={refsOf.alias} prod={refsOf.prod} target={refsOf.target} value={refsOf.value} onOpen={openRefs} onClose={() => setRefsOf(null)} />}
       {share && (() => { const d = shareData(); return d ? <SendToChat data={d} intent={share} onClose={() => setShare(null)} /> : null; })()}
@@ -555,7 +594,7 @@ function StatusBar({ alias, db, result, autoLimit, maxRows, onCancel, onRunMax }
 
 function EmptyResult({ history, onOpen, autoLimit }: { history: SqlHistoryEntry[]; onOpen: (h: SqlHistoryEntry) => void; autoLimit: number }) {
   const keys: [string[], string][] = [[['Ctrl', 'Enter'], 'run the statement under the cursor'], [['Ctrl', 'Shift', 'Enter'], 'run with the bigger row cap'], [['Ctrl', 'Shift', 'E'], 'EXPLAIN it'],
-    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Ctrl', 'click'], 'open the row a key cell points at'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
+    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Ctrl', 'click'], 'open the row a key cell points at'], [['Ctrl', 'S'], 'save the query'], [['Tab'], 'after a snippet name (cbj, case, hist) expands it'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
   return (
     <div className="m-auto grid max-w-[560px] gap-4 p-6 text-[12px] text-fg-muted">
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1.5">

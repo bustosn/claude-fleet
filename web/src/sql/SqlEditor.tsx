@@ -1,13 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { Compartment, EditorState, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
+import { Compartment, EditorState, Prec, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, drawSelection, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, placeholder, rectangularSelection, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionSource } from '@codemirror/autocomplete';
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, completionStatus, snippet, snippetCompletion, type CompletionContext, type CompletionSource } from '@codemirror/autocomplete';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
 import { MySQL, keywordCompletionSource, schemaCompletionSource, sql, type SQLNamespace } from '@codemirror/lang-sql';
 import { tags as t } from '@lezer/highlight';
 import { statementAt } from '../../../shared/sqlClassify';
+import type { SqlSnippet } from '../lib/api';
 
 export interface EditorHandle {
   /** Text, cursor and selection at this moment, for a run. */
@@ -17,6 +18,8 @@ export interface EditorHandle {
   focus(): void;
   /** Underlines the failing token of the last run, or clears it. */
   markError(range: { from: number; to: number } | null): void;
+  /** Inserts a snippet at the cursor, with its fields ready to fill. */
+  insertSnippet(body: string): void;
 }
 
 interface Props {
@@ -25,6 +28,9 @@ interface Props {
   onRun: (limit: 'auto' | 'max') => void; onFormat: () => void; onExplain: () => void;
   /** Column completion from the statement's tables and aliases (columnCompletion). */
   columns?: CompletionSource;
+  /** Templates a name expands to on Tab, also offered in completion. */
+  snippets?: SqlSnippet[];
+  onSave?: (saveAs: boolean) => void;
 }
 
 // Fleet's palette: the same keyword/string/number colors as chat code blocks, everything else from the theme tokens.
@@ -99,13 +105,13 @@ const errorField = StateField.define<DecorationSet>({
   provide: f => EditorView.decorations.from(f),
 });
 
-export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ value, onChange, schema, defaultSchema, onRun, onFormat, onExplain, columns }, ref) {
+export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ value, onChange, schema, defaultSchema, onRun, onFormat, onExplain, columns, snippets, onSave }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const lang = useRef(new Compartment());
   const schemaComp = useRef(schemaCompletionSource({ dialect: MySQL, upperCaseKeywords: true, schema, defaultSchema }));
   // Handlers change every render; the keymap reads them through this ref instead of being rebuilt.
-  const cb = useRef({ onChange, onRun, onFormat, onExplain, columns }); cb.current = { onChange, onRun, onFormat, onExplain, columns };
+  const cb = useRef({ onChange, onRun, onFormat, onExplain, columns, snippets, onSave }); cb.current = { onChange, onRun, onFormat, onExplain, columns, snippets, onSave };
 
   useEffect(() => {
     const keys = keymap.of([
@@ -113,7 +119,26 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ va
       { key: 'Shift-Mod-Enter', preventDefault: true, run: () => { cb.current.onRun('max'); return true; } },
       { key: 'Shift-Mod-f', preventDefault: true, run: () => { cb.current.onFormat(); return true; } },
       { key: 'Shift-Mod-e', preventDefault: true, run: () => { cb.current.onExplain(); return true; } },
+      { key: 'Mod-s', preventDefault: true, run: () => { cb.current.onSave?.(false); return true; } },
+      { key: 'Shift-Mod-s', preventDefault: true, run: () => { cb.current.onSave?.(true); return true; } },
     ]);
+    // Tab after a snippet's name expands it; anywhere else Tab indents. Inside an expanded snippet its own keymap moves between fields first.
+    const expand = Prec.high(keymap.of([{ key: 'Tab', run: v => {
+      const sel = v.state.selection.main;
+      if (!sel.empty || completionStatus(v.state) === 'active') return false;
+      const line = v.state.doc.lineAt(sel.head), before = line.text.slice(0, sel.head - line.from);
+      const m = /(?:^|[^\w$.`])([A-Za-z][A-Za-z0-9_]*)$/.exec(before);
+      const s = m && cb.current.snippets?.find(x => x.name === m[1].toLowerCase());
+      if (!s) return false;
+      snippet(s.body)(v, null, sel.head - m![1].length, sel.head);
+      return true;
+    } }]));
+    const snippetSource = (ctx: CompletionContext) => {
+      const w = ctx.matchBefore(/[A-Za-z][A-Za-z0-9_]*/);
+      const list = cb.current.snippets;
+      if (!list?.length || !w || /[.`]$/.test(ctx.state.sliceDoc(Math.max(0, w.from - 1), w.from))) return null;
+      return { from: w.from, options: list.map(s => snippetCompletion(s.body, { label: s.name, detail: s.label, type: 'text', boost: -5 })), validFor: /^[A-Za-z0-9_]*$/ };
+    };
     // The completion list, in order: columns of the statement's tables (columnCompletion), then databases and tables, then keywords.
     // Each is one function for the editor's life, since completion tells sources apart by identity; they read the latest props through refs.
     const columnSource = (ctx: CompletionContext) => cb.current.columns ? cb.current.columns(ctx) : null;
@@ -122,8 +147,8 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ va
     // No keywords right after a qualifier: f.ca wants columns, not CASE.
     const keywordSource = (ctx: CompletionContext) => /[\w$`]\.[\w$]*$/.test(ctx.state.sliceDoc(Math.max(0, ctx.pos - 100), ctx.pos)) ? null : keywords(ctx);
     const extensions: Extension[] = [
-      keys, lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(), drawSelection(), EditorState.allowMultipleSelections.of(true),
-      indentOnInput(), bracketMatching(), closeBrackets(), autocompletion({ activateOnTyping: true, maxRenderedOptions: 80, override: [columnSource, schemaSource, keywordSource] }), rectangularSelection(),
+      keys, expand, lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(), history(), drawSelection(), EditorState.allowMultipleSelections.of(true),
+      indentOnInput(), bracketMatching(), closeBrackets(), autocompletion({ activateOnTyping: true, maxRenderedOptions: 80, override: [columnSource, schemaSource, snippetSource, keywordSource] }), rectangularSelection(),
       highlightActiveLine(), highlightSelectionMatches(), search({ top: true }), syntaxHighlighting(highlight), theme, currentStatement, errorField,
       placeholder('SELECT … — Ctrl+Enter runs the statement under the cursor'),
       keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
@@ -160,6 +185,12 @@ export const SqlEditor = forwardRef<EditorHandle, Props>(function SqlEditor({ va
       v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text } });
     },
     focus() { view.current?.focus(); },
+    insertSnippet(body) {
+      const v = view.current!;
+      const sel = v.state.selection.main;
+      snippet(body)(v, null, sel.from, sel.to);
+      v.focus();
+    },
     markError(range) {
       const v = view.current; if (!v) return;
       v.dispatch({ effects: setError.of(range), ...(range ? { selection: { anchor: Math.min(range.from, v.state.doc.length) }, scrollIntoView: true } : {}) });
