@@ -44,11 +44,31 @@ export function pendingLenses(plan: LensPlan[], agents: Pick<QaAgent, 'role' | '
   return plan.filter(p => !done.has(p.key));
 }
 
-export interface QaStartSpec { targets: TargetSpec[]; jiraKey?: string; ticketText?: string; profile?: QaProfile | 'auto'; title?: string }
+/** A lens file's checklist: the text before the first bullet under "## Checklist", and each bullet (continuation lines joined). */
+export function checklistItems(md: string): { intro: string; items: string[] } {
+  const body = md.split(/^## Checklist\s*$/m)[1] ?? md.replace(/^# .*$/m, '');
+  const items: string[] = []; const intro: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    if (/^- /.test(line)) items.push(line.slice(2).trim());
+    else if (items.length && /^\s+\S/.test(line)) items[items.length - 1] += ' ' + line.trim();
+    else if (!items.length && line.trim()) intro.push(line.trim());
+  }
+  return { intro: intro.join('\n'), items };
+}
+
+/** Indexes of checklist items no finding or check named. Items are named "C3" (or "C3. text"); anything else counts for nothing. */
+export function uncoveredItems(count: number, said: string[]): number[] {
+  const hit = new Set(said.map(s => /\bC(\d+)\b/i.exec(s)?.[1]).filter(Boolean).map(n => Number(n) - 1));
+  return Array.from({ length: count }, (_, i) => i).filter(i => !hit.has(i));
+}
+
+export interface QaStartSpec { targets: TargetSpec[]; jiraKey?: string; ticketText?: string; profile?: QaProfile | 'auto'; title?: string;
+  /** Only these lens runs (keys like "input" or "lifecycle-2"), for re-checking lens briefs; the profile still decides the rest. */
+  lenses?: string[] }
 
 interface RunState extends Omit<QaRunDetail, 'counts' | 'cost'> {
   specs: TargetSpec[]; inputs: { jiraKey?: string; ticketText?: string }; plan: LensPlan[]; profileAuto: boolean; startedAt: number;
-  srcDirs: Record<string, string>; costBase: QaCost; nextFinding: number; nextGroup: number; capHit: string | null;
+  srcDirs: Record<string, string>; costBase: QaCost; nextFinding: number; nextGroup: number; capHit: string | null; only?: string[];
 }
 
 class Stopped extends Error { constructor() { super('Stopped.'); } }
@@ -103,6 +123,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
       targets: [], jiraKey: spec.jiraKey ? String(spec.jiraKey).toUpperCase() : undefined, lenses: [], specs: spec.targets.map(t => ({ ...t, repo: path.resolve(t.repo) })),
       inputs: { jiraKey: spec.jiraKey, ticketText: spec.ticketText }, plan: [], pack: null, agents: [], findings: [], groups: [], checked: [], log: [], matrixSignedOff: false,
       srcDirs: {}, costBase: { agents: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, ms: 0 }, nextFinding: 1, nextGroup: 1, capHit: null,
+      ...(Array.isArray(spec.lenses) && spec.lenses.length ? { only: spec.lenses.map(String) } : {}),
     };
     this.runs.set(id, r);
     this.note(r, `Started: ${title}${profile ? `, ${profile} profile` : ', profile from the diff'}.`);
@@ -195,6 +216,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
     // built.lenses already follows the chosen profile (or the suggested one, when the profile comes from the diff).
     r.lenses = r.profile === 'deep' ? [...LENSES] : built.lenses;
     r.plan = lensPlan(r.lenses, r.profile, { lens: this.cfg.models.lens, second: this.cfg.deepSecondModel });
+    if (r.only) { r.plan = r.plan.filter(p => r.only!.includes(p.key)); if (!r.plan.length) throw new Error(`None of the lenses asked for (${r.only.join(', ')}) is in the ${r.profile} plan.`); }
     this.note(r, `Pack: ${Math.round(built.info.bytes / 1024)} KB in ${built.info.files} files${built.info.trimmed.length ? `, ${built.info.trimmed.length} trimmed` : ''}. Lenses: ${r.plan.map(p => `${p.key} (${p.model})`).join(', ')}.`);
     for (const n of built.info.notes) this.note(r, `Pack note: ${n}`);
     this.changed(r);
@@ -212,15 +234,15 @@ export class QaManager extends EventEmitter implements QaToolSink {
     const todo = pendingLenses(r.plan, r.agents);
     const frame = readPrompt('lens');
     await Promise.all(todo.map(async p => {
-      const checklist = readLens(p.lens);
-      const items = (checklist.match(/^- /gm) || []).length;
-      const prompt = fill(frame, { runId: r.id, lens: p.lens, packDir: r.pack!.dir, checklist: checklist.replace(/^# .*\n+/, '') });
+      const { intro, items } = checklistItems(readLens(p.lens));
+      const numbered = [intro, ...items.map((t, i) => `- **C${i + 1}.** ${t}`)].filter(Boolean).join('\n');
+      const prompt = fill(frame, { runId: r.id, lens: p.lens, packDir: r.pack!.dir, checklist: numbered });
       const a = this.newAgent(r, 'lens', p.key, p.model, { lens: p.lens });
-      const tally = () => r.findings.filter(f => f.agentId === a.id).length + r.checked.filter(c => c.agentId === a.id).length;
       await this.runAgent(r, a, prompt, () => {
-        const n = tally();
-        if (n === 0) return 'You ended your turn without calling fleet_qa_finding or fleet_qa_checked. Work through the checklist now: report each bug with fleet_qa_finding and record each item that holds with fleet_qa_checked. An empty report with no reasoning is a failed review.';
-        if (n < Math.ceil(items / 2)) return `You have recorded ${n} result(s) for a checklist of ${items} items. Go back through every item: each one ends in a fleet_qa_finding or a fleet_qa_checked call.`;
+        const said = [...r.findings.filter(f => f.agentId === a.id).map(f => f.checklistItem || ''), ...r.checked.filter(c => c.agentId === a.id).map(c => c.item)];
+        if (!said.length) return 'You ended your turn without calling fleet_qa_finding or fleet_qa_checked. Work through the checklist now: report each bug with fleet_qa_finding and record each item that holds with fleet_qa_checked. An empty report with no reasoning is a failed review.';
+        const open = uncoveredItems(items.length, said);
+        if (open.length) return `These checklist items have no finding and no fleet_qa_checked yet:\n\n${open.map(i => `- C${i + 1}. ${items[i]}`).join('\n')}\n\nWork through each one now. Each ends in a fleet_qa_finding (checklist_item "C<n>") or a fleet_qa_checked (item "C<n>").`;
         return null;
       });
     }));

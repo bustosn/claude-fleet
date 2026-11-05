@@ -24,6 +24,8 @@ Set severity on CONFIRMED and PLAUSIBLE:
 - **major**: wrong result on a realistic path, a 500 on some real data, a broken existing page.
 - **minor**: wrong on a rare path, misleading UI, duplicated logic that will drift.
 
+Severity is the impact when it happens. How likely it is goes in the verdict (PLAUSIBLE), not into a lower severity. An entity stranded where no page shows it, or held forever, is a blocker even if the path to that state is uncommon. A user or client scope that is applied on one view or query and missing on another serving the same data is a leak: blocker when it crosses clients, major when it crosses users. Keep "minor" for impact that is minor: display, wording, drift, logging.
+
 Judge each group on its own. Being reported by several lenses is not evidence. A finding that is real but described with a wrong detail (wrong line, wrong name) is still CONFIRMED; correct the detail in your reason. Keep each reason to a short paragraph that names the lines you checked.
 
 When every group has a verdict, end your turn with one line.

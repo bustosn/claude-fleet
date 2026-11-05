@@ -186,3 +186,12 @@ test('the report lists blockers and majors first and collapses rejected groups',
   assert.ok(md.indexOf('[BLOCKER · CONFIRMED] leak') < md.indexOf('## Rejected'));
   assert.match(md, /<details><summary>1 rejected group[\s\S]*guarded at a\.php:9/);
 });
+
+test('lens checklists are numbered from the file, and coverage counts only named items', async () => {
+  const { checklistItems, uncoveredItems } = await import('../qa.js');
+  const { intro, items } = checklistItems('# input\n\nHunts for bad values.\n\n## Checklist\n\nSay why.\n\n- one\n  continued\n- two\n- three\n');
+  assert.equal(intro, 'Say why.');
+  assert.deepEqual(items, ['one continued', 'two', 'three']);
+  assert.deepEqual(uncoveredItems(3, ['C1', 'c3. three holds', 'about two']), [1]);
+  for (const f of fs.readdirSync(path.join(import.meta.dirname, 'lenses'))) assert.ok(checklistItems(fs.readFileSync(path.join(import.meta.dirname, 'lenses', f), 'utf8')).items.length >= 5, f);
+});

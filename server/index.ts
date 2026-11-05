@@ -383,7 +383,7 @@ app.post('/api/qa', (req, res) => {
       return { repo, head: t?.head ? String(t.head) : undefined, base: t?.base ? String(t.base) : undefined, pr: Number(t?.pr) || undefined,
         prTitle: t?.prTitle ? String(t.prTitle) : undefined, prBody: t?.prBody ? String(t.prBody) : undefined };
     });
-    res.json(qa.start({ targets, jiraKey: b.jiraKey ? String(b.jiraKey) : undefined, ticketText: b.ticketText ? String(b.ticketText) : undefined, profile: b.profile, title: b.title }));
+    res.json(qa.start({ targets, jiraKey: b.jiraKey ? String(b.jiraKey) : undefined, ticketText: b.ticketText ? String(b.ticketText) : undefined, profile: b.profile, title: b.title, lenses: Array.isArray(b.lenses) ? b.lenses.map(String) : undefined }));
   } catch (err) { res.status(400).json({ error: errText(err) }); }
 });
 app.get('/api/qa', (_req, res) => res.json(qa.list()));

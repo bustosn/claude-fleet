@@ -38,12 +38,12 @@ export function qaTools(sink: QaToolSink, self: Chat) {
         end_line: z.number().int().min(1).optional(),
       })).min(1).describe('Where it happens; the first ref is the main one'),
       suggested_fix: z.string().optional(),
-      checklist_item: z.string().optional().describe('The checklist item it came from'),
+      checklist_item: z.string().optional().describe('The id of the checklist item it came from, like "C3"'),
       severity: severity.optional().describe('Your estimate; the verifier sets the final one'),
     }, async (input) => out(sink.finding(self, input))),
 
     fleet_qa_checked: tool('fleet_qa_checked', 'Record a checklist item you checked that holds, and why. Feeds the coverage section of the report.', {
-      item: z.string().min(3).describe('The checklist item'),
+      item: z.string().min(2).describe('The checklist item id, like "C3" (its text may follow)'),
       reason: z.string().min(20).describe('What you looked at (files, lines, queries) and why it holds'),
     }, async ({ item, reason }) => out(sink.checked(self, item, reason))),
 
