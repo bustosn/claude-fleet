@@ -38,6 +38,7 @@ const sql = new SqlManager(config.sql, teleport, stateDir);
 chats.terminals = terminals; chats.teleport = teleport; chats.sql = sql; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
+chats.dialogues = dialogues;
 collector.dialogues = dialogues;
 dialogues.on('change', () => collector.publish());
 const tasks = new TaskManager(chats, config);

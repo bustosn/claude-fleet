@@ -11,6 +11,7 @@ import { ShellRunner } from './shellRunner.js';
 import type { TerminalManager } from './terminals.js';
 import type { Teleport } from './teleport.js';
 import type { SqlManager } from './sql.js';
+import type { DialogueManager } from './dialogue.js';
 import type { AskQuestion, Attachment, ChatEvent, ContextUsage, PermissionChoice, RewindPreview, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
@@ -43,6 +44,8 @@ export class ChatManager extends EventEmitter {
   teleport: Teleport | null = null;
   /** For the fleet_sql tool: the SQL view's read-only runner. */
   sql: SqlManager | null = null;
+  /** For the fleet_dialogue_* tools: a chat can start a dialogue between two new chats and read it back. */
+  dialogues: DialogueManager | null = null;
   /** Dropped files that are not sent as images are saved here; every chat may read it without asking. */
   attachDir = '';
   private persistFile: string | null = null;
