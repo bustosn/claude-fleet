@@ -261,7 +261,8 @@ export interface AwsStatus {
 // SQL view. A connection is a Teleport tunnel alias; prod ones are readers only, and every statement is read-only.
 export interface SqlAlias { alias: string; port: number; prod: boolean; label: string }
 export type SqlKind = 'number' | 'string' | 'date' | 'json' | 'blob';
-export interface SqlColumn { name: string; table: string; kind: SqlKind; type: string }
+/** `db` and `orgName` are where the column came from (empty for an expression), so a cell can follow a foreign key even under an alias. */
+export interface SqlColumn { name: string; table: string; kind: SqlKind; type: string; db?: string; orgName?: string }
 export type SqlValue = string | number | null;
 /** What a run streams: an id first, then the columns, rows in batches, and done or error. */
 export type SqlEvent =
@@ -289,6 +290,16 @@ export interface SqlSchema { alias: string; target: string | null; at: number; d
 /** One row of the server's process list. `fleet` marks Fleet's own connections. */
 export interface SqlProcess { id: number; user: string; host: string; db: string | null; command: string; time: number; state: string | null; info: string | null;
   trxStarted: string | null; rowsLocked: number | null; rowsModified: number | null; fleet: boolean }
-export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null }
+export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null;
+  /** Column name to the db.table its value is the id of, for keys the schema does not declare. */
+  fkGuesses: Record<string, string> }
+/** A column that points at another table's row: declared in the schema (`fk`) or guessed from its name (`guess`). */
+export interface SqlFk { column: string; refDb: string; refTable: string; refColumn: string; source: 'fk' | 'guess' }
+/** One table, for the schema tree's hover card and for following keys. Sizes in bytes; times as the server writes them. */
+export interface SqlTableMeta { db: string; table: string; type: 'table' | 'view'; engine: string | null; rows: number | null; dataBytes: number | null; indexBytes: number | null;
+  created: string | null; updated: string | null; comment: string; pk: string[]; fks: SqlFk[] }
+/** A column in another table that points at this one. `indexed` when it leads an index, so looking it up is cheap. */
+export interface SqlReference { db: string; table: string; column: string; refColumn: string; indexed: boolean; source: 'fk' | 'guess' }
+export interface SqlColumnHit { db: string; table: string; column: string; type: string; key: string }
 /** A connection's login as the SQL view shows it: never the password, only whether one is set. */
 export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }

@@ -38,6 +38,8 @@ export interface SqlConfig {
   credentials: Record<string, { user: string; password: string }>;
   aliases: string[]; defaultAlias: string; autoLimit: number; maxRows: number; timeoutMs: number;
   lookups: SqlLookup[];
+  /** Undeclared foreign keys guessed from the column name: { "mid_id": "cb911.cb_client_mids" } points at that table's id. Real FKs from the schema come first. */
+  fkGuesses: Record<string, string>;
 }
 
 // The case joined to what is usually looked up next: its status name, client, MID and import parser.
@@ -48,6 +50,11 @@ LEFT JOIN cb911.cb_client_mids m ON m.id = c.mid_id
 LEFT JOIN cb911.cb_clients cl ON cl.id = m.client_id
 LEFT JOIN cb911.cb_chargebacks_meta meta ON meta.cb_id = c.id
 LEFT JOIN cb911.cb_parsers p ON p.id = meta.import_parser_id`;
+const DEFAULT_FK_GUESSES: Record<string, string> = {
+  mid_id: 'cb911.cb_client_mids', client_id: 'cb911.cb_clients', status_id: 'cb911.cb_status', cb_id: 'cb911.cb_chargebacks',
+  parser_id: 'cb911.cb_parsers', import_parser_id: 'cb911.cb_parsers',
+};
+
 const DEFAULT_LOOKUPS: SqlLookup[] = [
   { name: 'cb', label: 'Chargeback by id', pattern: '^\\d+$', alias: 'main-prd-reader', sql: `${CASE_JOINS}\nWHERE c.id = ?`, view: 'record', type: 'number' },
   { name: 'case', label: 'Chargebacks by case_no', pattern: '^\\S+$', alias: 'main-prd-reader', sql: `${CASE_JOINS}\nWHERE c.case_no = ?\nORDER BY c.ordinal`, view: 'grid', type: 'text' },
@@ -120,6 +127,8 @@ export function loadConfig(): FleetConfig {
       lookups: (Array.isArray(raw.sql?.lookups) ? raw.sql.lookups : DEFAULT_LOOKUPS)
         .filter((l: any) => l && l.name && l.sql)
         .map((l: any): SqlLookup => ({ name: String(l.name).toLowerCase(), label: String(l.label || l.name), pattern: String(l.pattern || '^\\S+$'), alias: String(l.alias || raw.sql?.defaultAlias || 'main-prd-reader'), sql: String(l.sql), view: l.view === 'grid' ? 'grid' : 'record', ...(l.type === 'number' || l.type === 'text' ? { type: l.type } : {}), source: 'config' })),
+      fkGuesses: Object.fromEntries(Object.entries(raw.sql?.fkGuesses && typeof raw.sql.fkGuesses === 'object' ? raw.sql.fkGuesses : DEFAULT_FK_GUESSES)
+        .filter(([k, v]) => /^[\w$]+$/.test(k) && /^[\w$]+\.[\w$]+$/.test(String(v))).map(([k, v]) => [k.toLowerCase(), String(v)])),
     },
   };
   return cfg;

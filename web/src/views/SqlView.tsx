@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
-import { api, type SqlLookup, type SqlRunRequest, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
+import { api, type SqlFk, type SqlLookup, type SqlReference, type SqlRunRequest, type SqlValue, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { Empty, Kbd } from '../components/ui';
@@ -18,6 +18,8 @@ import { columnCompletion } from '../sql/columnCompletion';
 import { ProcessesPanel } from '../sql/ProcessesPanel';
 import { SendToChat, type Intent, type ShareData } from '../sql/SendToChat';
 import { startRun, type SqlResult } from '../sql/run';
+import { fkOf, forgetMeta, keyLiteral, pkOf, resultTables, tableMeta } from '../sql/meta';
+import { ReferencedBy } from '../sql/ReferencedBy';
 import { ParamsDialog } from '../sql/ParamsDialog';
 
 /** Per tab, not saved: how its result is shown. */
@@ -48,6 +50,9 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [login, setLogin] = useState(false);
   const [confirm, setConfirm] = useState<{ tab: string; req: SqlRunRequest; reason: string } | null>(null);
   const [ask, setAsk] = useState<{ tab: string; req: SqlRunRequest; params: Param[]; statement: string; markErrors: boolean } | null>(null);
+  const [refsOf, setRefsOf] = useState<{ alias: string; prod: boolean; target: { db: string; table: string; column: string }; value: SqlValue } | null>(null);
+  // Bumped when table facts for a result arrive, so its key columns are known.
+  const [metaTick, setMetaTick] = useState(0);
   // One Processes tab per connection: reopening focuses it.
   const openProcesses = (a: string) => {
     const t = tabs?.find(x => x.kind === 'processes' && x.alias === a);
@@ -129,7 +134,7 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
     try {
       const s = await api.sqlSchema(a, refresh);
       setSchemas(x => ({ ...x, [a]: s })); setSchemaErr(x => { const { [a]: _, ...rest } = x; return rest; });
-      if (refresh) { setCols(c => ({ ...c, [a]: {} })); for (const m of [colPromises.current, tablePromises.current]) for (const k of [...m.keys()]) if (k.startsWith(`${a}/`.toLowerCase()) || k.startsWith(`${a}/`)) m.delete(k); }
+      if (refresh) { forgetMeta(a); setCols(c => ({ ...c, [a]: {} })); for (const m of [colPromises.current, tablePromises.current]) for (const k of [...m.keys()]) if (k.startsWith(`${a}/`.toLowerCase()) || k.startsWith(`${a}/`)) m.delete(k); }
     } catch (err: any) { setSchemaErr(x => ({ ...x, [a]: err.message })); }
     finally { setSchemaBusy(b => ({ ...b, [a]: false })); }
   }, []);
@@ -198,6 +203,8 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
       setResults(x => ({ ...x, [id]: r }));
       if (r.status === 'running') return;
       delete aborts.current[id];
+      // Facts for the tables the columns came from: primary and foreign keys, for following them from a cell.
+      if (r.status === 'done') for (const t of resultTables(r.columns)) tableMeta(req.alias, t.db, t.table).then(() => setMetaTick(n => n + 1), () => {});
       api.sqlHistory().then(setHistory).catch(() => {});
       if (r.status === 'error' && r.error?.offset != null && markErrors) editors.current[id]?.markError({ from: r.error.offset, to: r.error.offset + Math.max(1, r.error.length) });
       setUi(u => {
@@ -258,6 +265,21 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
     actions.go({ kind: 'sql' });
   }, [lookup?.at, tabsReady]);
 
+  // Following keys from a cell: the row it points at, in record view, or the rows that point at it.
+  const follow = (fk: SqlFk, v: SqlValue) => {
+    if (!active) return;
+    const t = addTab({ alias: active.alias, db: active.db, title: `${fk.refTable} ${String(v).slice(0, 20)}`, text: `SELECT *
+FROM ${fk.refDb}.${fk.refTable}
+WHERE ${fk.refColumn} = ${keyLiteral(v)}` }, { preferRecord: true });
+    setTimeout(() => runTab(t.id), 60);
+  };
+  const openRefs = (r: SqlReference) => {
+    if (!refsOf) return;
+    const t = addTab({ alias: refsOf.alias, db: active?.db ?? null, title: `${r.table} → ${String(refsOf.value).slice(0, 16)}`, text: `SELECT *
+FROM ${r.db}.${r.table}
+WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
+    setTimeout(() => runTab(t.id), 60);
+  };
   const openQuery = (sql: string, opts: { run?: boolean; title?: string; alias?: string; db?: string | null } = {}) => {
     const t = addTab({ text: sql, title: opts.title || `Query ${(tabs?.length || 0) + 1}`, alias: opts.alias && info?.aliases.some(a => a.alias === opts.alias) ? opts.alias : active?.alias, db: opts.db ?? active?.db ?? null });
     if (opts.run) setTimeout(() => runTab(t.id), 60);
@@ -308,6 +330,10 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const visible = useMemo(() => columns.map((_, i) => i).filter(i => !tui.hidden.includes(i)), [columns, tui.hidden]);
   const order = useOrder(columns, result?.rows || [], result?.version || 0, visible, tui.filter, tui.sort);
   const recordPos = Math.min(tui.record, Math.max(0, order.length - 1));
+  const keys = useMemo(() => alias && info ? {
+    fk: (c: number) => columns[c] ? fkOf(alias.alias, columns[c], info.fkGuesses || {}) : null,
+    pk: (c: number) => columns[c] ? pkOf(alias.alias, columns[c]) : null,
+  } : undefined, [alias?.alias, columns, info, metaTick]);
   const recordRow = result && order.length ? result.rows[order[tui.selection && tui.selection.kind !== 'col' && tui.mode === 'grid' ? tui.selection.r : recordPos]] : null;
 
   const shareData = (): ShareData | null => {
@@ -450,9 +476,11 @@ Double-click to rename; right-click for more`}>
                   ? <ResultGrid key={`${active.id}:${result.startedAt}`} columns={columns} rows={result.rows} version={result.version} order={order} visible={visible}
                     sort={tui.sort} onSort={s => patchUi(active.id, { sort: s })} selection={tui.selection} onSelect={s => patchUi(active.id, { selection: s })}
                     onHide={c => patchUi(active.id, { hidden: [...tui.hidden, c] })} onShowAll={() => patchUi(active.id, { hidden: [] })} onFilter={f => patchUi(active.id, { filter: f })}
-                    onOpenCell={(row, col) => setCell({ tab: active.id, row, col })} onRecord={row => patchUi(active.id, { mode: 'record', record: Math.max(0, order.indexOf(row)) })} />
+                    onOpenCell={(row, col) => setCell({ tab: active.id, row, col })} onRecord={row => patchUi(active.id, { mode: 'record', record: Math.max(0, order.indexOf(row)) })}
+                    keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} />
                   : <RecordView columns={columns} row={recordRow} position={recordPos} count={order.length} onMove={to => patchUi(active.id, { record: to, selection: null })}
-                    onOpenCell={col => { const row = result.rows.indexOf(recordRow!); if (row >= 0) setCell({ tab: active.id, row, col }); }} />}
+                    onOpenCell={col => { const row = result.rows.indexOf(recordRow!); if (row >= 0) setCell({ tab: active.id, row, col }); }}
+                    keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} />}
               </>}
               {result && result.status === 'done' && !result.columns.length && <div className="m-auto text-[12px] text-fg-muted">{result.affected != null ? <><b className="num text-fg">{result.affected.toLocaleString()}</b> row{result.affected === 1 ? '' : 's'} affected. Committed.</> : 'The statement ran and returned no result set.'}</div>}
               {result && result.status === 'done' && result.columns.length > 0 && !result.rows.length && <div className="p-6 text-center text-[12px] text-fg-faint">No rows.</div>}
@@ -470,6 +498,7 @@ Double-click to rename; right-click for more`}>
       {confirm && <ConfirmWrite reason={confirm.reason} statement={confirm.req.selection ? confirm.req.text.slice(confirm.req.selection.from, confirm.req.selection.to).trim() : statementAt(confirm.req.text, confirm.req.cursor)?.text || ''} alias={confirm.req.alias}
         onClose={() => setConfirm(null)} onRun={() => { const c = confirm; setConfirm(null); launch(c.tab, { ...c.req, confirm: true }, true); }} />}
       {ask && <ParamsDialog params={ask.params} statement={ask.statement} onClose={() => setAsk(null)} onRun={values => { const a = ask; setAsk(null); launch(a.tab, { ...a.req, params: values }, a.markErrors); }} />}
+      {refsOf && <ReferencedBy alias={refsOf.alias} prod={refsOf.prod} target={refsOf.target} value={refsOf.value} onOpen={openRefs} onClose={() => setRefsOf(null)} />}
       {share && (() => { const d = shareData(); return d ? <SendToChat data={d} intent={share} onClose={() => setShare(null)} /> : null; })()}
       {menu}
     </div>
@@ -497,7 +526,7 @@ function StatusBar({ alias, db, result, autoLimit, maxRows, onCancel, onRunMax }
 
 function EmptyResult({ history, onOpen, autoLimit }: { history: SqlHistoryEntry[]; onOpen: (h: SqlHistoryEntry) => void; autoLimit: number }) {
   const keys: [string[], string][] = [[['Ctrl', 'Enter'], 'run the statement under the cursor'], [['Ctrl', 'Shift', 'Enter'], 'run with the bigger row cap'], [['Ctrl', 'Shift', 'E'], 'EXPLAIN it'],
-    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
+    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Ctrl', 'click'], 'open the row a key cell points at'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
   return (
     <div className="m-auto grid max-w-[560px] gap-4 p-6 text-[12px] text-fg-muted">
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1.5">

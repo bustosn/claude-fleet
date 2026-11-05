@@ -4,12 +4,12 @@ import { randomUUID } from 'node:crypto';
 import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
-import type { SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
+import type { SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnHit, SqlColumnInfo, SqlFk, SqlReference, SqlTableMeta, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
 import { bindParams, classify, classifyWrite, countParams, errorOffset, limitable, paramNames, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
 const SYSTEM_DBS = ['mysql', 'sys', 'performance_schema', 'information_schema'];
 const BATCH = 200, FLUSH_MS = 80, HISTORY = 500;
-const IDLE_MS = 5 * 60 * 1000;
+const IDLE_MS = 5 * 60 * 1000, META_MS = 10 * 60 * 1000;
 const serverIds = new WeakMap<object, number>();
 // The same ids by connection alias, so the process list can mark Fleet's own connections.
 const fleetIds = new Map<string, Set<number>>();
@@ -26,6 +26,9 @@ export class SqlManager {
   private schemas = new Map<string, SchemaCache>();
   // One table's columns, for completion, by alias/db.table; dropped with the schema on Refresh.
   private tableCols = new Map<string, SqlColumnInfo[]>();
+  // Table facts and who points at a table: they change slowly, so they are kept in memory for ten minutes.
+  private metas = new Map<string, { at: number; v: SqlTableMeta }>();
+  private refs = new Map<string, { at: number; v: SqlReference[] }>();
   private tabs: SqlTab[] = []; private history: SqlHistoryEntry[] = [];
   private persistFile: string | null = null; private saveTimer: NodeJS.Timeout | null = null;
 
@@ -42,7 +45,7 @@ export class SqlManager {
     let error: string | null = null;
     if (!aliases.length) error = 'No tunnels to offer. The SQL view uses the Teleport tunnels named in sql.aliases (main-dev, data-dev, main-prd-reader, data-prd-reader by default).';
     const defaultAlias = aliases.find(a => a.alias === this.cfg.defaultAlias)?.alias || aliases[0]?.alias || '';
-    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error };
+    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error, fkGuesses: this.cfg.fkGuesses };
   }
   private alias(name: string): SqlAlias {
     const a = this.aliases().find(x => x.alias === name);
@@ -321,7 +324,7 @@ export class SqlManager {
     let c = this.schemas.get(alias);
     if (!c) { try { c = JSON.parse(fs.readFileSync(this.cacheFile(alias), 'utf8')); } catch {} }
     if (c && !refresh && (!target || !c.target || c.target === target)) { this.schemas.set(alias, c); return c; }
-    for (const k of [...this.tableCols.keys()]) if (k.startsWith(`${alias.toLowerCase()}/`)) this.tableCols.delete(k);
+    for (const m of [this.tableCols, this.metas, this.refs]) for (const k of [...m.keys()]) if (k.startsWith(`${alias.toLowerCase()}/`)) m.delete(k);
     const rows = await this.queryAll<{ TABLE_SCHEMA: string; TABLE_NAME: string; TABLE_TYPE: string; TABLE_ROWS: number | null }>(a,
       `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN (${SYSTEM_DBS.map(() => '?').join(',')}) ORDER BY TABLE_SCHEMA, TABLE_NAME`, SYSTEM_DBS);
     const dbs = new Map<string, SqlSchema['databases'][number]>();
@@ -378,6 +381,78 @@ export class SqlManager {
     }
     c.indexes[key] = [...byName.values()]; this.saveCache(c);
     return c.indexes[key];
+  }
+
+  /** One table's facts from information_schema: size and row estimate (TABLES), primary key and declared foreign keys (KEY_COLUMN_USAGE),
+   *  and foreign keys guessed from column names (sql.fkGuesses) where none is declared. */
+  async tableMeta(alias: string, db: string, table: string): Promise<SqlTableMeta> {
+    const a = this.alias(alias);
+    const key = `${a.alias}/${db}.${table}`.toLowerCase();
+    const hit = this.metas.get(key);
+    if (hit && Date.now() - hit.at < META_MS) return hit.v;
+    const [t] = await this.queryAll<any>(a, `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, CREATE_TIME, UPDATE_TIME, TABLE_COMMENT
+      FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`, [db, table]);
+    if (!t) throw new Error(`No table ${db}.${table} on ${a.alias}.`);
+    const [keys, cols] = await Promise.all([
+      this.queryAll<any>(a, `SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+        FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION`, [t.TABLE_SCHEMA, t.TABLE_NAME]),
+      this.tableColumns(a.alias, t.TABLE_SCHEMA, t.TABLE_NAME),
+    ]);
+    const num = (v: unknown) => v == null ? null : Number(v);
+    const fks: SqlFk[] = keys.filter(k => k.REFERENCED_TABLE_NAME).map(k => ({ column: k.COLUMN_NAME, refDb: k.REFERENCED_TABLE_SCHEMA, refTable: k.REFERENCED_TABLE_NAME, refColumn: k.REFERENCED_COLUMN_NAME, source: 'fk' as const }));
+    const self = `${t.TABLE_SCHEMA}.${t.TABLE_NAME}`.toLowerCase();
+    for (const c of cols) {
+      const target = this.cfg.fkGuesses[c.name.toLowerCase()];
+      if (!target || target.toLowerCase() === self || fks.some(f => f.column === c.name)) continue;
+      const [refDb, refTable] = target.split('.');
+      fks.push({ column: c.name, refDb, refTable, refColumn: 'id', source: 'guess' });
+    }
+    const v: SqlTableMeta = { db: t.TABLE_SCHEMA, table: t.TABLE_NAME, type: t.TABLE_TYPE === 'VIEW' ? 'view' : 'table', engine: t.ENGINE || null,
+      rows: num(t.TABLE_ROWS), dataBytes: num(t.DATA_LENGTH), indexBytes: num(t.INDEX_LENGTH), created: t.CREATE_TIME || null, updated: t.UPDATE_TIME || null,
+      comment: t.TABLE_COMMENT || '', pk: keys.filter(k => k.CONSTRAINT_NAME === 'PRIMARY').map(k => k.COLUMN_NAME), fks };
+    this.metas.set(key, { at: Date.now(), v });
+    return v;
+  }
+
+  /** Columns elsewhere that point at this table: declared foreign keys in any database, and columns named like a guess for this table
+   *  (cb_id for cb911.cb_chargebacks) in the same database, or in every database with `everywhere` (cb_id alone is ~1,400 columns there). */
+  async referencedBy(alias: string, db: string, table: string, everywhere = false): Promise<SqlReference[]> {
+    const a = this.alias(alias);
+    const key = `${a.alias}/${db}.${table}/${everywhere ? 'all' : 'db'}`.toLowerCase();
+    const hit = this.refs.get(key);
+    if (hit && Date.now() - hit.at < META_MS) return hit.v;
+    const indexed = 'EXISTS (SELECT 1 FROM information_schema.STATISTICS s WHERE s.TABLE_SCHEMA = k.TABLE_SCHEMA AND s.TABLE_NAME = k.TABLE_NAME AND s.COLUMN_NAME = k.COLUMN_NAME AND s.SEQ_IN_INDEX = 1)';
+    const target = `${db}.${table}`.toLowerCase();
+    const names = Object.entries(this.cfg.fkGuesses).filter(([, t]) => t.toLowerCase() === target).map(([n]) => n);
+    const [declared, guessed] = await Promise.all([
+      this.queryAll<any>(a, `SELECT k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_COLUMN_NAME, ${indexed} AS ix
+        FROM information_schema.KEY_COLUMN_USAGE k WHERE k.REFERENCED_TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME = ?`, [db, table]),
+      names.length ? this.queryAll<any>(a, `SELECT k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME, 'id' AS REFERENCED_COLUMN_NAME, ${indexed} AS ix
+        FROM information_schema.COLUMNS k WHERE k.COLUMN_NAME IN (?) AND ${everywhere ? 'k.TABLE_SCHEMA NOT IN (?)' : 'k.TABLE_SCHEMA = ?'}`, [names, everywhere ? SYSTEM_DBS : db]) : Promise.resolve([]),
+    ]);
+    const seen = new Set<string>(), v: SqlReference[] = [];
+    for (const [rows, source] of [[declared, 'fk'], [guessed, 'guess']] as const)
+      for (const r of rows) {
+        const k = `${r.TABLE_SCHEMA}.${r.TABLE_NAME}.${r.COLUMN_NAME}`.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        v.push({ db: r.TABLE_SCHEMA, table: r.TABLE_NAME, column: r.COLUMN_NAME, refColumn: r.REFERENCED_COLUMN_NAME, indexed: Number(r.ix) === 1, source });
+      }
+    v.sort((x, y) => Number(y.indexed) - Number(x.indexed) || Number(y.db === db) - Number(x.db === db) || x.db.localeCompare(y.db) || x.table.localeCompare(y.table));
+    this.refs.set(key, { at: Date.now(), v });
+    return v;
+  }
+
+  /** Columns whose name matches, in every database or one: "mid" finds any name containing it, and * is a wildcard. At most 500. */
+  async findColumns(alias: string, q: string, db?: string | null): Promise<SqlColumnHit[]> {
+    const a = this.alias(alias);
+    const t = q.trim();
+    if (t.length < 2) throw new Error('Type at least two characters of the column name.');
+    const esc = t.replace(/[%\\]/g, m => `\\${m}`);
+    const like = t.includes('*') ? esc.replace(/\*/g, '%') : `%${esc}%`;
+    const rows = await this.queryAll<any>(a, `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, COLUMN_KEY FROM information_schema.COLUMNS
+      WHERE COLUMN_NAME LIKE ? AND ${db ? 'TABLE_SCHEMA = ?' : 'TABLE_SCHEMA NOT IN (?)'} ORDER BY COLUMN_NAME = ? DESC, TABLE_SCHEMA, TABLE_NAME LIMIT 500`, [like, db || SYSTEM_DBS, t]);
+    return rows.map(r => ({ db: r.TABLE_SCHEMA, table: r.TABLE_NAME, column: r.COLUMN_NAME, type: String(r.COLUMN_TYPE), key: r.COLUMN_KEY || '' }));
   }
 
   // Lookups: the configured ones (fleet.config.json, or the built-ins), plus the ones made in the SQL view, kept in state/sql-lookups.json
@@ -473,7 +548,7 @@ function column(f: mysql.FieldPacket): SqlColumn {
   const binary = Number((f as any).characterSet) === 63;
   const kind: SqlKind = NUMERIC.has(code) ? 'number' : DATES.has(code) ? 'date' : code === 245 ? 'json' : binary && code >= 249 && code <= 254 ? 'blob' : 'string';
   const type = binary && code >= 249 && code <= 252 ? 'blob' : binary && code >= 253 ? 'binary' : TYPE_NAMES[code] || String(code);
-  return { name: f.name, table: (f as any).orgTable || f.table || '', kind, type };
+  return { name: f.name, table: (f as any).orgTable || f.table || '', kind, type, db: (f as any).schema || '', orgName: (f as any).orgName || '' };
 }
 function cell(v: unknown): SqlValue {
   if (v == null) return null;

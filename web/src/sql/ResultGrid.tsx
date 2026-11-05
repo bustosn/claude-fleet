@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowUp, Braces, ClipboardCopy, Columns3, EyeOff, Filter, Maximize2, Rows3 } from 'lucide-react';
-import type { SqlColumn, SqlValue } from '../lib/api';
+import { ArrowDown, ArrowUp, Braces, ClipboardCopy, Columns3, CornerDownRight, EyeOff, Filter, Link2, Maximize2, Rows3 } from 'lucide-react';
+import type { SqlColumn, SqlFk, SqlValue } from '../lib/api';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { actions } from '../lib/store';
 import { copy, csv, inList, rowJson, tsv, whereEq } from './copy';
@@ -49,9 +49,21 @@ interface Props {
   sort: Sort; onSort: (s: Sort) => void; selection: Selection; onSelect: (s: Selection) => void;
   onHide: (col: number) => void; onShowAll: () => void; onFilter: (text: string) => void;
   onOpenCell: (rowIndex: number, col: number) => void; onRecord: (rowIndex: number) => void;
+  /** Keys: where a column's values point (a foreign key, declared or guessed), and the table a column is the primary key of. */
+  keys?: { fk: (col: number) => SqlFk | null; pk: (col: number) => { db: string; table: string; column: string } | null };
+  onFollow?: (fk: SqlFk, v: SqlValue) => void; onReferencedBy?: (target: { db: string; table: string; column: string }, v: SqlValue) => void;
 }
 
-export function ResultGrid({ columns, rows, version, order, visible, sort, onSort, selection, onSelect, onHide, onShowAll, onFilter, onOpenCell, onRecord }: Props) {
+export function ResultGrid({ columns, rows, version, order, visible, sort, onSort, selection, onSelect, onHide, onShowAll, onFilter, onOpenCell, onRecord, keys, onFollow, onReferencedBy }: Props) {
+  // Holding Ctrl shows which cells follow a key on click.
+  const [mod, setMod] = useState(false);
+  useEffect(() => {
+    const on = (e: globalThis.KeyboardEvent) => setMod(e.ctrlKey || e.metaKey);
+    const off = () => setMod(false);
+    addEventListener('keydown', on); addEventListener('keyup', on); addEventListener('blur', off);
+    return () => { removeEventListener('keydown', on); removeEventListener('keyup', on); removeEventListener('blur', off); };
+  }, []);
+  const fks = useMemo(() => columns.map((_, i) => keys?.fk(i) || null), [columns, keys]);
   const scroller = useRef<HTMLDivElement>(null);
   const [widths, setWidths] = useState<number[]>(() => measure(columns, rows));
   // New columns (a new run) are measured again once the first rows are in.
@@ -109,7 +121,13 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
   const cellMenu = (e: RMouseEvent, r: number, c: number) => {
     onSelect({ kind: 'cell', r, c });
     const ri = order[r], v = rows[ri][c], col = columns[c];
+    const fk = fks[c], pk = keys?.pk(c);
+    const nav: MenuItem[] = [
+      ...(fk && v != null && onFollow ? [{ label: `Open ${fk.refTable} where ${fk.refColumn} = ${String(v).slice(0, 40)}`, icon: Link2, onSelect: () => onFollow(fk, v) }] : []),
+      ...(pk && v != null && onReferencedBy ? [{ label: 'Referenced by…', icon: CornerDownRight, onSelect: () => onReferencedBy(pk, v) }] : []),
+    ];
     const items: MenuItem[] = [
+      ...nav, ...(nav.length ? ['separator' as const] : []),
       { label: 'Copy value', icon: ClipboardCopy, onSelect: async () => toast(await copy(v == null ? 'NULL' : String(v)), 'value') },
       { label: `Copy as WHERE ${col.name} = …`, onSelect: async () => toast(await copy(whereEq(col, v)), 'WHERE clause') },
       { label: `Copy ${col.name} column as IN (…)`, onSelect: async () => toast(await copy(inList(colValues(c), col)), 'IN list') },
@@ -197,8 +215,9 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
               {vCols.map(vc => {
                 const c = visible[vc.index];
                 const isSel = (selection?.kind === 'cell' && selection.r === vr.index && selection.c === c) || (selection?.kind === 'col' && selCol === c);
-                return <Cell key={c} v={row[c]} kind={columns[c].kind} left={vc.start} width={vc.size} sel={isSel}
-                  onClick={() => onSelect({ kind: 'cell', r: vr.index, c })} onOpen={() => onOpenCell(ri, c)} onMenu={e => cellMenu(e, vr.index, c)} />;
+                const fk = fks[c];
+                return <Cell key={c} v={row[c]} kind={columns[c].kind} left={vc.start} width={vc.size} sel={isSel} fk={!!fk && row[c] != null} mod={mod}
+                  onClick={e => { if (fk && row[c] != null && onFollow && (e.ctrlKey || e.metaKey)) { onFollow(fk, row[c]); return; } onSelect({ kind: 'cell', r: vr.index, c }); }} onOpen={() => onOpenCell(ri, c)} onMenu={e => cellMenu(e, vr.index, c)} />;
               })}
             </div>
           );
@@ -209,11 +228,11 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
   );
 }
 
-const Cell = memo(function Cell({ v, kind, left, width, sel, onClick, onOpen, onMenu }: { v: SqlValue; kind: SqlColumn['kind']; left: number; width: number; sel: boolean; onClick: () => void; onOpen: () => void; onMenu: (e: RMouseEvent) => void }) {
+const Cell = memo(function Cell({ v, kind, left, width, sel, fk, mod, onClick, onOpen, onMenu }: { v: SqlValue; kind: SqlColumn['kind']; left: number; width: number; sel: boolean; fk: boolean; mod: boolean; onClick: (e: RMouseEvent) => void; onOpen: () => void; onMenu: (e: RMouseEvent) => void }) {
   const s = v == null ? null : String(v);
   const json = looksJson(v), long = !!s && s.length > 200;
   return (
-    <div role="gridcell" className={`sql-cell ${kind === 'number' ? 'num' : ''} ${sel ? 'is-sel' : ''}`} style={{ left, width }} onClick={onClick} onDoubleClick={onOpen} onContextMenu={onMenu}>
+    <div role="gridcell" className={`sql-cell ${kind === 'number' ? 'num' : ''} ${sel ? 'is-sel' : ''} ${fk ? 'fk' : ''} ${fk && mod ? 'mod' : ''}`} style={{ left, width }} title={fk ? 'Ctrl+click to open the row this points at' : undefined} onClick={onClick} onDoubleClick={onOpen} onContextMenu={onMenu}>
       {s == null ? <span className="sql-null">NULL</span> : <span className="truncate">{long ? `${s.slice(0, 200)}…` : s}</span>}
       {(json || long) && <button className="sql-open" aria-label="Open value" onClick={e => { e.stopPropagation(); onOpen(); }}>{json ? <Braces size={11} /> : <Maximize2 size={11} />}</button>}
     </div>

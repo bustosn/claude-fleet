@@ -437,6 +437,9 @@ app.delete('/api/sql/runs/:id', (req, res) => res.json({ ok: sql.cancel(String(r
 app.get('/api/sql/schema/:alias', sqlRoute(req => sql.schema(sqlName(req.params.alias), req.query.refresh === '1')));
 app.get('/api/sql/schema/:alias/:db/:table/columns', sqlRoute(req => sql.tableColumns(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 app.get('/api/sql/schema/:alias/:db/columns', sqlRoute(req => sql.columns(sqlName(req.params.alias), sqlName(req.params.db))));
+app.get('/api/sql/schema/:alias/:db/:table/meta', sqlRoute(req => sql.tableMeta(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
+app.get('/api/sql/schema/:alias/:db/:table/referenced-by', sqlRoute(req => sql.referencedBy(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table), req.query.all === '1')));
+app.get('/api/sql/find-columns/:alias', sqlRoute(req => sql.findColumns(sqlName(req.params.alias), String(req.query.q || ''), req.query.db ? sqlName(req.query.db) : null)));
 app.get('/api/sql/schema/:alias/:db/:table/indexes', sqlRoute(req => sql.indexes(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 // Per-connection logins, like DBeaver's. Passwords are written, never read back.
 app.get('/api/sql/credentials', sqlRoute(() => sql.credentials()));
