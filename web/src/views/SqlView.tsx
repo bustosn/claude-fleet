@@ -6,7 +6,7 @@ import { actions } from '../lib/store';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { Empty, Kbd } from '../components/ui';
 import { age } from '../lib/format';
-import { statementAt } from '../../../shared/sqlClassify';
+import { params as paramsOf, split as splitSql, statementAt, type Param } from '../../../shared/sqlClassify';
 import { SqlEditor, type EditorHandle } from '../sql/SqlEditor';
 import { ResultGrid, useOrder, type Selection, type Sort } from '../sql/ResultGrid';
 import { RecordView } from '../sql/RecordView';
@@ -18,6 +18,7 @@ import { columnCompletion } from '../sql/columnCompletion';
 import { ProcessesPanel } from '../sql/ProcessesPanel';
 import { SendToChat, type Intent, type ShareData } from '../sql/SendToChat';
 import { startRun, type SqlResult } from '../sql/run';
+import { ParamsDialog } from '../sql/ParamsDialog';
 
 /** Per tab, not saved: how its result is shown. */
 interface TabUi { mode: 'grid' | 'record'; preferRecord: boolean; selection: Selection; sort: Sort; filter: string; hidden: number[]; record: number }
@@ -46,6 +47,7 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [share, setShare] = useState<Intent | null>(null);
   const [login, setLogin] = useState(false);
   const [confirm, setConfirm] = useState<{ tab: string; req: SqlRunRequest; reason: string } | null>(null);
+  const [ask, setAsk] = useState<{ tab: string; req: SqlRunRequest; params: Param[]; statement: string; markErrors: boolean } | null>(null);
   // One Processes tab per connection: reopening focuses it.
   const openProcesses = (a: string) => {
     const t = tabs?.find(x => x.kind === 'processes' && x.alias === a);
@@ -180,7 +182,12 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
     if (!active || !alias) return;
     const snap = override || editors.current[active.id]?.snapshot();
     if (!snap) return;
-    launch(active.id, { alias: alias.alias, text: snap.text, cursor: snap.cursor, selection: snap.selection, db: active.db, limit }, !override);
+    const req: SqlRunRequest = { alias: alias.alias, text: snap.text, cursor: snap.cursor, selection: snap.selection, db: active.db, limit };
+    // The statement the server will pick; when it asks for values, they are asked for first.
+    const stmt = snap.selection && snap.selection.to > snap.selection.from ? splitSql(snap.text.slice(snap.selection.from, snap.selection.to), { blankLines: false })[0]?.text : statementAt(snap.text, snap.cursor)?.text;
+    const ps = stmt ? paramsOf(stmt) : [];
+    if (ps.length) { setAsk({ tab: active.id, req, params: ps, statement: stmt!, markErrors: !override }); return; }
+    launch(active.id, req, !override);
   };
   const launch = (id: string, req: SqlRunRequest, markErrors: boolean) => {
     aborts.current[id]?.();
@@ -462,6 +469,7 @@ Double-click to rename; right-click for more`}>
       {lookupEdit && <LookupEditor initial={lookupEdit} aliases={info.aliases} schema={completion} columnsFor={tableColumnsFor} onClose={() => setLookupEdit(null)} onSaved={setLookups} />}
       {confirm && <ConfirmWrite reason={confirm.reason} statement={confirm.req.selection ? confirm.req.text.slice(confirm.req.selection.from, confirm.req.selection.to).trim() : statementAt(confirm.req.text, confirm.req.cursor)?.text || ''} alias={confirm.req.alias}
         onClose={() => setConfirm(null)} onRun={() => { const c = confirm; setConfirm(null); launch(c.tab, { ...c.req, confirm: true }, true); }} />}
+      {ask && <ParamsDialog params={ask.params} statement={ask.statement} onClose={() => setAsk(null)} onRun={values => { const a = ask; setAsk(null); launch(a.tab, { ...a.req, params: values }, a.markErrors); }} />}
       {share && (() => { const d = shareData(); return d ? <SendToChat data={d} intent={share} onClose={() => setShare(null)} /> : null; })()}
       {menu}
     </div>

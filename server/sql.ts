@@ -5,7 +5,7 @@ import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
 import type { SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
-import { classify, classifyWrite, countParams, errorOffset, limitable, split, statementAt, withLimit } from '../shared/sqlClassify.js';
+import { bindParams, classify, classifyWrite, countParams, errorOffset, limitable, paramNames, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
 const SYSTEM_DBS = ['mysql', 'sys', 'performance_schema', 'information_schema'];
 const BATCH = 200, FLUSH_MS = 80, HISTORY = 500;
@@ -169,8 +169,19 @@ export class SqlManager {
     }
     entry.sql = stmtText;
     const writable = !a.prod && !opts.readOnly;
-    const c = writable ? classifyWrite(stmtText) : { ...classify(stmtText), write: false, danger: null };
+    const check = (sql: string) => writable ? classifyWrite(sql) : { ...classify(sql), write: false, danger: null };
+    // The statement as written is checked, then again with the values in: each value is one escaped literal, so the two agree.
+    let c = check(stmtText);
     if (!c.ok) return fail(c.reason || 'Not a read.');
+    const bound = paramNames(stmtText).length > 0;
+    if (bound) {
+      const b = bindParams(stmtText, req.params || {}, v => mysql.escape(v));
+      if (b.missing.length) return fail(`This statement needs a value for ${b.missing.map(n => n.startsWith('?') ? `? number ${n.slice(1)}` : `:${n}`).join(', ')}.`, { code: 'PARAMS' });
+      if (b.error) return fail(b.error);
+      stmtText = b.text; entry.sql = stmtText;
+      c = check(stmtText);
+      if (!c.ok) return fail(c.reason || 'Not a read.');
+    }
     // Asked once, answered in the browser: the same request again with confirm set.
     if (c.danger && !req.confirm) return emit({ t: 'error', message: c.danger, code: 'CONFIRM', offset: null, length: 0, line: null });
     const db = req.db ? String(req.db) : null;
@@ -224,7 +235,8 @@ export class SqlManager {
         const msg = run.timedOut ? `Stopped after ${Math.round(this.cfg.timeoutMs / 1000)} s (the SQL view's time limit).`
           : run.cancelled ? 'Cancelled.' : explain(String(err.sqlMessage || err.message || err), a);
         const pos = errorOffset(exec, msg);
-        const inStmt = pos.offset != null && pos.offset < stmtText.length;
+        // With values bound, positions in the statement that ran no longer match the editor's text.
+        const inStmt = !bound && pos.offset != null && pos.offset < stmtText.length;
         fail(msg, { code: err.code || null, line: pos.line, offset: inStmt ? offset + pos.offset! : null, length: inStmt ? pos.length : 0 });
       }
     } finally {

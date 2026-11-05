@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, classifyWrite, countParams, tableRefs, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
+import { classify, classifyWrite, countParams, tableRefs, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset, paramNames, bindParams } from '../shared/sqlClassify.js';
 
 const reads = [
   'SELECT * FROM cb911.cb_chargebacks WHERE id = 1',
@@ -132,4 +132,29 @@ test('table references and aliases, for column completion', () => {
   assert.deepEqual(tableRefs('SELECT * FROM t WHERE x = 1'), [{ db: null, table: 't', alias: null }]);
   assert.deepEqual(tableRefs('UPDATE cb911.t x SET x.a = 1'), [{ db: 'cb911', table: 't', alias: 'x' }]);
   assert.deepEqual(tableRefs('SELECT * FROM (SELECT id FROM u) sub'), [{ db: null, table: 'u', alias: null }]);
+});
+
+test('parameters: :name and ?, not := or times or strings', () => {
+  assert.deepEqual(paramNames('SELECT * FROM t WHERE case_no = :case AND client_id = :Client OR x = :case'), ['case', 'client']);
+  assert.deepEqual(paramNames('SELECT * FROM t WHERE a = ? AND b = ?'), ['?1', '?2']);
+  assert.deepEqual(paramNames('SET @x := 1'), []);
+  assert.deepEqual(paramNames('SELECT @n := @n + 1 FROM t'), []);
+  assert.deepEqual(paramNames("SELECT * FROM t WHERE created > '2026-01-01 10:30:00' AND tm = '10:30'"), []);
+  assert.deepEqual(paramNames("SELECT TIME '10:30', ':name' AS s, `:col` FROM t -- :nope\n/* :no */"), []);
+  assert.deepEqual(paramNames('SELECT a:b FROM t'), []);
+  assert.deepEqual(paramNames('SELECT * FROM t WHERE a = : name'), []);
+  assert.deepEqual(paramNames("SELECT JSON_EXTRACT(j, '$.a:b') FROM t WHERE id = :id"), ['id']);
+});
+
+test('binding parameters escapes every value', () => {
+  const esc = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  assert.equal(bindParams('SELECT * FROM t WHERE a = :a AND b = :a', { a: "x' OR 1=1 -- " }, esc).text, "SELECT * FROM t WHERE a = 'x\\' OR 1=1 -- ' AND b = 'x\\' OR 1=1 -- '");
+  assert.equal(bindParams('SELECT * FROM t WHERE id IN (:ids)', { ids: '1, 2\n3' }, esc).text, "SELECT * FROM t WHERE id IN ('1', '2', '3')");
+  assert.equal(bindParams('SELECT * FROM t WHERE a = ? AND b = ?', { '?1': '1', '?2': 'two' }, esc).text, "SELECT * FROM t WHERE a = '1' AND b = 'two'");
+  assert.equal(bindParams('SELECT * FROM t LIMIT :n', { n: '10' }, esc).text, 'SELECT * FROM t LIMIT 10');
+  assert.equal(bindParams('SELECT * FROM t LIMIT :n', { n: '1; DROP TABLE t' }, esc).text, "SELECT * FROM t LIMIT '1; DROP TABLE t'");
+  assert.deepEqual(bindParams('SELECT :a, :b', { a: '1' }, esc).missing, ['b']);
+  assert.match(bindParams('SELECT * FROM t WHERE id IN (:ids)', { ids: '1,2,3' }, esc, 2).error || '', /3 values/);
+  // A bound value can never become a write: it is one string token.
+  assert.equal(classify(bindParams('SELECT * FROM t WHERE a = :a', { a: "'; DELETE FROM t; --" }, esc).text).ok, true);
 });
