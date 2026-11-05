@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
+import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Download, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
 import { api, type SqlFk, type SqlLookup, type SqlReference, type SqlRunRequest, type SqlValue, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
@@ -21,6 +21,9 @@ import { startRun, type SqlResult } from '../sql/run';
 import { fkOf, forgetMeta, keyLiteral, pkOf, resultTables, tableMeta } from '../sql/meta';
 import { ReferencedBy } from '../sql/ReferencedBy';
 import { ParamsDialog } from '../sql/ParamsDialog';
+import { download, exportName, xlsx } from '../sql/xlsx';
+import { exportOnServer } from '../sql/exportServer';
+import { csv } from '../sql/copy';
 
 /** Per tab, not saved: how its result is shown. */
 interface TabUi { mode: 'grid' | 'record'; preferRecord: boolean; selection: Selection; sort: Sort; filter: string; hidden: number[]; record: number }
@@ -53,6 +56,10 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   const [refsOf, setRefsOf] = useState<{ alias: string; prod: boolean; target: { db: string; table: string; column: string }; value: SqlValue } | null>(null);
   // Bumped when table facts for a result arrive, so its key columns are known.
   const [metaTick, setMetaTick] = useState(0);
+  // A server export in progress: bytes written so far, and how to stop it.
+  const [exporting, setExporting] = useState<{ bytes: number; abort: () => void } | null>(null);
+  // The request behind each tab's result, values included, so an export runs exactly what produced it.
+  const lastReq = useRef<Record<string, SqlRunRequest>>({});
   // One Processes tab per connection: reopening focuses it.
   const openProcesses = (a: string) => {
     const t = tabs?.find(x => x.kind === 'processes' && x.alias === a);
@@ -196,6 +203,7 @@ export function SqlView({ lookup }: { lookup?: { name: string; value: string; at
   };
   const launch = (id: string, req: SqlRunRequest, markErrors: boolean) => {
     aborts.current[id]?.();
+    lastReq.current[id] = req;
     editors.current[id]?.markError(null);
     const { abort } = startRun(req, r => {
       // A risky write on dev: the server asks first, and the same request goes again with confirm once you say so.
@@ -280,6 +288,24 @@ FROM ${r.db}.${r.table}
 WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
     setTimeout(() => runTab(t.id), 60);
   };
+  // Export: what the grid shows (its columns, filter and sort), or the read run again on the server for more rows.
+  const exportMenu = (e: React.MouseEvent) => {
+    if (!active || !result) return;
+    const cols = visible.map(i => columns[i]), rows = order.map(i => visible.map(c => result.rows[i][c]));
+    const name = exportName(active.title), req = lastReq.current[active.id];
+    openMenu(e, [
+      { label: `CSV · ${rows.length.toLocaleString()} rows shown`, icon: Download, onSelect: () => download(new Blob(['\ufeff' + csv(cols, rows)], { type: 'text/csv;charset=utf-8' }), `${name}.csv`) },
+      { label: `Excel .xlsx · ${rows.length.toLocaleString()} rows shown`, onSelect: () => download(xlsx(cols, rows, active.title), `${name}.xlsx`) },
+      'separator',
+      { label: `Run again on ${req?.alias || active.alias} and save CSV · up to ${(info?.exportMaxRows || 0).toLocaleString()} rows, all columns`, danger: !!alias?.prod, disabled: !req || !!exporting, onSelect: () => {
+        const job = exportOnServer(req!, `${name} all rows`, bytes => setExporting(x => x && { ...x, bytes }));
+        setExporting({ bytes: 0, abort: job.abort });
+        job.done.then(r => { if (r.saved) actions.toast(`Exported ${(r.bytes / 1048576).toFixed(1)} MB`); }, err => actions.toast(err.name === 'AbortError' ? 'Export cancelled' : `Export failed: ${err.message}`, err.name === 'AbortError' ? 'info' : 'error'))
+          .finally(() => setExporting(null));
+      } },
+    ]);
+  };
+
   const openQuery = (sql: string, opts: { run?: boolean; title?: string; alias?: string; db?: string | null } = {}) => {
     const t = addTab({ text: sql, title: opts.title || `Query ${(tabs?.length || 0) + 1}`, alias: opts.alias && info?.aliases.some(a => a.alias === opts.alias) ? opts.alias : active?.alias, db: opts.db ?? active?.db ?? null });
     if (opts.run) setTimeout(() => runTab(t.id), 60);
@@ -470,6 +496,9 @@ Double-click to rename; right-click for more`}>
                     {tui.sort && <button className="chip" onClick={() => patchUi(active.id, { sort: null })} title="Clear sort">sorted by {columns[tui.sort.col]?.name} {tui.sort.dir > 0 ? '↑' : '↓'} ×</button>}
                     <span className="grow" />
                     {tui.filter && <span className="num text-[11px] text-fg-muted">{order.length.toLocaleString()} of {result.rows.length.toLocaleString()}</span>}
+                    {exporting
+                      ? <button className="chip warn" onClick={exporting.abort} title="Stop the export (the query on the server stops too)">exporting {(exporting.bytes / 1048576).toFixed(1)} MB · Stop</button>
+                      : <button className="btn sm ghost" onClick={exportMenu} disabled={result.status === 'running'} title="Download as CSV or Excel"><Download size={13} aria-hidden="true" /> Export <ChevronDown size={12} aria-hidden="true" /></button>}
                   </div>
                 )}
                 {tui.mode === 'grid'

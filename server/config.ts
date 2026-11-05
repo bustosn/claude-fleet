@@ -37,6 +37,8 @@ export interface SqlConfig {
   /** Logins per connection alias, like DBeaver's: { "main-prd-reader": { "user": "…", "password": "…" } }. This file is not tracked. */
   credentials: Record<string, { user: string; password: string }>;
   aliases: string[]; defaultAlias: string; autoLimit: number; maxRows: number; timeoutMs: number;
+  /** Rows an export re-run writes at most (a CSV streamed to disk, not shown in the grid). */
+  exportMaxRows: number;
   lookups: SqlLookup[];
   /** Undeclared foreign keys guessed from the column name: { "mid_id": "cb911.cb_client_mids" } points at that table's id. Real FKs from the schema come first. */
   fkGuesses: Record<string, string>;
@@ -124,6 +126,7 @@ export function loadConfig(): FleetConfig {
       defaultAlias: String(raw.sql?.defaultAlias || 'main-prd-reader'),
       autoLimit: Math.max(1, Number(raw.sql?.autoLimit) || 500), maxRows: Math.max(1, Number(raw.sql?.maxRows) || 5000),
       timeoutMs: Math.max(1000, Number(raw.sql?.timeoutMs) || 120000),
+      exportMaxRows: Math.max(1, Number(raw.sql?.exportMaxRows) || 200000),
       lookups: (Array.isArray(raw.sql?.lookups) ? raw.sql.lookups : DEFAULT_LOOKUPS)
         .filter((l: any) => l && l.name && l.sql)
         .map((l: any): SqlLookup => ({ name: String(l.name).toLowerCase(), label: String(l.label || l.name), pattern: String(l.pattern || '^\\S+$'), alias: String(l.alias || raw.sql?.defaultAlias || 'main-prd-reader'), sql: String(l.sql), view: l.view === 'grid' ? 'grid' : 'record', ...(l.type === 'number' || l.type === 'text' ? { type: l.type } : {}), source: 'config' })),

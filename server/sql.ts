@@ -45,7 +45,7 @@ export class SqlManager {
     let error: string | null = null;
     if (!aliases.length) error = 'No tunnels to offer. The SQL view uses the Teleport tunnels named in sql.aliases (main-dev, data-dev, main-prd-reader, data-prd-reader by default).';
     const defaultAlias = aliases.find(a => a.alias === this.cfg.defaultAlias)?.alias || aliases[0]?.alias || '';
-    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error, fkGuesses: this.cfg.fkGuesses };
+    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error, fkGuesses: this.cfg.fkGuesses, exportMaxRows: this.cfg.exportMaxRows };
   }
   private alias(name: string): SqlAlias {
     const a = this.aliases().find(x => x.alias === name);
@@ -297,6 +297,20 @@ export class SqlManager {
     const c = mysql.createConnection(this.connOpts(a));
     c.query(`KILL QUERY ${Number(id)}`, err => { if (err && !quiet) console.error(`sql: KILL QUERY on ${a.alias} failed: ${err.message}`); c.end(() => {}); });
     c.on('error', () => {});
+  }
+
+  /** A read run again for an export: up to sql.exportMaxRows rows, read-only even on dev, through run() like any statement (classifier, READ ONLY
+   *  session on prod, time cap, cancel). `out` gets the columns once and then the rows as they arrive; nothing is kept in memory. */
+  async exportRun(req: SqlRunRequest, out: { start: (id: string) => void; columns: (c: SqlColumn[]) => void; rows: (r: SqlValue[][]) => void }): Promise<{ rows: number; truncated: boolean; error: string | null }> {
+    const res = { rows: 0, truncated: false, error: null as string | null };
+    await this.run({ ...req, limit: 'max', confirm: false }, ev => {
+      if (ev.t === 'start') out.start(ev.id);
+      else if (ev.t === 'columns') out.columns(ev.columns);
+      else if (ev.t === 'rows') { res.rows += ev.rows.length; out.rows(ev.rows); }
+      else if (ev.t === 'done') res.truncated = ev.truncated;
+      else if (ev.t === 'error') res.error = ev.message;
+    }, { maxRows: this.cfg.exportMaxRows, readOnly: true });
+    return res;
   }
 
   /** A whole result at once, for the fleet_sql tool. */

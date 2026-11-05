@@ -292,7 +292,9 @@ export interface SqlProcess { id: number; user: string; host: string; db: string
   trxStarted: string | null; rowsLocked: number | null; rowsModified: number | null; fleet: boolean }
 export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null;
   /** Column name to the db.table its value is the id of, for keys the schema does not declare. */
-  fkGuesses: Record<string, string> }
+  fkGuesses: Record<string, string>;
+  /** The most rows an export re-run on the server writes. */
+  exportMaxRows: number }
 /** A column that points at another table's row: declared in the schema (`fk`) or guessed from its name (`guess`). */
 export interface SqlFk { column: string; refDb: string; refTable: string; refColumn: string; source: 'fk' | 'guess' }
 /** One table, for the schema tree's hover card and for following keys. Sizes in bytes; times as the server writes them. */

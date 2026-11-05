@@ -434,6 +434,29 @@ app.post('/api/sql/run', (req, res) => {
     .finally(() => { finished = true; s.stop(); res.end(); });
 });
 app.delete('/api/sql/runs/:id', (req, res) => res.json({ ok: sql.cancel(String(req.params.id)) }));
+// An export: the read run again up to sql.exportMaxRows and streamed out as CSV, never held in memory. Closing the download cancels the query.
+app.post('/api/sql/export', (req, res) => {
+  let runId: string | null = null, started = false, finished = false;
+  const cell = (v: unknown) => { const s = v == null ? '' : String(v); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const name = String(req.body?.name || 'export').replace(/[^\w.-]+/g, '_').slice(0, 80) || 'export';
+  res.on('close', () => { if (!finished && runId) sql.cancel(runId); });
+  sql.exportRun(req.body?.req || {}, {
+    start: id => { runId = id; },
+    columns: cols => {
+      if (started) return;
+      started = true;
+      res.status(200).set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}.csv"`, 'X-Sql-Run': runId || '', 'Cache-Control': 'no-store' });
+      // The byte order mark makes Excel read the file as UTF-8.
+      res.write(`﻿${cols.map(c => cell(c.name)).join(',')}\r\n`);
+    },
+    rows: rows => { res.write(rows.map(r => `${r.map(cell).join(',')}\r\n`).join('')); },
+  }).then(r => {
+    finished = true;
+    if (!started) return res.status(400).json({ error: r.error || 'The statement returned no result set to export.' });
+    // An error after rows went out: end the download broken, so it is not taken for the whole result.
+    if (r.error) res.destroy(new Error(r.error)); else res.end();
+  }, err => { finished = true; if (!started) res.status(400).json({ error: errText(err) }); else res.destroy(); });
+});
 app.get('/api/sql/schema/:alias', sqlRoute(req => sql.schema(sqlName(req.params.alias), req.query.refresh === '1')));
 app.get('/api/sql/schema/:alias/:db/:table/columns', sqlRoute(req => sql.tableColumns(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 app.get('/api/sql/schema/:alias/:db/columns', sqlRoute(req => sql.columns(sqlName(req.params.alias), sqlName(req.params.db))));
