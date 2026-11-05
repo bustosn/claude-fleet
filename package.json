@@ -15,7 +15,7 @@
     "build": "vite build --config web/vite.config.ts",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run build",
-    "test": "node --import tsx --test server/*.test.ts",
+    "test": "node --import tsx --test server/*.test.ts server/qa/*.test.ts",
     "setup": "node scripts/os.mjs setup",
     "restart": "node scripts/os.mjs restart",
     "ship": "node scripts/os.mjs ship",

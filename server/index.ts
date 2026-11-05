@@ -15,6 +15,7 @@ import { DialogueManager } from './dialogue.js';
 import { TaskManager } from './tasks.js';
 import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
 import { SqlManager } from './sql.js';
+import { QaManager } from './qa.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
 import { run, errText } from './util.js';
@@ -54,6 +55,11 @@ const folderFor = (project: string, labels: string[]) => {
 const jira = new JiraWatcher(config.jira, new JiraClient(config.jira), tasks, folderFor, path.join(stateDir, `jira-claimed-${config.port}.json`));
 collector.jira = jira;
 jira.on('change', () => collector.publish());
+// QA runs: their own pool of reviewer chats (qa.maxConcurrent), state under state/qa/<runId>/.
+const jiraClient = new JiraClient(config.jira);
+const qa = new QaManager(chats, config.qa, sql, path.join(stateDir, 'qa'),
+  jiraClient.enabled ? async key => { const i = await jiraClient.issue(key); return { summary: i.summary, description: i.description, status: i.status }; } : undefined);
+chats.qa = qa;
 // Participant chats start here by default: no project CLAUDE.md, so the two sides argue the topic, not a repo.
 const scratchDir = path.join(stateDir, 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
@@ -367,6 +373,35 @@ for (const action of ['pause', 'resume', 'stop', 'steer', 'extend'] as const) {
 }
 app.delete('/api/dialogues/:id', (req, res) => dialogues.remove(req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'no such dialogue' }));
 
+// QA runs (docs/plans/04-qa.md). A target's repo is a folder, or a repo name under reposRoot.
+app.post('/api/qa', (req, res) => {
+  const b = req.body || {};
+  try {
+    const targets = (Array.isArray(b.targets) ? b.targets : []).map((t: any) => {
+      const raw = String(t?.repo || '').trim();
+      const repo = raw && !fs.existsSync(raw) && fs.existsSync(path.join(config.reposRoot, raw)) ? path.join(config.reposRoot, raw) : raw;
+      return { repo, head: t?.head ? String(t.head) : undefined, base: t?.base ? String(t.base) : undefined, pr: Number(t?.pr) || undefined,
+        prTitle: t?.prTitle ? String(t.prTitle) : undefined, prBody: t?.prBody ? String(t.prBody) : undefined };
+    });
+    res.json(qa.start({ targets, jiraKey: b.jiraKey ? String(b.jiraKey) : undefined, ticketText: b.ticketText ? String(b.ticketText) : undefined, profile: b.profile, title: b.title }));
+  } catch (err) { res.status(400).json({ error: errText(err) }); }
+});
+app.get('/api/qa', (_req, res) => res.json(qa.list()));
+app.get('/api/qa/:id', (req, res) => { const d = qa.detail(req.params.id); d ? res.json(d) : res.status(404).json({ error: 'no such QA run' }); });
+app.get('/api/qa/:id/report.md', (req, res) => { const md = qa.report(req.params.id); md != null ? res.type('text/markdown').send(md) : res.status(404).json({ error: 'no such QA run' }); });
+app.get('/api/qa/:id/events', (req, res) => {
+  const d = qa.detail(req.params.id); if (!d) return res.status(404).end();
+  const s = sse(res);
+  s.send(d, 'detail');
+  const onEv = (id: string, ev: unknown) => { if (id === req.params.id) s.send(ev); };
+  qa.on('run-event', onEv);
+  req.on('close', () => { qa.off('run-event', onEv); s.stop(); });
+});
+for (const action of ['stop', 'resume'] as const) {
+  app.post(`/api/qa/:id/${action}`, (req, res) => { try { res.json(qa[action](req.params.id)); } catch (err) { res.status(400).json({ error: errText(err) }); } });
+}
+app.delete('/api/qa/:id', (req, res) => { try { qa.remove(req.params.id); res.json({ ok: true }); } catch (err) { res.status(404).json({ error: errText(err) }); } });
+
 // Board tasks: queued work that Fleet hands to a chat when a slot frees up. The chat reports back; the person approves or sends it back.
 // With a ticket, the task is built from the Jira issue and `prompt` is only extra notes; the folder can come from jira.repos.
 app.post('/api/tasks', async (req, res) => {
@@ -511,9 +546,11 @@ server.listen(config.port, '127.0.0.1', () => {
   if (reopened) console.log(`reopened ${reopened} chat(s) from the previous run`);
   const kept = dialogues.reopen();
   if (kept) console.log(`restored ${kept} dialogue(s); live ones are paused until resumed`);
+  const runs = qa.reopen();
+  if (runs) console.log(`restored ${runs} QA run(s); unfinished ones wait for Resume`);
   const board = tasks.reopen();
   if (board) console.log(`restored ${board} task(s)`);
   jira.start();
   if (jira.status.jql) console.log(`watching Jira every ${config.jira.everyMinutes} min: ${jira.status.jql}`);
 });
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); qa.saveAll(); process.exit(0); });

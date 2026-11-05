@@ -1,7 +1,8 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, QaRunSummary, QaRunDetail } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
+export interface QaStart { targets: { repo: string; head?: string; base?: string; pr?: number; prTitle?: string; prBody?: string }[]; jiraKey?: string; ticketText?: string; profile?: string; title?: string }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...init });
@@ -75,6 +76,12 @@ export const api = {
   steerDialogue: (id: string, text: string) => post<DialogueSummary>(`/api/dialogues/${id}/steer`, { text }),
   extendDialogue: (id: string, rounds: number) => post<DialogueSummary>(`/api/dialogues/${id}/extend`, { rounds }),
   removeDialogue: (id: string) => j<{ ok: true }>(`/api/dialogues/${id}`, { method: 'DELETE' }),
+  qaRuns: () => j<QaRunSummary[]>('/api/qa'),
+  qaRun: (id: string) => j<QaRunDetail>(`/api/qa/${id}`),
+  startQa: (spec: QaStart) => post<QaRunSummary>('/api/qa', spec),
+  qaAction: (id: string, action: 'stop' | 'resume') => post<QaRunSummary>(`/api/qa/${id}/${action}`),
+  removeQa: (id: string) => j<{ ok: true }>(`/api/qa/${id}`, { method: 'DELETE' }),
+  qaReport: (id: string) => fetch(`/api/qa/${id}/report.md`).then(r => r.text()),
   addTask: (spec: { title?: string; prompt: string; cwd: string; model?: string; permissionMode?: string; isolate?: boolean; ticket?: string }) => post<TaskSummary>('/api/tasks', spec),
   jiraIssue: (key: string) => j<JiraIssuePreview>(`/api/jira/issue/${encodeURIComponent(key)}`),
   jiraPoll: () => post<JiraStatus>('/api/jira/poll'),
@@ -111,7 +118,7 @@ export const api = {
 export function subscribe<T>(url: string, onMessage: (data: T, event: string) => void, onState?: (live: boolean) => void): () => void {
   const es = new EventSource(url);
   es.onmessage = e => onMessage(JSON.parse(e.data), 'message');
-  for (const name of ['chat', 'dialogue']) es.addEventListener(name, e => onMessage(JSON.parse((e as MessageEvent).data), name));
+  for (const name of ['chat', 'dialogue', 'detail']) es.addEventListener(name, e => onMessage(JSON.parse((e as MessageEvent).data), name));
   es.onopen = () => onState?.(true);
   es.onerror = () => onState?.(false);
   return () => es.close();

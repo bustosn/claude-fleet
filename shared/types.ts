@@ -290,3 +290,58 @@ export interface SqlProcess { id: number; user: string; host: string; db: string
 export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null }
 /** A connection's login as the SQL view shows it: never the password, only whether one is set. */
 export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }
+
+// QA runs (docs/plans/04-qa.md). QA1: intake, context pack, lenses, dedupe, verify, report. Spec, tests and the gate come later.
+export type QaProfile = 'quick' | 'standard' | 'deep';
+export type QaPhase = 'intake' | 'pack' | 'spec' | 'awaiting-signoff' | 'lenses' | 'dedupe' | 'verify' | 'plan' | 'tests' | 'report' | 'done' | 'failed' | 'stale';
+export type QaSeverity = 'blocker' | 'major' | 'minor';
+export type QaVerdict = 'CONFIRMED' | 'PLAUSIBLE' | 'REJECTED';
+export type QaGate = 'blocked' | 'needs-decisions' | 'clear';
+
+/** One repo at one head. `repo` is the checkout's folder; `name` its short name. The base is the merge base with the remote default branch. */
+export interface QaTarget { repo: string; name: string; head: string; headSha: string; base: string; baseSha: string; pr?: number; worktree?: string }
+
+export interface QaCodeRef { repo: string; file: string; line: number; endLine?: number }
+
+export interface QaFinding {
+  id: string; fingerprint: string; lenses: string[]; groupId?: string; agentId: string;
+  title: string; scenario: string; refs: QaCodeRef[]; suggestedFix?: string; checklistItem?: string; lensSeverity?: QaSeverity;
+  verdict?: QaVerdict; verdictReason?: string; severity?: QaSeverity; settle?: string;
+  disposition: 'open' | 'fixed' | 'accepted' | 'deferred'; dispositionNote?: string;
+  testIds: string[]; carriedFrom?: string;
+}
+
+/** A checklist item a lens checked and why it holds; feeds the coverage section. */
+export interface QaChecked { agentId: string; lens: string; item: string; reason: string }
+
+/** Findings that share a root cause, verified once. */
+export interface QaGroup { id: string; title: string; rootCause: string; findingIds: string[]; lenses: string[]; verdict?: QaVerdict; verdictReason?: string; severity?: QaSeverity; settle?: string }
+
+export type QaAgentRole = 'lens' | 'dedupe' | 'verifier';
+export interface QaAgent {
+  id: string; role: QaAgentRole; label: string; lens?: string; model: string; chatId: string | null; sessionId: string | null; cwd: string;
+  status: 'queued' | 'running' | 'done' | 'failed'; startedAt: number | null; endedAt: number | null; error: string | null;
+  turns: number; inputTokens: number; outputTokens: number; costUsd: number;
+  /** Verifier batches: the groups it was given. */
+  groupIds?: string[];
+}
+
+export interface QaCost { agents: number; turns: number; inputTokens: number; outputTokens: number; costUsd: number; ms: number }
+
+export interface QaPackInfo { dir: string; bytes: number; files: number; trimmed: string[]; notes: string[]; lensesSuggested: string[]; profileSuggested: QaProfile }
+
+export interface QaRunSummary {
+  id: string; title: string; createdAt: number; updatedAt: number; finishedAt: number | null; profile: QaProfile; phase: QaPhase; error: string | null; stale: boolean;
+  /** Fleet restarted mid-run: the run waits for Resume, which picks up at the phase it was in. */
+  paused: boolean;
+  targets: QaTarget[]; jiraKey?: string; lenses: string[];
+  counts: { findings: number; groups: number; confirmed: number; plausible: number; rejected: number; blocker: number; major: number; minor: number };
+  cost: QaCost; parentRunId?: string;
+}
+
+export interface QaRunDetail extends QaRunSummary {
+  pack: QaPackInfo | null; agents: QaAgent[]; findings: QaFinding[]; groups: QaGroup[]; checked: QaChecked[]; log: { at: number; text: string }[];
+  matrixSignedOff: boolean;
+}
+
+export type QaEvent = { t: 'run'; run: QaRunSummary } | { t: 'log'; at: number; text: string };

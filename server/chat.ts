@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { query, type SDKUserMessage, type Query } from '@anthropic-ai/claude-agent-sdk';
 import { createFleetServer, FLEET_TOOL_NAMES } from './fleetTools.js';
+import { QA_BUILTIN_TOOLS, qaToolNames, type QaChatInfo, type QaToolSink } from './qa/tools.js';
 import { summarizeInput, editPreview, todoList, cut } from './sources/conversations.js';
 import type { TodoItem } from '../shared/types.js';
 import type { FleetConfig } from './config.js';
@@ -46,6 +47,8 @@ export class ChatManager extends EventEmitter {
   sql: SqlManager | null = null;
   /** For the fleet_dialogue_* tools: a chat can start a dialogue between two new chats and read it back. */
   dialogues: DialogueManager | null = null;
+  /** For the fleet_qa_* tools of QA chats: findings, checks, verdicts and merges go to the run that owns the chat. */
+  qa: QaToolSink | null = null;
   /** Dropped files that are not sent as images are saved here; every chat may read it without asking. */
   attachDir = '';
   private persistFile: string | null = null;
@@ -71,7 +74,8 @@ export class ChatManager extends EventEmitter {
   persistTo(file: string) { this.persistFile = file; this.on('change', () => this.save()); }
   save() {
     if (!this.persistFile) return;
-    const live = [...this.chats.values()].filter(c => c.status !== 'ended' && c.sessionId).map(c => ({ id: c.id, sessionId: c.sessionId, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode, taskId: c.taskId }));
+    // QA chats belong to their run, which starts fresh ones after a restart.
+    const live = [...this.chats.values()].filter(c => c.status !== 'ended' && c.sessionId && !c.qa).map(c => ({ id: c.id, sessionId: c.sessionId, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode, taskId: c.taskId }));
     try { writeFileSync(this.persistFile, JSON.stringify(live, null, 1)); } catch {}
   }
   reopen(): number {
@@ -128,6 +132,9 @@ export class Chat extends EventEmitter {
   label: string | null = null; dialogueId: string | null = null;
   /** The board task this chat works on. Set before start(), so the chat gets the fleet_report tool. */
   taskId: string | null = null;
+  /** A QA reviewer, verifier or deduper. Set before start(): the chat then gets only Read, Grep, Glob, fleet_sql and its QA tools,
+   *  no settings or CLAUDE.md from disk, and never prompts (anything else is denied). */
+  qa: QaChatInfo | null = null;
   // Token accounting. `turn` accumulates over the model steps of the current turn; `stepOutput` is what the current step has reported so far
   // (message_delta carries a cumulative count). `context` is the prompt size at the latest step. `total` comes from the SDK, cumulative per session.
   turn: TokenUsage = zeroUsage(); private stepOutput = 0; context = 0; total: TokenUsage | null = null; contextWindow: number | null = null;
@@ -366,6 +373,16 @@ export class Chat extends EventEmitter {
         this.setStatus('needs-you');
       }),
     };
+    if (this.qa) {
+      // A fresh reviewer: read-only tools, the pack and sources as extra folders, nothing loaded from the person's settings, and no prompts.
+      const allowed = [...QA_BUILTIN_TOOLS, ...qaToolNames(this.qa.role)];
+      Object.assign(opts, {
+        tools: [...QA_BUILTIN_TOOLS], allowedTools: allowed, disallowedTools: ['Bash', 'PowerShell', 'Write', 'Edit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Agent', 'Task'],
+        permissionMode: 'dontAsk', settingSources: [], strictMcpConfig: true, enableFileCheckpointing: false,
+        additionalDirectories: this.qa.dirs, env: { ...process.env },
+        canUseTool: async (toolName: string, input: Record<string, unknown>) => allowed.includes(toolName) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: `${toolName} is not available to QA reviewers; use Read, Grep, Glob and the fleet tools.` },
+      });
+    }
     if (this.resumeId) { opts.resume = this.resumeId; if (this.fork) opts.forkSession = true; }
     this.q = query({ prompt: this.inbox, options: opts });
     this.setStatus('idle');

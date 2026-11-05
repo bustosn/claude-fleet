@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
+import { Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, ShieldCheck, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
@@ -28,6 +28,7 @@ export function CommandPalette() {
       { id: 'jira-new', label: 'New Jira ticket', hint: 'create a ticket in Jira', icon: KanbanSquare, view: { kind: 'jira', create: true } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
       { id: 'sql', label: 'SQL', hint: 'queries over the Teleport tunnels: dev read-write, prod read-only', icon: Database, view: { kind: 'sql' } },
+      { id: 'qa', label: 'QA runs', hint: 'review a branch with fresh lens chats, verify every finding, one report', icon: ShieldCheck, view: { kind: 'qa' } },
       { id: 'sql-new', label: 'New SQL tab', hint: 'a blank query tab', icon: Database, view: { kind: 'sql', lookup: { name: '', value: '', at: 0 } } },
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
       { id: 'new-task', label: 'New task', hint: 'queue work; a chat picks it up and reports back for review', icon: ListPlus, view: { kind: 'new-task' } },

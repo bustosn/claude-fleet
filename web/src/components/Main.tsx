@@ -11,6 +11,7 @@ import { DialogueView } from '../views/DialogueView';
 import { NewDialogueView } from '../views/NewDialogue';
 import { NewTaskView } from '../views/NewTask';
 import { JiraView } from '../views/JiraView';
+import { QaView } from '../views/QaView';
 import { TabStrip } from './TabStrip';
 
 // The SQL view brings CodeMirror and its grid; loaded the first time it is opened.
@@ -33,6 +34,7 @@ export function Main() {
       {view.kind === 'new-task' && <NewTaskView key={`${view.cwd || ''}|${view.ticket || ''}`} cwd={view.cwd} ticket={view.ticket} />}
       {view.kind === 'hub' && <HubView />}
       {view.kind === 'jira' && <JiraView create={!!view.create} />}
+      {view.kind === 'qa' && <QaView key={view.id || ''} id={view.id} />}
       {view.kind === 'sql' && <Suspense fallback={<div className="m-auto text-[12px] text-fg-faint">Loading…</div>}><SqlView lookup={view.lookup} /></Suspense>}
     </main>
   );

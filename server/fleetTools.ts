@@ -5,6 +5,7 @@ import type { Teleport } from './teleport.js';
 import type { SqlManager } from './sql.js';
 import type { DialogueManager } from './dialogue.js';
 import type { TeleportTunnel } from '../shared/types.js';
+import { qaTools } from './qa/tools.js';
 
 export const FLEET_TOOL_NAMES = ['fleet_list_chats', 'fleet_send', 'fleet_ask', 'fleet_reply', 'fleet_read', 'fleet_report', 'fleet_teleport_status', 'fleet_tunnel_restart', 'fleet_teleport_login', 'fleet_sql', 'fleet_dialogue_start', 'fleet_dialogue_read'].map(n => `mcp__fleet__${n}`);
 
@@ -15,6 +16,9 @@ const fail = (s: string) => ({ content: [{ type: 'text' as const, text: s }], is
 export function createFleetServer(mgr: ChatManager, self: Chat) {
   const peers = () => mgr.list().filter(c => c.id !== self.id && c.status !== 'ended');
   const target = (id: string) => { const c = mgr.get(id); return c && c.id !== self.id && c.status !== 'ended' ? c : null; };
+
+  // QA chats see only their own tools and the read-only SQL runner: no peers, no dialogues, no tunnels to restart.
+  if (self.qa && mgr.qa) return createSdkMcpServer({ name: 'fleet', version: '0.2.0', tools: [...qaTools(mgr.qa, self), ...(self.qa.role !== 'dedupe' && mgr.sql && mgr.sql.aliases().length ? [sqlTool(mgr.sql)] : [])] });
 
   return createSdkMcpServer({
     name: 'fleet', version: '0.2.0',

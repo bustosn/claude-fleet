@@ -28,10 +28,25 @@ export interface FleetConfig {
   conversations: { archiveAfterDays: number };
   jira: JiraConfig;
   sql: SqlConfig;
+  qa: QaConfig;
 }
 
 /** The SQL view: which tunnels it offers, where the DB credentials are read from (never stored here), and its limits.
  *  A prod tunnel is offered only when it points at a reader. `lookups` are palette shortcuts like "cb 123456"; their `sql` takes one ? for the value. */
+/** QA runs (docs/plans/04-qa.md). Their own concurrency pool, separate from dispatch.maxConcurrent. Models by role; the deep profile runs
+ *  lifecycle and consistency a second time on `deepSecondModel`. `devConnection` and `prodReader` are SQL view aliases (read-only from QA). */
+export interface QaConfig {
+  maxConcurrent: number;
+  models: { spec: string; lens: string; verifier: string; planner: string; dedupe: string };
+  deepSecondModel: string; effort: string;
+  devConnection: string; prodReader: string;
+  packBudgetKb: number; defaultProfile: 'quick' | 'standard' | 'deep'; deepTriggers: string[];
+  /** Hard caps per run; hitting one stops the phase and the report says so. */
+  maxAgents: number; maxMinutes: number;
+  /** Paths never copied into a pack or a source snapshot (the never-commit list): globs on repo-relative paths. */
+  neverPack: string[];
+}
+
 export interface SqlConfig {
   envFile: string; credentialsFile: string;
   /** Logins per connection alias, like DBeaver's: { "main-prd-reader": { "user": "…", "password": "…" } }. This file is not tracked. */
@@ -120,6 +135,18 @@ export function loadConfig(): FleetConfig {
       lookups: (Array.isArray(raw.sql?.lookups) ? raw.sql.lookups : DEFAULT_LOOKUPS)
         .filter((l: any) => l && l.name && l.sql)
         .map((l: any): SqlLookup => ({ name: String(l.name).toLowerCase(), label: String(l.label || l.name), pattern: String(l.pattern || '^\\S+$'), alias: String(l.alias || raw.sql?.defaultAlias || 'main-prd-reader'), sql: String(l.sql), view: l.view === 'grid' ? 'grid' : 'record', ...(l.type === 'number' || l.type === 'text' ? { type: l.type } : {}), source: 'config' })),
+    },
+    qa: {
+      maxConcurrent: Math.max(1, Number(raw.qa?.maxConcurrent) || 6),
+      models: { spec: 'opus', lens: 'opus', verifier: 'opus', planner: 'sonnet', dedupe: 'sonnet', ...(raw.qa?.models || {}) },
+      deepSecondModel: String(raw.qa?.deepSecondModel || 'sonnet'), effort: String(raw.qa?.effort || 'high'),
+      devConnection: String(raw.qa?.devConnection || 'main-dev'), prodReader: String(raw.qa?.prodReader || 'main-prd-reader'),
+      packBudgetKb: Math.max(100, Number(raw.qa?.packBudgetKb) || 1500),
+      defaultProfile: ['quick', 'standard', 'deep'].includes(raw.qa?.defaultProfile) ? raw.qa.defaultProfile : 'standard',
+      deepTriggers: Array.isArray(raw.qa?.deepTriggers) ? raw.qa.deepTriggers.map(String) : ['status_id', 'verdict', 'save_case', 'Gate::', 'amount'],
+      maxAgents: Math.max(1, Number(raw.qa?.maxAgents) || 40), maxMinutes: Math.max(5, Number(raw.qa?.maxMinutes) || 180),
+      neverPack: Array.isArray(raw.qa?.neverPack) ? raw.qa.neverPack.map(String)
+        : ['**/.env', '**/.env.*', '**/secrets.env', '**/emulation/Config.py', '**/emulation/test.py', 'dev/null/**', '**/.env.backup-*', '**/whop_fail_logs.txt', '**/whop_ok_logs.txt', '**/tmp_local_*/**', '**/__pycache__/**'],
     },
   };
   return cfg;

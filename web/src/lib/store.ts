@@ -16,7 +16,9 @@ export type View =
   | { kind: 'jira'; create?: boolean }
   /** The SQL workbench. `lookup` opens a new query tab already run, like "cb 123456" from the palette; `at` makes each one distinct. */
   | { kind: 'sql'; lookup?: { name: string; value: string; at: number } }
-  | { kind: 'hub' };
+  | { kind: 'hub' }
+  /** QA runs: the list and New run form, or one run with `id`. */
+  | { kind: 'qa'; id?: string };
 
 /** Open views, like editor tabs. Overview is the home screen and never a tab. */
 export interface Tab { key: string; view: View }
@@ -47,6 +49,7 @@ export function tabKey(v: View): string {
     case 'hub': return 'hub';
     case 'jira': return 'jira';
     case 'sql': return 'sql';
+    case 'qa': return v.id ? `qa:${v.id}` : 'qa';
   }
 }
 
