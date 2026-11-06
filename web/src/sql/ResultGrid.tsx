@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowUp, BarChart3, Braces, ClipboardCopy, Columns3, CornerDownRight, EyeOff, Filter, Link2, Maximize2, Rows3 } from 'lucide-react';
+import { ArrowDown, ArrowUp, BarChart3, Braces, ClipboardCopy, Columns3, CornerDownRight, EyeOff, Filter, Link2, Maximize2, Pencil, Rows3, Trash2, Undo2 } from 'lucide-react';
 import type { SqlColumn, SqlFk, SqlValue } from '../lib/api';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { actions } from '../lib/store';
@@ -53,10 +53,35 @@ interface Props {
   keys?: { fk: (col: number) => SqlFk | null; pk: (col: number) => { db: string; table: string; column: string } | null };
   /** Distinct values and counts for one column (ColumnStats). */
   onStats?: (col: number) => void;
+  /** Editing in place (dev, one table, key in the result): which columns take edits, the edits so far keyed "row:col" (row = index into `rows`),
+   *  a change (undefined reverts it) and a row delete. Absent when the result cannot be edited. */
+  edit?: { editable: boolean[]; pending: Record<string, SqlValue>; onChange: (row: number, col: number, v: SqlValue | undefined) => void; onDelete: (row: number) => void };
   onFollow?: (fk: SqlFk, v: SqlValue) => void; onReferencedBy?: (target: { db: string; table: string; column: string }, v: SqlValue) => void;
 }
 
-export function ResultGrid({ columns, rows, version, order, visible, sort, onSort, selection, onSelect, onHide, onShowAll, onFilter, onOpenCell, onRecord, keys, onFollow, onReferencedBy, onStats }: Props) {
+export function ResultGrid({ columns, rows, version, order, visible, sort, onSort, selection, onSelect, onHide, onShowAll, onFilter, onOpenCell, onRecord, keys, onFollow, onReferencedBy, onStats, edit }: Props) {
+  // The cell being edited (row position in `order`, column) and what is typed in it.
+  const [editing, setEditing] = useState<{ r: number; c: number } | null>(null);
+  const [draft, setDraft] = useState('');
+  const shown = (ri: number, c: number): SqlValue => { const k = `${ri}:${c}`; return edit && k in edit.pending ? edit.pending[k] : rows[ri][c]; };
+  const startEdit = (r: number, c: number) => {
+    if (!edit?.editable[c]) return;
+    const v = shown(order[r], c);
+    setDraft(v == null ? '' : String(v)); setEditing({ r, c }); closed.current = false;
+  };
+  // Closing the box refocuses the grid, which blurs the box and would commit it again: the first close wins (so Esc stays an Esc).
+  const closed = useRef(true);
+  const commitEdit = (keep = true) => {
+    const e = editing;
+    if (closed.current) return;
+    closed.current = true; setEditing(null);
+    scroller.current?.focus();
+    if (!e || !edit || !keep) return;
+    const ri = order[e.r], orig = rows[ri][e.c], had = `${ri}:${e.c}` in edit.pending;
+    // Typing back what was there is no change; an empty box over a NULL stays NULL.
+    if ((orig == null && draft === '') || (orig != null && String(orig) === draft)) { if (had) edit.onChange(ri, e.c, undefined); return; }
+    edit.onChange(ri, e.c, draft);
+  };
   // Holding Ctrl shows which cells follow a key on click.
   const [mod, setMod] = useState(false);
   useEffect(() => {
@@ -112,7 +137,8 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
       case 'PageUp': r = Math.max(0, r - page); break;
       case 'Home': if (mod) r = 0; cp = 0; break;
       case 'End': if (mod) r = order.length - 1; cp = visible.length - 1; break;
-      case 'Enter': if (cur) { e.preventDefault(); onOpenCell(order[cur.r], cur.c); } return;
+      case 'F2': if (cur && edit?.editable[cur.c]) { e.preventDefault(); startEdit(cur.r, cur.c); } return;
+      case 'Enter': if (cur) { e.preventDefault(); if (edit?.editable[cur.c]) startEdit(cur.r, cur.c); else onOpenCell(order[cur.r], cur.c); } return;
       default: return;
     }
     e.preventDefault();
@@ -124,11 +150,22 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
     onSelect({ kind: 'cell', r, c });
     const ri = order[r], v = rows[ri][c], col = columns[c];
     const fk = fks[c], pk = keys?.pk(c);
+    const key = `${ri}:${c}`, canEdit = !!edit?.editable[c];
+    const editItems: MenuItem[] = !edit ? [] : [
+      ...(canEdit ? [
+        { label: 'Edit value', icon: Pencil, onSelect: () => startEdit(r, c) },
+        { label: 'Set to NULL', onSelect: () => edit.onChange(ri, c, null) },
+        ...(key in edit.pending ? [{ label: 'Revert this edit', icon: Undo2, onSelect: () => edit.onChange(ri, c, undefined) }] : []),
+      ] : []),
+      { label: 'Delete row…', icon: Trash2, danger: true, onSelect: () => edit.onDelete(ri) },
+      'separator',
+    ];
     const nav: MenuItem[] = [
       ...(fk && v != null && onFollow ? [{ label: `Open ${fk.refTable} where ${fk.refColumn} = ${String(v).slice(0, 40)}`, icon: Link2, onSelect: () => onFollow(fk, v) }] : []),
       ...(pk && v != null && onReferencedBy ? [{ label: 'Referenced by…', icon: CornerDownRight, onSelect: () => onReferencedBy(pk, v) }] : []),
     ];
     const items: MenuItem[] = [
+      ...editItems,
       ...nav, ...(nav.length ? ['separator' as const] : []),
       { label: 'Copy value', icon: ClipboardCopy, onSelect: async () => toast(await copy(v == null ? 'NULL' : String(v)), 'value') },
       { label: `Copy as WHERE ${col.name} = …`, onSelect: async () => toast(await copy(whereEq(col, v)), 'WHERE clause') },
@@ -156,6 +193,7 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
       { label: 'Copy row as JSON', icon: Braces, onSelect: async () => toast(await copy(rowJson(visCols(), visible.map(i => rows[ri][i]))), 'row as JSON') },
       'separator',
       { label: 'Show row as record', icon: Rows3, onSelect: () => onRecord(ri) },
+      ...(edit ? ['separator' as const, { label: 'Delete row…', icon: Trash2, danger: true, onSelect: () => edit.onDelete(ri) }] : []),
     ]);
   };
   const headMenu = (e: RMouseEvent, c: number) => {
@@ -220,8 +258,11 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
                 const c = visible[vc.index];
                 const isSel = (selection?.kind === 'cell' && selection.r === vr.index && selection.c === c) || (selection?.kind === 'col' && selCol === c);
                 const fk = fks[c];
-                return <Cell key={c} v={row[c]} kind={columns[c].kind} left={vc.start} width={vc.size} sel={isSel} fk={!!fk && row[c] != null} mod={mod}
-                  onClick={e => { if (fk && row[c] != null && onFollow && (e.ctrlKey || e.metaKey)) { onFollow(fk, row[c]); return; } onSelect({ kind: 'cell', r: vr.index, c }); }} onOpen={() => onOpenCell(ri, c)} onMenu={e => cellMenu(e, vr.index, c)} />;
+                const isEditing = editing?.r === vr.index && editing.c === c;
+                const edited = !!edit && `${ri}:${c}` in edit.pending;
+                return <Cell key={c} v={shown(ri, c)} kind={columns[c].kind} left={vc.start} width={vc.size} sel={isSel} fk={!!fk && row[c] != null} mod={mod} edited={edited} editable={!!edit?.editable[c]}
+                  editor={isEditing ? { draft, onDraft: setDraft, onCommit: commitEdit } : undefined}
+                  onClick={e => { if (fk && row[c] != null && onFollow && (e.ctrlKey || e.metaKey)) { onFollow(fk, row[c]); return; } onSelect({ kind: 'cell', r: vr.index, c }); }} onOpen={() => edit?.editable[c] ? startEdit(vr.index, c) : onOpenCell(ri, c)} onMenu={e => cellMenu(e, vr.index, c)} />;
               })}
             </div>
           );
@@ -232,12 +273,16 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
   );
 }
 
-const Cell = memo(function Cell({ v, kind, left, width, sel, fk, mod, onClick, onOpen, onMenu }: { v: SqlValue; kind: SqlColumn['kind']; left: number; width: number; sel: boolean; fk: boolean; mod: boolean; onClick: (e: RMouseEvent) => void; onOpen: () => void; onMenu: (e: RMouseEvent) => void }) {
+const Cell = memo(function Cell({ v, kind, left, width, sel, fk, mod, edited, editable, editor, onClick, onOpen, onMenu }: { v: SqlValue; kind: SqlColumn['kind']; left: number; width: number; sel: boolean; fk: boolean; mod: boolean; edited: boolean; editable: boolean;
+  editor?: { draft: string; onDraft: (v: string) => void; onCommit: (keep?: boolean) => void }; onClick: (e: RMouseEvent) => void; onOpen: () => void; onMenu: (e: RMouseEvent) => void }) {
   const s = v == null ? null : String(v);
   const json = looksJson(v), long = !!s && s.length > 200;
   return (
-    <div role="gridcell" className={`sql-cell ${kind === 'number' ? 'num' : ''} ${sel ? 'is-sel' : ''} ${fk ? 'fk' : ''} ${fk && mod ? 'mod' : ''}`} style={{ left, width }} title={fk ? 'Ctrl+click to open the row this points at' : undefined} onClick={onClick} onDoubleClick={onOpen} onContextMenu={onMenu}>
-      {s == null ? <span className="sql-null">NULL</span> : <span className="truncate">{long ? `${s.slice(0, 200)}…` : s}</span>}
+    <div role="gridcell" className={`sql-cell ${kind === 'number' ? 'num' : ''} ${sel ? 'is-sel' : ''} ${fk ? 'fk' : ''} ${fk && mod ? 'mod' : ''} ${edited ? 'edited' : ''} ${editable ? 'editable' : ''}`} style={{ left, width }} title={fk ? 'Ctrl+click to open the row this points at' : undefined} onClick={onClick} onDoubleClick={onOpen} onContextMenu={onMenu}>
+      {editor ? <input className="sql-cell-input" autoFocus value={editor.draft} onChange={e => editor.onDraft(e.target.value)} onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
+        onFocus={e => e.currentTarget.select()} onBlur={() => editor.onCommit(true)}
+        onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); editor.onCommit(true); } else if (e.key === 'Escape') { e.preventDefault(); editor.onCommit(false); } }} aria-label="Edit value" />
+        : s == null ? <span className="sql-null">NULL</span> : <span className="truncate">{long ? `${s.slice(0, 200)}…` : s}</span>}
       {(json || long) && <button className="sql-open" aria-label="Open value" onClick={e => { e.stopPropagation(); onOpen(); }}>{json ? <Braces size={11} /> : <Maximize2 size={11} />}</button>}
     </div>
   );

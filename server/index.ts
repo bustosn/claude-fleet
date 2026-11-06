@@ -478,6 +478,7 @@ app.put('/api/sql/tabs', sqlRoute(req => { sql.setTabs(req.body?.tabs); return {
 app.get('/api/sql/history', sqlRoute(() => sql.getHistory()));
 app.put('/api/sql/lookups/:name', sqlRoute(req => sql.saveLookup(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
 app.delete('/api/sql/lookups/:name', sqlRoute(req => sql.deleteLookup(String(req.params.name))));
+app.post('/api/sql/edit', sqlRoute(req => sql.applyEdit(sqlName(req.body?.alias), { op: req.body?.op === 'delete' ? 'delete' : 'update', db: sqlName(req.body?.db), table: sqlName(req.body?.table), pk: req.body?.pk && typeof req.body.pk === 'object' ? req.body.pk : {}, set: req.body?.set && typeof req.body.set === 'object' ? req.body.set : undefined }, req.body?.dryRun !== false)));
 app.get('/api/sql/saved', sqlRoute(req => { const all = saved.list(); const k = String(req.query.jira || '').toUpperCase(); return k ? all.filter(s => s.jira === k) : all; }));
 app.put('/api/sql/saved/:id', sqlRoute(req => saved.save(String(req.params.id), req.body || {})));
 app.delete('/api/sql/saved/:id', sqlRoute(req => saved.remove(String(req.params.id))));

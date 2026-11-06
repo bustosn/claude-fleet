@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, SqlTableMeta, SqlReference, SqlColumnHit, SqlSaved, SqlSnippet } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, SqlTableMeta, SqlReference, SqlColumnHit, SqlSaved, SqlSnippet, SqlValue } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -102,6 +102,8 @@ export const api = {
   sqlSnippets: () => j<SqlSnippet[]>('/api/sql/snippets'),
   sqlSaveSnippet: (name: string, v: Partial<SqlSnippet> & { rename?: string }) => j<SqlSnippet[]>(`/api/sql/snippets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(v) }),
   sqlDeleteSnippet: (name: string) => j<SqlSnippet[]>(`/api/sql/snippets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  sqlEdit: (body: { alias: string; op: 'update' | 'delete'; db: string; table: string; pk: Record<string, SqlValue>; set?: Record<string, SqlValue>; dryRun: boolean }) =>
+    post<{ sql: string; matches: number | null; affected: number | null }>('/api/sql/edit', body),
   sqlTabs: () => j<SqlTab[]>('/api/sql/tabs'),
   sqlSaveTabs: (tabs: SqlTab[]) => j<{ ok: true }>('/api/sql/tabs', { method: 'PUT', body: JSON.stringify({ tabs }) }),
   sqlHistory: () => j<SqlHistoryEntry[]>('/api/sql/history'),

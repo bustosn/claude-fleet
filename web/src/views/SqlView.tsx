@@ -18,7 +18,9 @@ import { columnCompletion } from '../sql/columnCompletion';
 import { ProcessesPanel } from '../sql/ProcessesPanel';
 import { SendToChat, type Intent, type ShareData } from '../sql/SendToChat';
 import { startRun, type SqlResult } from '../sql/run';
-import { fkOf, forgetMeta, keyLiteral, pkOf, resultTables, tableMeta } from '../sql/meta';
+import { fkOf, forgetMeta, keyLiteral, peekMeta, pkOf, resultTables, tableMeta } from '../sql/meta';
+import { editTarget } from '../../../shared/resultIdentity';
+import { EditBar, EditPreview, type EditItem } from '../sql/EditBar';
 import { ReferencedBy } from '../sql/ReferencedBy';
 import { ParamsDialog } from '../sql/ParamsDialog';
 import { SavedPane } from '../sql/SavedPane';
@@ -31,8 +33,10 @@ import { ColumnStats } from '../sql/ColumnStats';
 import { ExplainTree } from '../sql/ExplainTree';
 
 /** Per tab, not saved: how its result is shown. */
-interface TabUi { mode: 'grid' | 'record' | 'plan'; preferRecord: boolean; selection: Selection; sort: Sort; filter: string; hidden: number[]; record: number }
-const freshUi = (preferRecord = false): TabUi => ({ mode: 'grid', preferRecord, selection: null, sort: null, filter: '', hidden: [], record: 0 });
+interface TabUi { mode: 'grid' | 'record' | 'plan'; preferRecord: boolean; selection: Selection; sort: Sort; filter: string; hidden: number[]; record: number;
+  /** Unsaved cell edits on a dev result, keyed "row:col" (row = index into the result's rows). */
+  edits: Record<string, SqlValue> }
+const freshUi = (preferRecord = false): TabUi => ({ mode: 'grid', preferRecord, selection: null, sort: null, filter: '', hidden: [], record: 0, edits: {} });
 /** An EXPLAIN FORMAT=JSON result: one cell holding the plan, shown as a tree. */
 const isJsonPlan = (r: SqlResult) => /^\s*EXPLAIN\s+FORMAT\s*=\s*JSON\b/i.test(r.statement) && r.columns.length === 1 && r.rows.length === 1;
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -71,6 +75,8 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
   const [scriptAsk, setScriptAsk] = useState<{ tab: string; stmts: string[]; values: Record<string, string>; alias: string; db: string | null; writes: string[] } | null>(null);
   const [statsCol, setStatsCol] = useState<number | null>(null);
   const pinCount = useRef(0);
+  // An edit or delete being previewed and then run: the statements the server built, and how each went.
+  const [editPrev, setEditPrev] = useState<{ key: string; kind: 'save' | 'delete'; title: string; verb: string; alias: string; bodies: { ri: number; body: Parameters<typeof api.sqlEdit>[0] }[]; items: EditItem[]; loading: boolean; error: string | null } | null>(null);
   const [saved, setSaved] = useState<SqlSaved[]>([]);
   const [snippets, setSnippets] = useState<SqlSnippet[]>([]);
   const [saveEdit, setSaveEdit] = useState<(Partial<SqlSaved> & { sql: string; tab?: string }) | null>(null);
@@ -219,6 +225,8 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
   // Running.
   const run = (limit: 'auto' | 'max' = 'auto', override?: { text: string; cursor: number; selection: null }) => {
     if (!active || !alias) return;
+    const pending = Object.keys(ui[active.id]?.edits || {}).length;
+    if (pending && !window.confirm(`Discard ${pending} unsaved change${pending === 1 ? '' : 's'} and run again?`)) return;
     const snap = override || editors.current[active.id]?.snapshot();
     if (!snap) return;
     const req: SqlRunRequest = { alias: alias.alias, text: snap.text, cursor: snap.cursor, selection: snap.selection, db: active.db, limit };
@@ -247,7 +255,7 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
         const cur = u[id] || freshUi();
         const mode: TabUi['mode'] = r.status === 'done' && isJsonPlan(r) ? 'plan' : cur.mode === 'plan' ? 'grid'
           : cur.preferRecord && r.status === 'done' && r.rows.length === 1 ? 'record' : r.status === 'done' && r.rows.length !== 1 && cur.mode === 'record' && cur.preferRecord ? 'grid' : cur.mode;
-        return { ...u, [id]: { ...cur, mode, selection: null, sort: null, hidden: [], record: 0, preferRecord: false } };
+        return { ...u, [id]: { ...cur, mode, selection: null, sort: null, hidden: [], record: 0, preferRecord: false, edits: {} } };
       });
     });
     aborts.current[id] = abort;
@@ -366,6 +374,75 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
     if (opts.run) setTimeout(() => runTab(t.id), 60);
   };
 
+  // Editing in place, dev only. The result must be one table with its whole primary key in it (shared/resultIdentity); the server decides again
+  // on every save: it refuses prod outright and builds each statement itself from the key.
+  const editInfo = useMemo(() => {
+    if (!result || !alias || alias.prod || !active || vk !== active.id || result.status !== 'done' || !result.columns.length) return null;
+    const first = result.columns.find(c => c.db && c.table);
+    const meta = first ? peekMeta(alias.alias, first.db!, first.table) : undefined;
+    return meta ? editTarget(result.statement, result.columns, meta.pk) : null;
+  }, [result?.version, result?.status, alias?.alias, alias?.prod, vk, active?.id, metaTick]);
+  const pendingCount = Object.keys(tui.edits).length;
+  const colName = (i: number) => columns[i].orgName || columns[i].name;
+  const setEdit = (ri: number, c: number, v: SqlValue | undefined) => setUi(u => {
+    const cur = u[vk] || freshUi(), edits = { ...cur.edits }, k = `${ri}:${c}`;
+    if (v === undefined) delete edits[k]; else edits[k] = v;
+    return { ...u, [vk]: { ...cur, edits } };
+  });
+  const openEditPreview = async (kind: 'save' | 'delete', bodies: { ri: number; body: Parameters<typeof api.sqlEdit>[0] }[], title: string, verb: string) => {
+    if (!alias) return;
+    setEditPrev({ key: vk, kind, title, verb, alias: alias.alias, bodies, items: [], loading: true, error: null });
+    try {
+      const rs = await Promise.all(bodies.map(b => api.sqlEdit({ ...b.body, dryRun: true })));
+      setEditPrev(p => p && { ...p, loading: false, items: rs.map(r => ({ sql: r.sql, matches: r.matches, status: 'preview' as const })) });
+    } catch (err: any) { setEditPrev(p => p && { ...p, loading: false, error: err.message }); }
+  };
+  const saveEdits = () => {
+    const t = editInfo?.target;
+    if (!t || !result || !alias || !pendingCount) return;
+    const byRow: Record<number, Record<string, SqlValue>> = {};
+    for (const [k, v] of Object.entries(tui.edits)) { const [ri, c] = k.split(':').map(Number); (byRow[ri] ||= {})[colName(c)] = v; }
+    const bodies = Object.entries(byRow).map(([ri, set]) => ({ ri: Number(ri), body: { alias: alias.alias, op: 'update' as const, db: t.db, table: t.table, pk: Object.fromEntries(t.pk.map(i => [colName(i), result.rows[Number(ri)][i]])), set, dryRun: true } }));
+    openEditPreview('save', bodies, `Save ${pendingCount} change${pendingCount === 1 ? '' : 's'} to ${t.table}`, `Save ${bodies.length} row${bodies.length === 1 ? '' : 's'}`);
+  };
+  const deleteRow = (ri: number) => {
+    const t = editInfo?.target;
+    if (!t || !result || !alias) return;
+    if (pendingCount) { actions.toast('Save or discard the unsaved changes first.', 'error'); return; }
+    openEditPreview('delete', [{ ri, body: { alias: alias.alias, op: 'delete', db: t.db, table: t.table, pk: Object.fromEntries(t.pk.map(i => [colName(i), result.rows[ri][i]])), dryRun: true } }], `Delete a row from ${t.table}`, 'Delete row');
+  };
+  // Runs the previewed statements one by one; a failure stops the rest, and what was saved stays saved (and shows in the grid).
+  const confirmEdit = async () => {
+    const p = editPrev;
+    if (!p) return;
+    const mark = (i: number, patch: Partial<EditItem>) => setEditPrev(x => x && { ...x, items: x.items.map((it, j) => j === i ? { ...it, ...patch } : it) });
+    for (let i = 0; i < p.bodies.length; i++) {
+      const { ri, body } = p.bodies[i];
+      mark(i, { status: 'running' });
+      try {
+        await api.sqlEdit({ ...body, dryRun: false });
+        mark(i, { status: 'done' });
+        setResults(x => {
+          const r = x[p.key];
+          if (!r) return x;
+          const rows = r.rows.slice();
+          if (p.kind === 'delete') rows.splice(ri, 1);
+          else rows[ri] = rows[ri].map((v, c) => { const k = columns[c] && colName(c); return k && body.set && k in body.set ? body.set[k] : v; });
+          return { ...x, [p.key]: { ...r, rows, version: r.version + 1 } };
+        });
+        setUi(u => {
+          const cur = u[p.key]; if (!cur) return u;
+          const edits = Object.fromEntries(Object.entries(cur.edits).filter(([k]) => Number(k.split(':')[0]) !== ri));
+          return { ...u, [p.key]: { ...cur, edits, selection: p.kind === 'delete' ? null : cur.selection } };
+        });
+      } catch (err: any) {
+        mark(i, { status: 'failed', error: err.message });
+        break;
+      }
+    }
+    api.sqlHistory().then(setHistory).catch(() => {});
+  };
+
   // Pinned results: a copy of a result that no later run replaces. The live "Result" tab takes the next run.
   const pin = (key: string) => {
     if (!active) return;
@@ -463,6 +540,7 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
       if (e.code === 'KeyT') { e.preventDefault(); addTab(); }
       else if (e.code === 'KeyW' && active) { e.preventDefault(); closeTab(active.id); }
       else if (e.code === 'KeyR' && active && result && result.status !== 'running') { e.preventDefault(); const modes: TabUi['mode'][] = ['grid', 'record', ...(isJsonPlan(result) ? ['plan' as const] : [])]; patchUi(vk, { mode: modes[(modes.indexOf(tui.mode) + 1) % modes.length] }); }
+      else if (e.code === 'KeyS' && pendingCount) { e.preventDefault(); saveEdits(); }
       else if (e.code === 'Enter') { e.preventDefault(); runScript(); }
       else if (e.code === 'KeyP' && active && !summary) { e.preventDefault(); pin(vk); }
       else if (e.code === 'BracketRight') { e.preventDefault(); stepResult(1); }
@@ -648,6 +726,7 @@ Double-click to rename; right-click for more`}>
                       {tui.filter && <button aria-label="Clear filter" onClick={() => patchUi(vk, { filter: '' })}><X size={11} /></button>}
                     </div>
                     <button className="btn sm ghost" onClick={columnsMenu}><Columns3 size={13} aria-hidden="true" /> Columns{tui.hidden.length ? ` · ${tui.hidden.length} hidden` : ''}</button>
+                    {editInfo?.target && <EditBar count={pendingCount} table={editInfo.target.table} onSave={saveEdits} onDiscard={() => patchUi(vk, { edits: {} })} />}
                     {tui.sort && <button className="chip" onClick={() => patchUi(vk, { sort: null })} title="Clear sort">sorted by {columns[tui.sort.col]?.name} {tui.sort.dir > 0 ? '↑' : '↓'} ×</button>}
                     <span className="grow" />
                     {tui.filter && <span className="num text-[11px] text-fg-muted">{order.length.toLocaleString()} of {result.rows.length.toLocaleString()}</span>}
@@ -662,7 +741,8 @@ Double-click to rename; right-click for more`}>
                     sort={tui.sort} onSort={s => patchUi(vk, { sort: s })} selection={tui.selection} onSelect={s => patchUi(vk, { selection: s })}
                     onHide={c => patchUi(vk, { hidden: [...tui.hidden, c] })} onShowAll={() => patchUi(vk, { hidden: [] })} onFilter={f => patchUi(vk, { filter: f })}
                     onOpenCell={(row, col) => setCell({ tab: vk, row, col })} onRecord={row => patchUi(vk, { mode: 'record', record: Math.max(0, order.indexOf(row)) })}
-                    keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} onStats={setStatsCol} />
+                    keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} onStats={setStatsCol}
+                    edit={editInfo?.target ? { editable: editInfo.target.editable, pending: tui.edits, onChange: setEdit, onDelete: deleteRow } : undefined} />
                   : <RecordView columns={columns} row={recordRow} position={recordPos} count={order.length} onMove={to => patchUi(vk, { record: to, selection: null })}
                     onOpenCell={col => { const row = result.rows.indexOf(recordRow!); if (row >= 0) setCell({ tab: vk, row, col }); }}
                     keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} />}
@@ -686,6 +766,8 @@ Double-click to rename; right-click for more`}>
         onSaved={(all, id) => { setSaved(all); const s = all.find(x => x.id === id); if (saveEdit.tab && s) patchTab(saveEdit.tab, { savedId: s.id, title: s.name }); actions.toast(`Saved ${s?.name || ''}`); }} />}
       {snippetEdit && <SnippetEditor initial={snippetEdit} onClose={() => setSnippetEdit(null)} onSaved={setSnippets} />}
       {ask && <ParamsDialog params={ask.params} statement={ask.statement} onClose={() => setAsk(null)} onRun={values => { const a = ask; setAsk(null); if (a.script) scriptFlow(a.script, values); else launch(a.tab, { ...a.req, params: values }, a.markErrors); }} />}
+      {editPrev && <EditPreview alias={editPrev.alias} title={editPrev.title} verb={editPrev.verb} items={editPrev.items} loading={editPrev.loading} error={editPrev.error}
+        onConfirm={confirmEdit} onClose={() => setEditPrev(null)} />}
       {scriptAsk && <ConfirmWrite reason={`This script changes data on ${scriptAsk.alias}: ${scriptAsk.writes.length} of its ${scriptAsk.stmts.length} statements write, and the ones that run commit one by one. It stops at the first error, and what already ran stays.`}
         statement={scriptAsk.writes.join(';\n\n')} alias={scriptAsk.alias} onClose={() => setScriptAsk(null)}
         onRun={() => { const a = scriptAsk; setScriptAsk(null); execScript(a.tab, a.stmts, { alias: a.alias }, a.db, a.values, true); }} />}
@@ -719,7 +801,7 @@ function StatusBar({ alias, db, result, autoLimit, maxRows, onCancel, onRunMax }
 
 function EmptyResult({ history, onOpen, autoLimit }: { history: SqlHistoryEntry[]; onOpen: (h: SqlHistoryEntry) => void; autoLimit: number }) {
   const keys: [string[], string][] = [[['Ctrl', 'Enter'], 'run the statement under the cursor'], [['Ctrl', 'Shift', 'Enter'], 'run with the bigger row cap'], [['Ctrl', 'Shift', 'E'], 'EXPLAIN it'],
-    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Ctrl', 'click'], 'open the row a key cell points at'], [['Alt', 'Enter'], 'run every statement as a script'], [['Alt', 'P'], 'pin this result'], [['Alt', '[ ]'], 'switch result tabs'], [['Ctrl', 'S'], 'save the query'], [['Tab'], 'after a snippet name (cbj, case, hist) expands it'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
+    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Ctrl', 'click'], 'open the row a key cell points at'], [['Alt', 'Enter'], 'run every statement as a script'], [['Alt', 'P'], 'pin this result'], [['F2'], 'edit the selected cell (dev results of one table)'], [['Alt', 'S'], 'preview and save cell edits'], [['Alt', '[ ]'], 'switch result tabs'], [['Ctrl', 'S'], 'save the query'], [['Tab'], 'after a snippet name (cbj, case, hist) expands it'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
   return (
     <div className="m-auto grid max-w-[560px] gap-4 p-6 text-[12px] text-fg-muted">
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1.5">

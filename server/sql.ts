@@ -5,6 +5,7 @@ import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
 import type { SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnHit, SqlColumnInfo, SqlFk, SqlReference, SqlTableMeta, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
+import { buildEdit, type EditSpec } from './sqlEdit.js';
 import { bindParams, classify, classifyWrite, countParams, errorOffset, limitable, paramNames, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
 const SYSTEM_DBS = ['mysql', 'sys', 'performance_schema', 'information_schema'];
@@ -297,6 +298,28 @@ export class SqlManager {
     const c = mysql.createConnection(this.connOpts(a));
     c.query(`KILL QUERY ${Number(id)}`, err => { if (err && !quiet) console.error(`sql: KILL QUERY on ${a.alias} failed: ${err.message}`); c.end(() => {}); });
     c.on('error', () => {});
+  }
+
+  /** Changes one row on a dev connection. The statement is built here from the table's primary key (information_schema) and the values;
+   *  nothing the browser wrote is run. Prod is refused before anything else, whatever the request says. `dryRun` returns the statement for the preview.
+   *  A real run first counts the rows the key matches (it must be exactly one), then goes through run(): the dev classifier, auto-commit, history. */
+  async applyEdit(alias: string, e: EditSpec, dryRun: boolean): Promise<{ sql: string; matches: number | null; affected: number | null }> {
+    const a = this.alias(alias);
+    if (a.prod) throw new Error(`${a.alias} is a production reader: it is read-only, and rows cannot be edited there.`);
+    const meta = await this.tableMeta(a.alias, e.db, e.table);
+    if (meta.type === 'view') throw new Error(`${e.table} is a view; edit the table behind it.`);
+    const cols = await this.tableColumns(a.alias, meta.db, meta.table);
+    const { sql, countSql } = buildEdit({ ...e, db: meta.db, table: meta.table }, cols.map(c => c.name), meta.pk);
+    const [row] = await this.queryAll<{ n: number | string }>(a, countSql);
+    const matches = Number(row?.n);
+    if (dryRun) return { sql, matches, affected: null };
+    if (matches !== 1) throw new Error(matches === 0 ? 'No row has that key any more. Run the query again.' : `That key matches ${matches} rows, not one. Nothing was changed.`);
+    let affected: number | null = null, error: string | null = null;
+    await this.run({ alias: a.alias, text: sql, cursor: 0, confirm: false }, ev => {
+      if (ev.t === 'done') affected = ev.affected; else if (ev.t === 'error') error = ev.message;
+    });
+    if (error) throw new Error(error);
+    return { sql, matches, affected };
   }
 
   /** A read run again for an export: up to sql.exportMaxRows rows, read-only even on dev, through run() like any statement (classifier, READ ONLY

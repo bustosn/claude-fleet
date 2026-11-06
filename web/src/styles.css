@@ -463,6 +463,10 @@ textarea.rich-code-body { display: block; width: 100%; padding: 10px 12px; borde
 .sql-ref.is-sel { box-shadow: inset 2px 0 0 var(--accent); }
 .sql-hit { display: grid; gap: 1px; width: 100%; padding: 4px 10px; font: 11.5px var(--mono); text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
 .sql-hit:hover { background: var(--hover); }
+/* Editing in place (dev only) */
+.sql-cell.edited { background: color-mix(in srgb, var(--warn) 16%, transparent); box-shadow: inset 3px 0 0 var(--warn); }
+.sql-cell.editable:hover { cursor: text; }
+.sql-cell-input { width: 100%; height: 100%; margin: 0 -4px; padding: 0 4px; font: inherit; color: var(--fg); background: var(--surface); border: 0; outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Result tabs: the live result, pinned ones, a script's statements */
 .sql-rtabs { display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 6px; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
 .sql-rtab { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 8px; border-radius: 6px; font-size: 11.5px; color: var(--fg-muted); cursor: pointer; flex: none; border: 1px solid transparent; white-space: nowrap; }
