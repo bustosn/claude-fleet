@@ -195,3 +195,11 @@ test('lens checklists are numbered from the file, and coverage counts only named
   assert.deepEqual(uncoveredItems(3, ['C1', 'c3. three holds', 'about two']), [1]);
   for (const f of fs.readdirSync(path.join(import.meta.dirname, 'lenses'))) assert.ok(checklistItems(fs.readFileSync(path.join(import.meta.dirname, 'lenses', f), 'utf8')).items.length >= 5, f);
 });
+
+test('usage and rate limit messages are told apart from other errors', async () => {
+  const { isLimitText } = await import('../qa.js');
+  assert.ok(isLimitText("You've hit your session limit · resets 6pm (America/New_York)"));
+  assert.ok(isLimitText('API Error: 429 rate_limit'));
+  assert.ok(!isLimitText('Prompt is too long'));
+  assert.ok(!isLimitText(''));
+});

@@ -68,10 +68,13 @@ export interface QaStartSpec { targets: TargetSpec[]; jiraKey?: string; ticketTe
 
 interface RunState extends Omit<QaRunDetail, 'counts' | 'cost'> {
   specs: TargetSpec[]; inputs: { jiraKey?: string; ticketText?: string }; plan: LensPlan[]; profileAuto: boolean; startedAt: number;
-  srcDirs: Record<string, string>; costBase: QaCost; nextFinding: number; nextGroup: number; capHit: string | null; only?: string[];
+  srcDirs: Record<string, string>; costBase: QaCost; nextFinding: number; nextGroup: number; capHit: string | null; only?: string[]; limitHit?: string | null;
 }
 
 class Stopped extends Error { constructor() { super('Stopped.'); } }
+/** The account's usage or rate limit: more agents would fail the same way, so the run pauses instead and Resume picks up the unfinished work. */
+class LimitHit extends Error {}
+export const isLimitText = (s: string) => /session limit|usage limit|usage_limit|rate.?limit|hit your .*limit|resets \d/i.test(s);
 
 /** Owns QA runs: the phase machine, the chats it starts (through ChatManager with read-only tools), the slots, and the state files. */
 export class QaManager extends EventEmitter implements QaToolSink {
@@ -142,8 +145,10 @@ export class QaManager extends EventEmitter implements QaToolSink {
 
   resume(id: string) {
     const r = this.must(id);
-    if (!r.paused) throw new Error('This run is not waiting to be resumed.');
-    r.paused = false; r.error = null;
+    // A finished run with groups that never got a verdict (verifiers that failed) goes back to verify; nothing else is redone.
+    if (!r.paused && r.phase === 'done' && r.groups.some(g => !g.verdict)) { r.phase = 'verify'; r.finishedAt = null; r.startedAt = Date.now() - this.cost(r).ms; r.capHit = null; }
+    else if (!r.paused) throw new Error('This run is not waiting to be resumed.');
+    r.paused = false; r.error = null; r.limitHit = null;
     this.note(r, `Resumed at ${r.phase}.`);
     void this.drive(r);
     return this.summary(r);
@@ -175,6 +180,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
       }
     } catch (err) {
       if (err instanceof Stopped || !this.active.has(r.id)) return;
+      if (err instanceof LimitHit) { r.paused = true; r.error = err.message; this.note(r, `Paused at ${r.phase}: ${err.message}`); this.changed(r); return; }
       this.finish(r, 'failed', errText(err));
     } finally { this.active.delete(r.id); }
   }
@@ -246,6 +252,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
         return null;
       });
     }));
+    if (r.limitHit) throw new LimitHit(`Usage limit hit (${r.limitHit}). Resume when it resets; finished lens runs are kept.`);
     const failed = r.agents.filter(a => a.role === 'lens' && a.status === 'failed');
     this.note(r, `Lenses done: ${plural(r.findings.length, 'finding')}${failed.length ? `; ${failed.length} lens run(s) failed (${failed.map(a => a.label).join(', ')})` : ''}.`);
     if (failed.length === r.plan.length) throw new Error('Every lens run failed; see the agents for why.');
@@ -301,6 +308,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
       await this.runAgent(r, a, fill(tpl, { runId: r.id, packDir: r.pack!.dir, groups: batch.map(g => this.groupText(r, g)).join('\n\n') }),
         () => missing().length ? `These groups still have no verdict: ${missing().join(', ')}. Call fleet_qa_verdict for each, then end your turn.` : null);
     }));
+    if (r.limitHit) throw new LimitHit(`Usage limit hit (${r.limitHit}). Resume when it resets; groups with a verdict are kept.`);
     const left = r.groups.filter(g => !g.verdict).length;
     this.note(r, `Verify: ${plural(r.groups.length - left, 'verdict')}${left ? `, ${left} group(s) left without one` : ''}.`);
   }
@@ -351,6 +359,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
     await this.slot();
     try {
       if (!this.active.has(r.id)) throw new Stopped();
+      if (r.limitHit) { Object.assign(a, { status: 'failed', error: 'Not started: the usage limit was hit.' }); return; }
       const started = r.agents.filter(x => x.chatId).length;
       const minutes = (Date.now() - r.startedAt) / 60000;
       if (started >= this.cfg.maxAgents || minutes >= this.cfg.maxMinutes) {
@@ -377,7 +386,11 @@ export class QaManager extends EventEmitter implements QaToolSink {
           if (typeof ev.cost === 'number') a.costUsd = ev.cost;
           a.turns += ev.turns || 0;
           this.changed(r);
-          if (ev.isError) throw new Error(`the turn ended with an error (${ev.subtype})${ev.errors?.length ? `: ${ev.errors.join('; ')}` : ''}`);
+          if (ev.isError) {
+            const said = `${chat.turnText} ${ev.errors?.join(' ') || ''}`.trim();
+            if (isLimitText(said)) { r.limitHit = said.replace(/\s+/g, ' ').slice(0, 200); throw new LimitHit(r.limitHit); }
+            throw new Error(`the turn ended with an error (${ev.subtype})${said ? `: ${said.slice(0, 300)}` : ''}`);
+          }
           const more = unfinished();
           if (!more || round === 2) break;
           message = `[Fleet QA ${r.id}] ${more}`;
@@ -386,7 +399,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
       } catch (err) {
         if (!this.active.has(r.id)) throw new Stopped();
         Object.assign(a, { status: 'failed', endedAt: Date.now(), error: errText(err) });
-        this.note(r, `${a.label} failed: ${a.error}`);
+        if (!(err instanceof LimitHit)) this.note(r, `${a.label} failed: ${a.error}`);
       } finally {
         this.chatAgent.delete(chat.id);
         if (chat.status !== 'ended') chat.close();
