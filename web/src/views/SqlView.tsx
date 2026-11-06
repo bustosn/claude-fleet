@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Download, Gauge, KeyRound, LayoutList, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
+import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Download, Gauge, KeyRound, LayoutList, ListChecks, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
 import { api, type SqlFk, type SqlLookup, type SqlSaved, type SqlSnippet, type SqlReference, type SqlRunRequest, type SqlValue, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { Empty, Kbd } from '../components/ui';
 import { age } from '../lib/format';
-import { params as paramsOf, split as splitSql, statementAt, type Param } from '../../../shared/sqlClassify';
+import { classify, classifyWrite, params as paramsOf, split as splitSql, statementAt, type Param } from '../../../shared/sqlClassify';
 import { SqlEditor, type EditorHandle } from '../sql/SqlEditor';
 import { ResultGrid, useOrder, type Selection, type Sort } from '../sql/ResultGrid';
 import { RecordView } from '../sql/RecordView';
@@ -26,10 +26,15 @@ import { SaveDialog, SnippetEditor } from '../sql/SaveDialog';
 import { download, exportName, xlsx } from '../sql/xlsx';
 import { exportOnServer } from '../sql/exportServer';
 import { csv } from '../sql/copy';
+import { ResultTabs, ScriptSummary, canPin, type ScriptRun, type Slot } from '../sql/ResultTabs';
+import { ColumnStats } from '../sql/ColumnStats';
+import { ExplainTree } from '../sql/ExplainTree';
 
 /** Per tab, not saved: how its result is shown. */
-interface TabUi { mode: 'grid' | 'record'; preferRecord: boolean; selection: Selection; sort: Sort; filter: string; hidden: number[]; record: number }
+interface TabUi { mode: 'grid' | 'record' | 'plan'; preferRecord: boolean; selection: Selection; sort: Sort; filter: string; hidden: number[]; record: number }
 const freshUi = (preferRecord = false): TabUi => ({ mode: 'grid', preferRecord, selection: null, sort: null, filter: '', hidden: [], record: 0 });
+/** An EXPLAIN FORMAT=JSON result: one cell holding the plan, shown as a tree. */
+const isJsonPlan = (r: SqlResult) => /^\s*EXPLAIN\s+FORMAT\s*=\s*JSON\b/i.test(r.statement) && r.columns.length === 1 && r.rows.length === 1;
 const newId = () => Math.random().toString(36).slice(2, 10);
 const readLs = <T,>(k: string, d: T): T => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const writeLs = (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
@@ -54,10 +59,18 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
   const [share, setShare] = useState<Intent | null>(null);
   const [login, setLogin] = useState(false);
   const [confirm, setConfirm] = useState<{ tab: string; req: SqlRunRequest; reason: string } | null>(null);
-  const [ask, setAsk] = useState<{ tab: string; req: SqlRunRequest; params: Param[]; statement: string; markErrors: boolean } | null>(null);
+  const [ask, setAsk] = useState<{ tab: string; req: SqlRunRequest; params: Param[]; statement: string; markErrors: boolean; script?: string[] } | null>(null);
   const [refsOf, setRefsOf] = useState<{ alias: string; prod: boolean; target: { db: string; table: string; column: string }; value: SqlValue } | null>(null);
   // Bumped when table facts for a result arrive, so its key columns are known.
   const [metaTick, setMetaTick] = useState(0);
+  // Results beside the live one, per editor tab: which one is shown, the pinned ones and a script's statements, and the script's progress.
+  // A result's key is the tab id (live), `<tab>:p<n>` (pinned), `<tab>:s<n>` (a script statement) or `<tab>:sum` (the script's summary view).
+  const [views, setViews] = useState<Record<string, string>>({});
+  const [slotsBy, setSlotsBy] = useState<Record<string, Slot[]>>({});
+  const [scripts, setScripts] = useState<Record<string, ScriptRun>>({});
+  const [scriptAsk, setScriptAsk] = useState<{ tab: string; stmts: string[]; values: Record<string, string>; alias: string; db: string | null; writes: string[] } | null>(null);
+  const [statsCol, setStatsCol] = useState<number | null>(null);
+  const pinCount = useRef(0);
   const [saved, setSaved] = useState<SqlSaved[]>([]);
   const [snippets, setSnippets] = useState<SqlSnippet[]>([]);
   const [saveEdit, setSaveEdit] = useState<(Partial<SqlSaved> & { sql: string; tab?: string }) | null>(null);
@@ -120,8 +133,13 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
 
   const active = tabs?.find(t => t.id === activeId) || null;
   const alias = info?.aliases.find(a => a.alias === active?.alias) || null;
-  const result = active ? results[active.id] : undefined;
-  const tui = (active && ui[active.id]) || freshUi();
+  const live = active ? results[active.id] : undefined;
+  const vk = active ? views[active.id] ?? active.id : '';
+  const slots = active ? slotsBy[active.id] || [] : [];
+  const script = active ? scripts[active.id] : undefined;
+  const summary = !!active && vk === `${active.id}:sum`;
+  const result = !summary && vk ? results[vk] : undefined;
+  const tui = (vk && ui[vk]) || freshUi();
   const patchUi = (id: string, p: Partial<TabUi>) => setUi(u => ({ ...u, [id]: { ...(u[id] || freshUi()), ...p } }));
   const patchTab = (id: string, p: Partial<SqlTab>) => setTabs(ts => ts && ts.map(t => t.id === id ? { ...t, ...p } : t));
 
@@ -140,7 +158,8 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
       if (id === activeId) setActiveId((next[i] || next[i - 1])?.id || '');
       return next.length ? next : [blank(1, info?.defaultAlias || '')];
     });
-    setResults(r => { const { [id]: _, ...rest } = r; return rest; });
+    setResults(r => Object.fromEntries(Object.entries(r).filter(([k]) => k !== id && !k.startsWith(`${id}:`))));
+    for (const set of [setViews, setSlotsBy, setScripts] as const) (set as any)((m: Record<string, unknown>) => { const { [id]: _, ...rest } = m; return rest; });
   };
 
   // Schema for the active connection, then the columns of the tab's database (cb911 by default) for completion.
@@ -212,6 +231,7 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
   const launch = (id: string, req: SqlRunRequest, markErrors: boolean) => {
     aborts.current[id]?.();
     lastReq.current[id] = req;
+    setViews(v => v[id] && v[id] !== id ? { ...v, [id]: id } : v);
     editors.current[id]?.markError(null);
     const { abort } = startRun(req, r => {
       // A risky write on dev: the server asks first, and the same request goes again with confirm once you say so.
@@ -225,7 +245,8 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
       if (r.status === 'error' && r.error?.offset != null && markErrors) editors.current[id]?.markError({ from: r.error.offset, to: r.error.offset + Math.max(1, r.error.length) });
       setUi(u => {
         const cur = u[id] || freshUi();
-        const mode = cur.preferRecord && r.status === 'done' && r.rows.length === 1 ? 'record' : r.status === 'done' && r.rows.length !== 1 && cur.mode === 'record' && cur.preferRecord ? 'grid' : cur.mode;
+        const mode: TabUi['mode'] = r.status === 'done' && isJsonPlan(r) ? 'plan' : cur.mode === 'plan' ? 'grid'
+          : cur.preferRecord && r.status === 'done' && r.rows.length === 1 ? 'record' : r.status === 'done' && r.rows.length !== 1 && cur.mode === 'record' && cur.preferRecord ? 'grid' : cur.mode;
         return { ...u, [id]: { ...cur, mode, selection: null, sort: null, hidden: [], record: 0, preferRecord: false } };
       });
     });
@@ -242,8 +263,10 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
     if (!snap) return;
     const s = snap.selection ? { text: snap.text.slice(snap.selection.from, snap.selection.to).trim() } : statementAt(snap.text, snap.cursor);
     if (!s?.text) return;
-    run('auto', { text: /^\s*explain\b/i.test(s.text) ? s.text : `EXPLAIN ${s.text}`, cursor: 0, selection: null });
+    run('auto', { text: /^\s*explain\b/i.test(s.text) ? s.text : `EXPLAIN FORMAT=JSON ${s.text}`, cursor: 0, selection: null });
   };
+  // The classic grid EXPLAIN of the same statement, from the plan view.
+  const explainTabular = (r: SqlResult) => run('auto', { text: r.statement.replace(/^\s*EXPLAIN\s+FORMAT\s*=\s*JSON\s+/i, 'EXPLAIN '), cursor: 0, selection: null });
   const format = async () => {
     const ed = active && editors.current[active.id];
     if (!ed) return;
@@ -324,7 +347,7 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
   const exportMenu = (e: React.MouseEvent) => {
     if (!active || !result) return;
     const cols = visible.map(i => columns[i]), rows = order.map(i => visible.map(c => result.rows[i][c]));
-    const name = exportName(active.title), req = lastReq.current[active.id];
+    const name = exportName(active.title), req = lastReq.current[vk] || lastReq.current[active.id];
     openMenu(e, [
       { label: `CSV · ${rows.length.toLocaleString()} rows shown`, icon: Download, onSelect: () => download(new Blob(['\ufeff' + csv(cols, rows)], { type: 'text/csv;charset=utf-8' }), `${name}.csv`) },
       { label: `Excel .xlsx · ${rows.length.toLocaleString()} rows shown`, onSelect: () => download(xlsx(cols, rows, active.title), `${name}.xlsx`) },
@@ -343,15 +366,107 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
     if (opts.run) setTimeout(() => runTab(t.id), 60);
   };
 
+  // Pinned results: a copy of a result that no later run replaces. The live "Result" tab takes the next run.
+  const pin = (key: string) => {
+    if (!active) return;
+    const r = results[key];
+    if (!r || r.status === 'running') return;
+    if (!canPin(slots)) { actions.toast('At most 8 results can be pinned. Close one first.', 'error'); return; }
+    const n = ++pinCount.current, pk = `${active.id}:p${n}-${Math.random().toString(36).slice(2, 5)}`, id = active.id;
+    setResults(x => ({ ...x, [pk]: { ...r } }));
+    setUi(u => ({ ...u, [pk]: { ...(u[key] || freshUi()) } }));
+    lastReq.current[pk] = lastReq.current[key] || lastReq.current[id];
+    setSlotsBy(sl => ({ ...sl, [id]: [{ key: pk, label: r.statement.replace(/\s+/g, ' ').slice(0, 22) || `Pin ${n}`, kind: 'pin' as const }, ...(sl[id] || [])] }));
+    setViews(v => ({ ...v, [id]: pk }));
+  };
+  const closeSlot = (key: string) => {
+    if (!active) return;
+    const id = active.id;
+    setSlotsBy(sl => ({ ...sl, [id]: (sl[id] || []).filter(x => x.key !== key) }));
+    setResults(x => { const { [key]: _, ...rest } = x; return rest; });
+    setViews(v => v[id] === key ? { ...v, [id]: id } : v);
+  };
+  // Alt+[ and Alt+]: the live result, then the others in the order shown.
+  const stepResult = (dir: 1 | -1) => {
+    if (!active) return;
+    const keys = [active.id, ...slots.map(x => x.key)], i = keys.indexOf(vk);
+    setViews(v => ({ ...v, [active.id]: keys[(i + dir + keys.length) % keys.length] }));
+  };
+
+  // One statement as a promise, its result going to `key`; `onAbort` receives the way to stop it.
+  const runOne = (req: SqlRunRequest, key: string, onAbort: (abort: () => void) => void) => new Promise<SqlResult>(resolve => {
+    lastReq.current[key] = req;
+    const { abort } = startRun(req, r => {
+      setResults(x => ({ ...x, [key]: r }));
+      if (r.status === 'running') return;
+      if (r.status === 'done') for (const t of resultTables(r.columns)) tableMeta(req.alias, t.db, t.table).then(() => setMetaTick(n => n + 1), () => {});
+      resolve(r);
+    });
+    onAbort(abort);
+  });
+  // Run script: every statement in order, one result tab each, stopped at the first error. Each one goes through the server's classifier
+  // on its own, so a prod connection still takes reads only.
+  const execScript = async (id: string, stmts: string[], a: { alias: string }, db: string | null, values: Record<string, string>, confirmed: boolean) => {
+    aborts.current[id]?.();
+    const key = (i: number) => `${id}:s${i}`;
+    const items: ScriptRun['items'] = stmts.map((text, i) => ({ text, key: key(i), status: 'waiting', rows: null, affected: null, ms: null, error: null }));
+    setResults(x => Object.fromEntries(Object.entries(x).filter(([k]) => !/:s\d+$/.test(k) || !k.startsWith(`${id}:`))));
+    setScripts(sc => ({ ...sc, [id]: { items, running: true } }));
+    setSlotsBy(sl => ({ ...sl, [id]: [...(sl[id] || []).filter(x => x.kind === 'pin'), { key: `${id}:sum`, label: 'Script', kind: 'summary' as const },
+      ...stmts.map((t, i) => ({ key: key(i), label: `${i + 1} ${t.replace(/\s+/g, ' ').slice(0, 14)}`, kind: 'script' as const }))] }));
+    setViews(v => ({ ...v, [id]: `${id}:sum` }));
+    let stopped = false, current: (() => void) | null = null;
+    aborts.current[id] = () => { stopped = true; current?.(); };
+    const patch = (i: number, p: Partial<ScriptRun['items'][number]>) => setScripts(sc => sc[id] ? { ...sc, [id]: { ...sc[id], items: sc[id].items.map((x, j) => j === i ? { ...x, ...p } : x) } } : sc);
+    for (let i = 0; i < stmts.length; i++) {
+      if (stopped) { for (let j = i; j < stmts.length; j++) patch(j, { status: 'skipped' }); break; }
+      patch(i, { status: 'running' });
+      const r = await runOne({ alias: a.alias, text: stmts[i], cursor: 0, db, limit: 'auto', params: values, confirm: confirmed }, key(i), ab => { current = ab; });
+      if (r.status === 'error') {
+        patch(i, { status: 'error', error: r.error?.code === 'CONFIRM' ? 'Needs a confirmation: run it on its own' : r.error?.message || 'Failed', ms: r.ms });
+        for (let j = i + 1; j < stmts.length; j++) patch(j, { status: 'skipped' });
+        break;
+      }
+      patch(i, { status: 'done', rows: r.columns.length ? r.rows.length : null, affected: r.affected, ms: r.ms });
+    }
+    delete aborts.current[id];
+    setScripts(sc => sc[id] ? { ...sc, [id]: { ...sc[id], running: false } } : sc);
+    api.sqlHistory().then(setHistory).catch(() => {});
+  };
+  // A script's values, writes and run, in that order.
+  const scriptFlow = (stmts: string[], values: Record<string, string>) => {
+    if (!active || !alias) return;
+    const writes = alias.prod ? [] : stmts.filter(t => classifyWrite(t).write);
+    if (writes.length) { setScriptAsk({ tab: active.id, stmts, values, alias: alias.alias, db: active.db, writes }); return; }
+    execScript(active.id, stmts, alias, active.db, values, false);
+  };
+  const runScript = () => {
+    if (!active || !alias || active.kind === 'processes' || script?.running) return;
+    const snap = editors.current[active.id]?.snapshot();
+    if (!snap) return;
+    const stmts = splitSql(snap.selection ? snap.text.slice(snap.selection.from, snap.selection.to) : snap.text).map(x => x.text);
+    if (!stmts.length) { actions.toast('Nothing to run.', 'error'); return; }
+    if (stmts.length > 100) { actions.toast(`${stmts.length} statements is more than a script takes (100).`, 'error'); return; }
+    const bad = alias.prod ? stmts.findIndex(t => !classify(t).ok) : -1;
+    if (bad >= 0) { actions.toast(`Statement ${bad + 1} is not a read, and ${alias.alias} is read-only. Nothing ran.`, 'error'); return; }
+    const withParams = stmts.filter(t => paramsOf(t).length);
+    if (withParams.length) { setAsk({ tab: active.id, req: { alias: alias.alias, text: '', cursor: 0 }, params: withParams.flatMap(t => paramsOf(t)), statement: withParams.join('\n\n'), markErrors: false, script: stmts }); return; }
+    scriptFlow(stmts, {});
+  };
+
   // Keys inside the view. Alt, not Ctrl: Ctrl+T, Ctrl+W and Ctrl+R belong to the browser when Fleet runs in a tab.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (document.querySelector('dialog[open]')) return;
-      if (e.key === 'Escape' && result?.status === 'running') { e.preventDefault(); cancel(); return; }
+      if (e.key === 'Escape' && (live?.status === 'running' || script?.running)) { e.preventDefault(); cancel(); return; }
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       if (e.code === 'KeyT') { e.preventDefault(); addTab(); }
       else if (e.code === 'KeyW' && active) { e.preventDefault(); closeTab(active.id); }
-      else if (e.code === 'KeyR' && active && result?.status !== 'running') { e.preventDefault(); patchUi(active.id, { mode: tui.mode === 'record' ? 'grid' : 'record' }); }
+      else if (e.code === 'KeyR' && active && result && result.status !== 'running') { e.preventDefault(); const modes: TabUi['mode'][] = ['grid', 'record', ...(isJsonPlan(result) ? ['plan' as const] : [])]; patchUi(vk, { mode: modes[(modes.indexOf(tui.mode) + 1) % modes.length] }); }
+      else if (e.code === 'Enter') { e.preventDefault(); runScript(); }
+      else if (e.code === 'KeyP' && active && !summary) { e.preventDefault(); pin(vk); }
+      else if (e.code === 'BracketRight') { e.preventDefault(); stepResult(1); }
+      else if (e.code === 'BracketLeft') { e.preventDefault(); stepResult(-1); }
       else if (/^Digit[1-9]$/.test(e.code) && tabs) { const t = tabs[Number(e.code.slice(5)) - 1]; if (t) { e.preventDefault(); setActiveId(t.id); } }
     };
     addEventListener('keydown', onKey);
@@ -410,7 +525,7 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
   ]);
   const columnsMenu = (e: React.MouseEvent) => {
     if (!active) return;
-    const id = active.id, hidden = tui.hidden;
+    const id = vk, hidden = tui.hidden;
     const items: MenuItem[] = [
       { label: 'Show all', disabled: !hidden.length, onSelect: () => patchUi(id, { hidden: [] }) },
       { label: 'Hide all-NULL columns', onSelect: () => patchUi(id, { hidden: columns.map((_, i) => i).filter(i => result!.rows.every(r => r[i] == null)) }) },
@@ -423,7 +538,7 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
   if (infoError && !info?.aliases.length) return <Empty title="The SQL view is not set up">{infoError}</Empty>;
   if (!tabs || !info) return <div className="m-auto text-[12px] text-fg-faint">Loading…</div>;
 
-  const running = result?.status === 'running';
+  const running = live?.status === 'running' || !!script?.running;
   const split = active?.split ?? 0.4;
   const envOf = (a: string) => info.aliases.find(x => x.alias === a);
 
@@ -486,6 +601,7 @@ Double-click to rename; right-click for more`}>
             {running
               ? <button className="btn sm danger" onClick={cancel} title="Esc"><Ban size={13} aria-hidden="true" /> Cancel</button>
               : <button className="btn sm primary" onClick={() => run('auto')} title={`Run the statement under the cursor (Ctrl+Enter). Adds LIMIT ${info.autoLimit} when there is none.`}><Play size={13} aria-hidden="true" /> Run</button>}
+            <button className="btn sm ghost" onClick={runScript} disabled={running} title="Run every statement in the tab, one result tab each, stopping at the first error (Alt+Enter). Select some to run only those."><ListChecks size={13} aria-hidden="true" /> Script</button>
             <button className="btn sm ghost" onClick={() => run('max')} disabled={running} title={`Run up to ${info.maxRows.toLocaleString()} rows (Ctrl+Shift+Enter)`}><PlayCircle size={13} aria-hidden="true" /> {info.maxRows.toLocaleString()}</button>
             <button className="btn sm ghost" onClick={explain} disabled={running} title="EXPLAIN the statement (Ctrl+Shift+E)"><Gauge size={13} aria-hidden="true" /> Explain</button>
             <button className="btn sm ghost" onClick={format} title="Format (Ctrl+Shift+F)"><AlignLeft size={13} aria-hidden="true" /> Format</button>
@@ -493,8 +609,9 @@ Double-click to rename; right-click for more`}>
             <span className="grow" />
             <button className="btn sm ghost" onClick={sendMenu} title="Send the statement and result to a chat"><MessageSquareShare size={13} aria-hidden="true" /> Send to chat <ChevronDown size={12} aria-hidden="true" /></button>
             <div className="sql-seg" role="tablist" aria-label="Result view">
-              <button role="tab" aria-selected={tui.mode === 'grid'} onClick={() => patchUi(active.id, { mode: 'grid' })} title="Grid"><Table size={13} aria-label="Grid" /></button>
-              <button role="tab" aria-selected={tui.mode === 'record'} onClick={() => patchUi(active.id, { mode: 'record' })} title="Record (Alt+R)"><Rows3 size={13} aria-label="Record" /></button>
+              <button role="tab" aria-selected={tui.mode === 'grid'} onClick={() => patchUi(vk, { mode: 'grid' })} title="Grid"><Table size={13} aria-label="Grid" /></button>
+              <button role="tab" aria-selected={tui.mode === 'record'} onClick={() => patchUi(vk, { mode: 'record' })} title="Record (Alt+R)"><Rows3 size={13} aria-label="Record" /></button>
+              {result && isJsonPlan(result) && <button role="tab" aria-selected={tui.mode === 'plan'} onClick={() => patchUi(vk, { mode: 'plan' })} title="Plan (Alt+R)"><Gauge size={13} aria-label="Plan" /></button>}
             </div>
           </div>
 
@@ -510,7 +627,9 @@ Double-click to rename; right-click for more`}>
             </div>
             <div className="sql-hsplit" onPointerDown={dragSplit} role="separator" aria-orientation="horizontal" aria-label="Resize the editor" />
             <div className="flex min-h-0 flex-1 flex-col bg-surface">
+              {slots.length > 0 && <ResultTabs slots={slots} view={vk} liveKey={active.id} results={results} onView={k => setViews(v => ({ ...v, [active.id]: k }))} onClose={closeSlot} onPin={pin} />}
               {running && <div className="sql-progress" aria-hidden="true" />}
+              {summary && script && <ScriptSummary run={script} onView={k => setViews(v => ({ ...v, [active.id]: k }))} />}
               {result?.notice && running && <div className="sql-banner warn">{result.notice}</div>}
               {result?.status === 'error' && result.error && (
                 <div className="sql-banner crit" role="alert">
@@ -519,17 +638,17 @@ Double-click to rename; right-click for more`}>
                   <button className="btn sm" onClick={() => setShare('fix')}>Fix in chat</button>
                 </div>
               )}
-              {!result && <EmptyResult history={history.filter(h => h.alias === active.alias).slice(0, 3)} onOpen={h => editors.current[active.id]?.replaceAll(h.sql)} autoLimit={info.autoLimit} />}
+              {!result && !summary && <EmptyResult history={history.filter(h => h.alias === active.alias).slice(0, 3)} onOpen={h => editors.current[active.id]?.replaceAll(h.sql)} autoLimit={info.autoLimit} />}
               {result && result.columns.length > 0 && <>
                 {tui.mode === 'grid' && (
                   <div className="sql-subbar">
                     <div className="sql-search">
                       <Search size={12} aria-hidden="true" />
-                      <input value={tui.filter} onChange={e => patchUi(active.id, { filter: e.target.value })} placeholder="Filter rows" aria-label="Filter rows" />
-                      {tui.filter && <button aria-label="Clear filter" onClick={() => patchUi(active.id, { filter: '' })}><X size={11} /></button>}
+                      <input value={tui.filter} onChange={e => patchUi(vk, { filter: e.target.value })} placeholder="Filter rows" aria-label="Filter rows" />
+                      {tui.filter && <button aria-label="Clear filter" onClick={() => patchUi(vk, { filter: '' })}><X size={11} /></button>}
                     </div>
                     <button className="btn sm ghost" onClick={columnsMenu}><Columns3 size={13} aria-hidden="true" /> Columns{tui.hidden.length ? ` · ${tui.hidden.length} hidden` : ''}</button>
-                    {tui.sort && <button className="chip" onClick={() => patchUi(active.id, { sort: null })} title="Clear sort">sorted by {columns[tui.sort.col]?.name} {tui.sort.dir > 0 ? '↑' : '↓'} ×</button>}
+                    {tui.sort && <button className="chip" onClick={() => patchUi(vk, { sort: null })} title="Clear sort">sorted by {columns[tui.sort.col]?.name} {tui.sort.dir > 0 ? '↑' : '↓'} ×</button>}
                     <span className="grow" />
                     {tui.filter && <span className="num text-[11px] text-fg-muted">{order.length.toLocaleString()} of {result.rows.length.toLocaleString()}</span>}
                     {exporting
@@ -537,14 +656,15 @@ Double-click to rename; right-click for more`}>
                       : <button className="btn sm ghost" onClick={exportMenu} disabled={result.status === 'running'} title="Download as CSV or Excel"><Download size={13} aria-hidden="true" /> Export <ChevronDown size={12} aria-hidden="true" /></button>}
                   </div>
                 )}
-                {tui.mode === 'grid'
-                  ? <ResultGrid key={`${active.id}:${result.startedAt}`} columns={columns} rows={result.rows} version={result.version} order={order} visible={visible}
-                    sort={tui.sort} onSort={s => patchUi(active.id, { sort: s })} selection={tui.selection} onSelect={s => patchUi(active.id, { selection: s })}
-                    onHide={c => patchUi(active.id, { hidden: [...tui.hidden, c] })} onShowAll={() => patchUi(active.id, { hidden: [] })} onFilter={f => patchUi(active.id, { filter: f })}
-                    onOpenCell={(row, col) => setCell({ tab: active.id, row, col })} onRecord={row => patchUi(active.id, { mode: 'record', record: Math.max(0, order.indexOf(row)) })}
-                    keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} />
-                  : <RecordView columns={columns} row={recordRow} position={recordPos} count={order.length} onMove={to => patchUi(active.id, { record: to, selection: null })}
-                    onOpenCell={col => { const row = result.rows.indexOf(recordRow!); if (row >= 0) setCell({ tab: active.id, row, col }); }}
+                {tui.mode === 'plan' && isJsonPlan(result) ? <ExplainTree json={String(result.rows[0][0])} statement={result.statement} alias={alias?.alias || ''} db={active.db} onTabular={() => explainTabular(result)} />
+                  : tui.mode === 'grid'
+                  ? <ResultGrid key={`${vk}:${result.startedAt}`} columns={columns} rows={result.rows} version={result.version} order={order} visible={visible}
+                    sort={tui.sort} onSort={s => patchUi(vk, { sort: s })} selection={tui.selection} onSelect={s => patchUi(vk, { selection: s })}
+                    onHide={c => patchUi(vk, { hidden: [...tui.hidden, c] })} onShowAll={() => patchUi(vk, { hidden: [] })} onFilter={f => patchUi(vk, { filter: f })}
+                    onOpenCell={(row, col) => setCell({ tab: vk, row, col })} onRecord={row => patchUi(vk, { mode: 'record', record: Math.max(0, order.indexOf(row)) })}
+                    keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} onStats={setStatsCol} />
+                  : <RecordView columns={columns} row={recordRow} position={recordPos} count={order.length} onMove={to => patchUi(vk, { record: to, selection: null })}
+                    onOpenCell={col => { const row = result.rows.indexOf(recordRow!); if (row >= 0) setCell({ tab: vk, row, col }); }}
                     keys={keys} onFollow={follow} onReferencedBy={(target, value) => alias && setRefsOf({ alias: alias.alias, prod: alias.prod, target, value })} />}
               </>}
               {result && result.status === 'done' && !result.columns.length && <div className="m-auto text-[12px] text-fg-muted">{result.affected != null ? <><b className="num text-fg">{result.affected.toLocaleString()}</b> row{result.affected === 1 ? '' : 's'} affected. Committed.</> : 'The statement ran and returned no result set.'}</div>}
@@ -565,7 +685,12 @@ Double-click to rename; right-click for more`}>
       {saveEdit && <SaveDialog initial={saveEdit} folders={[...new Set(saved.map(s => s.folder))]} aliases={info.aliases} onClose={() => setSaveEdit(null)}
         onSaved={(all, id) => { setSaved(all); const s = all.find(x => x.id === id); if (saveEdit.tab && s) patchTab(saveEdit.tab, { savedId: s.id, title: s.name }); actions.toast(`Saved ${s?.name || ''}`); }} />}
       {snippetEdit && <SnippetEditor initial={snippetEdit} onClose={() => setSnippetEdit(null)} onSaved={setSnippets} />}
-      {ask && <ParamsDialog params={ask.params} statement={ask.statement} onClose={() => setAsk(null)} onRun={values => { const a = ask; setAsk(null); launch(a.tab, { ...a.req, params: values }, a.markErrors); }} />}
+      {ask && <ParamsDialog params={ask.params} statement={ask.statement} onClose={() => setAsk(null)} onRun={values => { const a = ask; setAsk(null); if (a.script) scriptFlow(a.script, values); else launch(a.tab, { ...a.req, params: values }, a.markErrors); }} />}
+      {scriptAsk && <ConfirmWrite reason={`This script changes data on ${scriptAsk.alias}: ${scriptAsk.writes.length} of its ${scriptAsk.stmts.length} statements write, and the ones that run commit one by one. It stops at the first error, and what already ran stays.`}
+        statement={scriptAsk.writes.join(';\n\n')} alias={scriptAsk.alias} onClose={() => setScriptAsk(null)}
+        onRun={() => { const a = scriptAsk; setScriptAsk(null); execScript(a.tab, a.stmts, { alias: a.alias }, a.db, a.values, true); }} />}
+      {statsCol != null && result && columns[statsCol] && alias && <ColumnStats column={columns[statsCol]} values={order.map(i => result.rows[i][statsCol])} loaded={result.rows.length} total={result.rows.length}
+        statement={result.statement} req={lastReq.current[vk] || lastReq.current[active!.id]} prod={alias.prod} onFilter={v => { patchUi(vk, { filter: v == null ? '' : String(v) }); }} onClose={() => setStatsCol(null)} />}
       {refsOf && <ReferencedBy alias={refsOf.alias} prod={refsOf.prod} target={refsOf.target} value={refsOf.value} onOpen={openRefs} onClose={() => setRefsOf(null)} />}
       {share && (() => { const d = shareData(); return d ? <SendToChat data={d} intent={share} onClose={() => setShare(null)} /> : null; })()}
       {menu}
@@ -594,7 +719,7 @@ function StatusBar({ alias, db, result, autoLimit, maxRows, onCancel, onRunMax }
 
 function EmptyResult({ history, onOpen, autoLimit }: { history: SqlHistoryEntry[]; onOpen: (h: SqlHistoryEntry) => void; autoLimit: number }) {
   const keys: [string[], string][] = [[['Ctrl', 'Enter'], 'run the statement under the cursor'], [['Ctrl', 'Shift', 'Enter'], 'run with the bigger row cap'], [['Ctrl', 'Shift', 'E'], 'EXPLAIN it'],
-    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Ctrl', 'click'], 'open the row a key cell points at'], [['Ctrl', 'S'], 'save the query'], [['Tab'], 'after a snippet name (cbj, case, hist) expands it'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
+    [['Ctrl', 'Shift', 'F'], 'format'], [['Alt', 'R'], 'grid or record view'], [['Ctrl', 'click'], 'open the row a key cell points at'], [['Alt', 'Enter'], 'run every statement as a script'], [['Alt', 'P'], 'pin this result'], [['Alt', '[ ]'], 'switch result tabs'], [['Ctrl', 'S'], 'save the query'], [['Tab'], 'after a snippet name (cbj, case, hist) expands it'], [['Alt', 'T'], 'new tab'], [['Alt', 'W'], 'close tab'], [['Esc'], 'cancel a running query']];
   return (
     <div className="m-auto grid max-w-[560px] gap-4 p-6 text-[12px] text-fg-muted">
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1.5">

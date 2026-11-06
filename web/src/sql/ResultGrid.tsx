@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowUp, Braces, ClipboardCopy, Columns3, CornerDownRight, EyeOff, Filter, Link2, Maximize2, Rows3 } from 'lucide-react';
+import { ArrowDown, ArrowUp, BarChart3, Braces, ClipboardCopy, Columns3, CornerDownRight, EyeOff, Filter, Link2, Maximize2, Rows3 } from 'lucide-react';
 import type { SqlColumn, SqlFk, SqlValue } from '../lib/api';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { actions } from '../lib/store';
@@ -51,10 +51,12 @@ interface Props {
   onOpenCell: (rowIndex: number, col: number) => void; onRecord: (rowIndex: number) => void;
   /** Keys: where a column's values point (a foreign key, declared or guessed), and the table a column is the primary key of. */
   keys?: { fk: (col: number) => SqlFk | null; pk: (col: number) => { db: string; table: string; column: string } | null };
+  /** Distinct values and counts for one column (ColumnStats). */
+  onStats?: (col: number) => void;
   onFollow?: (fk: SqlFk, v: SqlValue) => void; onReferencedBy?: (target: { db: string; table: string; column: string }, v: SqlValue) => void;
 }
 
-export function ResultGrid({ columns, rows, version, order, visible, sort, onSort, selection, onSelect, onHide, onShowAll, onFilter, onOpenCell, onRecord, keys, onFollow, onReferencedBy }: Props) {
+export function ResultGrid({ columns, rows, version, order, visible, sort, onSort, selection, onSelect, onHide, onShowAll, onFilter, onOpenCell, onRecord, keys, onFollow, onReferencedBy, onStats }: Props) {
   // Holding Ctrl shows which cells follow a key on click.
   const [mod, setMod] = useState(false);
   useEffect(() => {
@@ -159,6 +161,7 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
   const headMenu = (e: RMouseEvent, c: number) => {
     const col = columns[c];
     openMenu(e, [
+      ...(onStats ? [{ label: 'Value stats…', icon: BarChart3, onSelect: () => onStats(c) }, 'separator' as const] : []),
       { label: 'Sort ascending', icon: ArrowUp, onSelect: () => onSort({ col: c, dir: 1 }) },
       { label: 'Sort descending', icon: ArrowDown, onSelect: () => onSort({ col: c, dir: -1 }) },
       { label: 'Clear sort', disabled: !sort, onSelect: () => onSort(null) },
@@ -198,6 +201,7 @@ export function ResultGrid({ columns, rows, version, order, visible, sort, onSor
                 style={{ left: vc.start, width: vc.size }} title={`${col.name} · ${col.type}${col.table ? ` · ${col.table}` : ''}`}
                 onClick={() => onSelect({ kind: 'col', c })} onContextMenu={e => headMenu(e, c)}>
                 <span className="truncate">{col.name}</span>
+                {onStats && <button className="sql-sort" aria-label={`Value stats for ${col.name}`} title="Distinct values and counts" onClick={e => { e.stopPropagation(); onStats(c); }}><BarChart3 size={11} /></button>}
                 <button className={`sql-sort ${sorted ? 'on' : ''}`} aria-label={`Sort by ${col.name}`} onClick={e => { e.stopPropagation(); onSort(sorted === 1 ? { col: c, dir: -1 } : sorted === -1 ? null : { col: c, dir: 1 }); }}>
                   {sorted === -1 ? <ArrowDown size={11} /> : <ArrowUp size={11} />}
                 </button>
