@@ -16,6 +16,7 @@ import { TaskManager } from './tasks.js';
 import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
 import { SqlManager } from './sql.js';
 import { SavedQueries, Snippets, defaultSnippets } from './sqlSaved.js';
+import { usageReport } from './usage.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
 import { run, errText } from './util.js';
@@ -391,6 +392,10 @@ app.get('/api/jira/issue/:key', async (req, res) => {
   try { res.json(await jira.preview(key)); } catch (err) { res.status(400).json({ error: errText(err) }); }
 });
 app.post('/api/jira/poll', async (_req, res) => res.json(await jira.poll()));
+app.get('/api/usage', async (req, res) => {
+  const days = Math.min(3650, Math.max(0, Math.floor(Number(req.query.days)) || 0));
+  try { res.json(await usageReport(config.claudeHome, days)); } catch (err) { res.status(500).json({ error: errText(err) }); }
+});
 // The Jira view: your tickets by status, moving them, and making new ones. Unlike the watcher, these write to Jira.
 const jiraRoute = (fn: (req: Request) => Promise<unknown>) => async (req: Request, res: Response) => {
   try { res.json(await fn(req)); } catch (err) { res.status(400).json({ error: errText(err) }); }

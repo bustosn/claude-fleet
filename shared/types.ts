@@ -292,6 +292,17 @@ export interface SqlSchema { alias: string; target: string | null; at: number; d
 /** One row of the server's process list. `fleet` marks Fleet's own connections. */
 export interface SqlProcess { id: number; user: string; host: string; db: string | null; command: string; time: number; state: string | null; info: string | null;
   trxStarted: string | null; rowsLocked: number | null; rowsModified: number | null; fleet: boolean }
+/** Token counts for a set of assistant messages. */
+export interface UsageTotals { messages: number; input: number; output: number; cacheRead: number; cacheWrite: number }
+/** The Usage page: what the transcripts under ~/.claude/projects add up to. `days` 0 is all time. */
+export interface UsageReport {
+  days: number; generatedAt: number; total: UsageTotals; sessions: number; activeDays: number; longestStreak: number; currentStreak: number;
+  daily: ({ day: string } & UsageTotals)[];
+  /** Messages by local hour of day, and by weekday (0 is Sunday). */
+  hours: number[]; weekdays: number[];
+  models: ({ model: string } & UsageTotals)[];
+  projects: ({ project: string; sessions: number } & UsageTotals)[];
+}
 export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null;
   /** Column name to the db.table its value is the id of, for keys the schema does not declare. */
   fkGuesses: Record<string, string>;
