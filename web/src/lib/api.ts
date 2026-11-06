@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, UsageReport } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -104,6 +104,7 @@ export const api = {
   sqlDeleteLookup: (name: string) => j<SqlLookup[]>(`/api/sql/lookups/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   sqlProcesses: (alias: string) => j<SqlProcess[]>(`/api/sql/processes/${encodeURIComponent(alias)}`),
   sqlKill: (alias: string, id: number, mode: 'query' | 'connection') => post<{ ok: true; via: string }>(`/api/sql/processes/${encodeURIComponent(alias)}/${id}/kill`, { mode }),
+  usage: (days: number) => j<UsageReport>(`/api/usage?days=${days}`),
   sqlCancel: (id: string) => j<{ ok: boolean }>(`/api/sql/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 

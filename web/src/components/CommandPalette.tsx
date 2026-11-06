@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
+import { BarChart3, Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
@@ -26,6 +26,7 @@ export function CommandPalette() {
       { id: 'overview', label: 'Overview', hint: 'fleet board', icon: LayoutGrid, view: { kind: 'overview' } },
       { id: 'jira', label: 'Jira', hint: 'your tickets by status; move them or start a task', icon: KanbanSquare, view: { kind: 'jira' } },
       { id: 'jira-new', label: 'New Jira ticket', hint: 'create a ticket in Jira', icon: KanbanSquare, view: { kind: 'jira', create: true } },
+      { id: 'usage', label: 'Usage', hint: 'your Claude token usage by day, model and project', icon: BarChart3, view: { kind: 'usage' } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
       { id: 'sql', label: 'SQL', hint: 'queries over the Teleport tunnels: dev read-write, prod read-only', icon: Database, view: { kind: 'sql' } },
       { id: 'sql-new', label: 'New SQL tab', hint: 'a blank query tab', icon: Database, view: { kind: 'sql', lookup: { name: '', value: '', at: 0 } } },
