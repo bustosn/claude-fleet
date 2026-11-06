@@ -99,7 +99,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
   private cost(r: RunState): QaCost {
     const a = r.agents;
     return { agents: a.filter(x => x.chatId).length, turns: a.reduce((n, x) => n + x.turns, 0), inputTokens: a.reduce((n, x) => n + x.inputTokens, 0),
-      outputTokens: a.reduce((n, x) => n + x.outputTokens, 0), costUsd: a.reduce((n, x) => n + x.costUsd, 0), ms: (r.finishedAt || Date.now()) - r.startedAt };
+      outputTokens: a.reduce((n, x) => n + x.outputTokens, 0), costUsd: a.reduce((n, x) => n + x.costUsd, 0), ms: r.costBase.ms + (r.finishedAt || Date.now()) - r.startedAt };
   }
   private summary(r: RunState): QaRunSummary {
     const live = r.groups.filter(g => g.verdict === 'CONFIRMED' || g.verdict === 'PLAUSIBLE');
@@ -146,8 +146,10 @@ export class QaManager extends EventEmitter implements QaToolSink {
   resume(id: string) {
     const r = this.must(id);
     // A finished run with groups that never got a verdict (verifiers that failed) goes back to verify; nothing else is redone.
-    if (!r.paused && r.phase === 'done' && r.groups.some(g => !g.verdict)) { r.phase = 'verify'; r.finishedAt = null; r.startedAt = Date.now() - this.cost(r).ms; r.capHit = null; }
+    if (!r.paused && r.phase === 'done' && r.groups.some(g => !g.verdict)) { r.phase = 'verify'; r.capHit = null; }
     else if (!r.paused) throw new Error('This run is not waiting to be resumed.');
+    // The time cap and the cost's duration count active time: the segment that just ended is banked, and a new one starts now.
+    r.costBase.ms += Math.max(0, (r.finishedAt || r.updatedAt) - r.startedAt); r.startedAt = Date.now(); r.finishedAt = null;
     r.paused = false; r.error = null; r.limitHit = null;
     this.note(r, `Resumed at ${r.phase}.`);
     void this.drive(r);
@@ -302,7 +304,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
     for (let i = 0; i < todo.length; i += 5) batches.push(todo.slice(i, i + 5));
     const tpl = readPrompt('verifier');
     await Promise.all(batches.map(async batch => {
-      const a = this.newAgent(r, 'verifier', `verify-${r.agents.filter(x => x.role === 'verifier').length + 1}`, this.cfg.models.verifier);
+      const a = this.newAgent(r, 'verifier', `verify-${Math.max(0, ...r.agents.filter(x => x.role === 'verifier').map(x => Number(/-(\d+)$/.exec(x.label)?.[1] || 0))) + 1}`, this.cfg.models.verifier);
       a.groupIds = batch.map(g => g.id);
       const missing = () => batch.filter(g => !g.verdict).map(g => g.id);
       await this.runAgent(r, a, fill(tpl, { runId: r.id, packDir: r.pack!.dir, groups: batch.map(g => this.groupText(r, g)).join('\n\n') }),
@@ -361,7 +363,7 @@ export class QaManager extends EventEmitter implements QaToolSink {
       if (!this.active.has(r.id)) throw new Stopped();
       if (r.limitHit) { Object.assign(a, { status: 'failed', error: 'Not started: the usage limit was hit.' }); return; }
       const started = r.agents.filter(x => x.chatId).length;
-      const minutes = (Date.now() - r.startedAt) / 60000;
+      const minutes = (r.costBase.ms + Date.now() - r.startedAt) / 60000;
       if (started >= this.cfg.maxAgents || minutes >= this.cfg.maxMinutes) {
         r.capHit = started >= this.cfg.maxAgents ? `the agent cap (${this.cfg.maxAgents})` : `the time cap (${this.cfg.maxMinutes} min)`;
         Object.assign(a, { status: 'failed', error: `Not started: the run hit ${r.capHit}.` });
