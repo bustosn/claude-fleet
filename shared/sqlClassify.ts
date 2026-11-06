@@ -156,6 +156,54 @@ export function countParams(stmt: string): number {
   return tokenize(stmt).filter(t => t.type === 'punct' && t.value === '?').length;
 }
 
+/** A value the statement asks for: `:name`, or a positional `?` (name '?1', '?2', ...). `list` when it stands alone in IN (…), so a pasted list becomes one value each. */
+export interface Param { name: string; start: number; end: number; list: boolean; /** After LIMIT or OFFSET, where MySQL takes a bare number only. */ bare: boolean }
+
+/** The parameters a statement asks for, in order. `:name` is a colon right against a word; `:=` (assignment), `@x:=`, and times like '10:30' (strings) are not. */
+export function params(stmt: string): Param[] {
+  const toks = tokenize(stmt), out: Param[] = [];
+  const inList = (i: number, j: number) => toks[i - 1]?.value === '(' && toks[i - 2]?.type === 'word' && toks[i - 2].value === 'IN' && toks[j + 1]?.value === ')';
+  const bare = (i: number) => { const p = toks[i - 1], pp = toks[i - 3]; return (p?.type === 'word' && (p.value === 'LIMIT' || p.value === 'OFFSET')) || (p?.value === ',' && pp?.type === 'word' && pp.value === 'LIMIT'); };
+  let n = 0;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t.type !== 'punct') continue;
+    if (t.value === '?') { out.push({ name: `?${++n}`, start: t.start, end: t.end, list: inList(i, i), bare: bare(i) }); continue; }
+    const w = toks[i + 1];
+    if (t.value !== ':' || !w || w.type !== 'word' || w.start !== t.end) continue;
+    // The colon must start the name, not end something: "a:b" is not a parameter.
+    const prev = toks[i - 1];
+    if (prev && prev.end === t.start && prev.type !== 'punct') continue;
+    out.push({ name: stmt.slice(w.start, w.end).toLowerCase(), start: t.start, end: w.end, list: inList(i, i + 1), bare: bare(i) });
+    i++;
+  }
+  return out;
+}
+
+/** The parameter names a statement needs a value for, each once, in order. */
+export function paramNames(stmt: string): string[] { return [...new Set(params(stmt).map(p => p.name))]; }
+
+/** Puts the values in, each through `escape` (mysql2's, on the server), never pasted. A list parameter splits its value on commas and whitespace, up to `maxList` items.
+ *  `missing` names the parameters with no value; the text is then unusable. */
+export function bindParams(stmt: string, values: Record<string, string>, escape: (v: string) => string, maxList = 5000): { text: string; missing: string[]; error: string | null } {
+  const ps = params(stmt), missing = new Set<string>();
+  let out = '', at = 0, error: string | null = null;
+  for (const p of ps) {
+    const v = values[p.name];
+    out += stmt.slice(at, p.start); at = p.end;
+    if (v == null) { missing.add(p.name); continue; }
+    if (p.list) {
+      const items = v.split(/[\s,]+/).map(s => s.trim().replace(/^(['"])(.*)\1$/, '$2')).filter(Boolean);
+      if (!items.length) { missing.add(p.name); continue; }
+      if (items.length > maxList) error = `${p.name} has ${items.length.toLocaleString()} values; the most an IN list takes here is ${maxList.toLocaleString()}.`;
+      out += items.map(escape).join(', ');
+    } else if (p.bare && /^\d+$/.test(v.trim())) out += v.trim();
+    else out += escape(v);
+  }
+  out += stmt.slice(at);
+  return { text: out, missing: [...missing], error };
+}
+
 /** True when the statement already has a LIMIT outside any parentheses. */
 export function hasTopLevelLimit(stmt: string): boolean {
   return tokenize(stmt).some(t => t.type === 'word' && t.value === 'LIMIT' && t.depth === 0);

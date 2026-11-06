@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { deleteSession, renameSession } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig, root } from './config.js';
+import { CASE_JOINS, loadConfig, root } from './config.js';
 import { Collector } from './collector.js';
 import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
@@ -15,6 +15,7 @@ import { DialogueManager } from './dialogue.js';
 import { TaskManager } from './tasks.js';
 import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
 import { SqlManager } from './sql.js';
+import { SavedQueries, Snippets, defaultSnippets } from './sqlSaved.js';
 import { usageReport } from './usage.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
@@ -36,6 +37,8 @@ const teleport = new Teleport(config.teleport, stateDir, process.env.FLEET_CONFI
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
 const sql = new SqlManager(config.sql, teleport, stateDir);
+const saved = new SavedQueries(stateDir, a => sql.aliases().some(x => x.alias === a));
+const snippets = new Snippets(stateDir, defaultSnippets(CASE_JOINS));
 chats.terminals = terminals; chats.teleport = teleport; chats.sql = sql; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
@@ -439,9 +442,35 @@ app.post('/api/sql/run', (req, res) => {
     .finally(() => { finished = true; s.stop(); res.end(); });
 });
 app.delete('/api/sql/runs/:id', (req, res) => res.json({ ok: sql.cancel(String(req.params.id)) }));
+// An export: the read run again up to sql.exportMaxRows and streamed out as CSV, never held in memory. Closing the download cancels the query.
+app.post('/api/sql/export', (req, res) => {
+  let runId: string | null = null, started = false, finished = false;
+  const cell = (v: unknown) => { const s = v == null ? '' : String(v); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const name = String(req.body?.name || 'export').replace(/[^\w.-]+/g, '_').slice(0, 80) || 'export';
+  res.on('close', () => { if (!finished && runId) sql.cancel(runId); });
+  sql.exportRun(req.body?.req || {}, {
+    start: id => { runId = id; },
+    columns: cols => {
+      if (started) return;
+      started = true;
+      res.status(200).set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}.csv"`, 'X-Sql-Run': runId || '', 'Cache-Control': 'no-store' });
+      // The byte order mark makes Excel read the file as UTF-8.
+      res.write(`﻿${cols.map(c => cell(c.name)).join(',')}\r\n`);
+    },
+    rows: rows => { res.write(rows.map(r => `${r.map(cell).join(',')}\r\n`).join('')); },
+  }).then(r => {
+    finished = true;
+    if (!started) return res.status(400).json({ error: r.error || 'The statement returned no result set to export.' });
+    // An error after rows went out: end the download broken, so it is not taken for the whole result.
+    if (r.error) res.destroy(new Error(r.error)); else res.end();
+  }, err => { finished = true; if (!started) res.status(400).json({ error: errText(err) }); else res.destroy(); });
+});
 app.get('/api/sql/schema/:alias', sqlRoute(req => sql.schema(sqlName(req.params.alias), req.query.refresh === '1')));
 app.get('/api/sql/schema/:alias/:db/:table/columns', sqlRoute(req => sql.tableColumns(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 app.get('/api/sql/schema/:alias/:db/columns', sqlRoute(req => sql.columns(sqlName(req.params.alias), sqlName(req.params.db))));
+app.get('/api/sql/schema/:alias/:db/:table/meta', sqlRoute(req => sql.tableMeta(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
+app.get('/api/sql/schema/:alias/:db/:table/referenced-by', sqlRoute(req => sql.referencedBy(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table), req.query.all === '1')));
+app.get('/api/sql/find-columns/:alias', sqlRoute(req => sql.findColumns(sqlName(req.params.alias), String(req.query.q || ''), req.query.db ? sqlName(req.query.db) : null)));
 app.get('/api/sql/schema/:alias/:db/:table/indexes', sqlRoute(req => sql.indexes(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 // Per-connection logins, like DBeaver's. Passwords are written, never read back.
 app.get('/api/sql/credentials', sqlRoute(() => sql.credentials()));
@@ -454,6 +483,13 @@ app.put('/api/sql/tabs', sqlRoute(req => { sql.setTabs(req.body?.tabs); return {
 app.get('/api/sql/history', sqlRoute(() => sql.getHistory()));
 app.put('/api/sql/lookups/:name', sqlRoute(req => sql.saveLookup(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
 app.delete('/api/sql/lookups/:name', sqlRoute(req => sql.deleteLookup(String(req.params.name))));
+app.post('/api/sql/edit', sqlRoute(req => sql.applyEdit(sqlName(req.body?.alias), { op: req.body?.op === 'delete' ? 'delete' : 'update', db: sqlName(req.body?.db), table: sqlName(req.body?.table), pk: req.body?.pk && typeof req.body.pk === 'object' ? req.body.pk : {}, set: req.body?.set && typeof req.body.set === 'object' ? req.body.set : undefined }, req.body?.dryRun !== false)));
+app.get('/api/sql/saved', sqlRoute(req => { const all = saved.list(); const k = String(req.query.jira || '').toUpperCase(); return k ? all.filter(s => s.jira === k) : all; }));
+app.put('/api/sql/saved/:id', sqlRoute(req => saved.save(String(req.params.id), req.body || {})));
+app.delete('/api/sql/saved/:id', sqlRoute(req => saved.remove(String(req.params.id))));
+app.get('/api/sql/snippets', sqlRoute(() => snippets.list()));
+app.put('/api/sql/snippets/:name', sqlRoute(req => snippets.save(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
+app.delete('/api/sql/snippets/:name', sqlRoute(req => snippets.remove(String(req.params.name))));
 app.post('/api/sql/lookup', sqlRoute(req => sql.lookup(String(req.body?.name || ''), String(req.body?.value || ''))));
 
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.

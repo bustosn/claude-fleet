@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, UsageReport } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, SqlTableMeta, SqlReference, SqlColumnHit, SqlSaved, SqlSnippet, SqlValue, UsageReport } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -93,6 +93,17 @@ export const api = {
   sqlColumns: (alias: string, db: string) => j<Record<string, SqlColumnInfo[]>>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/columns`),
   sqlTableColumns: (alias: string, db: string, table: string) => j<SqlColumnInfo[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/columns`),
   sqlIndexes: (alias: string, db: string, table: string) => j<SqlIndexInfo[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/indexes`),
+  sqlTableMeta: (alias: string, db: string, table: string) => j<SqlTableMeta>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/meta`),
+  sqlReferencedBy: (alias: string, db: string, table: string, all = false) => j<SqlReference[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/referenced-by${all ? '?all=1' : ''}`),
+  sqlFindColumns: (alias: string, q: string, db?: string | null) => j<SqlColumnHit[]>(`/api/sql/find-columns/${encodeURIComponent(alias)}?q=${encodeURIComponent(q)}${db ? `&db=${encodeURIComponent(db)}` : ''}`),
+  sqlSaved: (jira?: string) => j<SqlSaved[]>(`/api/sql/saved${jira ? `?jira=${encodeURIComponent(jira)}` : ''}`),
+  sqlSaveQuery: (id: string, v: Partial<SqlSaved>) => j<SqlSaved[]>(`/api/sql/saved/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(v) }),
+  sqlDeleteSaved: (id: string) => j<SqlSaved[]>(`/api/sql/saved/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  sqlSnippets: () => j<SqlSnippet[]>('/api/sql/snippets'),
+  sqlSaveSnippet: (name: string, v: Partial<SqlSnippet> & { rename?: string }) => j<SqlSnippet[]>(`/api/sql/snippets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(v) }),
+  sqlDeleteSnippet: (name: string) => j<SqlSnippet[]>(`/api/sql/snippets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  sqlEdit: (body: { alias: string; op: 'update' | 'delete'; db: string; table: string; pk: Record<string, SqlValue>; set?: Record<string, SqlValue>; dryRun: boolean }) =>
+    post<{ sql: string; matches: number | null; affected: number | null }>('/api/sql/edit', body),
   sqlTabs: () => j<SqlTab[]>('/api/sql/tabs'),
   sqlSaveTabs: (tabs: SqlTab[]) => j<{ ok: true }>('/api/sql/tabs', { method: 'PUT', body: JSON.stringify({ tabs }) }),
   sqlHistory: () => j<SqlHistoryEntry[]>('/api/sql/history'),

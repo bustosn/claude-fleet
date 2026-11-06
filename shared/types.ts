@@ -261,7 +261,8 @@ export interface AwsStatus {
 // SQL view. A connection is a Teleport tunnel alias; prod ones are readers only, and every statement is read-only.
 export interface SqlAlias { alias: string; port: number; prod: boolean; label: string }
 export type SqlKind = 'number' | 'string' | 'date' | 'json' | 'blob';
-export interface SqlColumn { name: string; table: string; kind: SqlKind; type: string }
+/** `db` and `orgName` are where the column came from (empty for an expression), so a cell can follow a foreign key even under an alias. */
+export interface SqlColumn { name: string; table: string; kind: SqlKind; type: string; db?: string; orgName?: string }
 export type SqlValue = string | number | null;
 /** What a run streams: an id first, then the columns, rows in batches, and done or error. */
 export type SqlEvent =
@@ -273,10 +274,14 @@ export type SqlEvent =
   | { t: 'error'; message: string; code: string | null; offset: number | null; length: number; line: number | null };
 export interface SqlRunRequest { alias: string; text: string; cursor: number; selection?: { from: number; to: number } | null; db?: string | null; limit?: 'auto' | 'max';
   /** Run a risky write (UPDATE or DELETE with no WHERE, TRUNCATE, DROP) that the server asked about with an error coded CONFIRM. */
-  confirm?: boolean }
+  confirm?: boolean;
+  /** Values for the statement's :name and ? parameters (shared/sqlClassify params), bound on the server through mysql2's escaping. */
+  params?: Record<string, string> }
 export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
 /** A tab in the SQL view: a query editor, or the connection's live process list. */
-export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes' }
+export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes';
+  /** The saved query this tab was opened from or saved as: Ctrl+S updates it. */
+  savedId?: string }
 /** A palette shortcut like "cb 123456": every ? in `sql` gets the value, escaped. `type` number passes it unquoted (for numeric ids, so the index is used).
  *  `source`: from fleet.config.json (or the built-ins), or made in the SQL view, which can also override a config one by name. */
 export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid'; type?: 'text' | 'number'; source?: 'config' | 'user' }
@@ -298,6 +303,22 @@ export interface UsageReport {
   models: ({ model: string } & UsageTotals)[];
   projects: ({ project: string; sessions: number } & UsageTotals)[];
 }
-export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null }
+export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null;
+  /** Column name to the db.table its value is the id of, for keys the schema does not declare. */
+  fkGuesses: Record<string, string>;
+  /** The most rows an export re-run on the server writes. */
+  exportMaxRows: number }
+/** A column that points at another table's row: declared in the schema (`fk`) or guessed from its name (`guess`). */
+export interface SqlFk { column: string; refDb: string; refTable: string; refColumn: string; source: 'fk' | 'guess' }
+/** One table, for the schema tree's hover card and for following keys. Sizes in bytes; times as the server writes them. */
+export interface SqlTableMeta { db: string; table: string; type: 'table' | 'view'; engine: string | null; rows: number | null; dataBytes: number | null; indexBytes: number | null;
+  created: string | null; updated: string | null; comment: string; pk: string[]; fks: SqlFk[] }
+/** A column in another table that points at this one. `indexed` when it leads an index, so looking it up is cheap. */
+export interface SqlReference { db: string; table: string; column: string; refColumn: string; indexed: boolean; source: 'fk' | 'guess' }
+export interface SqlColumnHit { db: string; table: string; column: string; type: string; key: string }
+/** A saved query. `alias` and `db` are where it opens (null: the current tab's); `jira` ties it to a ticket card. */
+export interface SqlSaved { id: string; name: string; folder: string; jira: string | null; alias: string | null; db: string | null; sql: string; created: number; updated: number }
+/** A Tab-expanded template: type `name`, press Tab. ${field} placeholders are filled in turn (Tab moves on); fields with one name change together. */
+export interface SqlSnippet { name: string; label: string; body: string; source?: 'config' | 'user' }
 /** A connection's login as the SQL view shows it: never the password, only whether one is set. */
 export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }

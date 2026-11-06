@@ -449,6 +449,50 @@ textarea.rich-code-body { display: block; width: 100%; padding: 10px 12px; borde
 .sql-fval-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sql-factions { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; padding-left: 6px; background: var(--hover); opacity: 0; }
 .sql-field:hover .sql-factions { opacity: 1; }
+.iconbtn.is-on { background: var(--accent-soft); color: var(--accent); }
+/* The schema tree's table card */
+.sql-info { position: fixed; z-index: 45; width: 290px; padding: 9px 11px; font-size: 11.5px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: var(--shadow); pointer-events: none; animation: fade 0.1s var(--ease); }
+.sql-info-title { margin-bottom: 6px; font-weight: 600; font-size: 12px; overflow-wrap: anywhere; }
+.sql-info-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.sql-info-grid dt { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint); }
+.sql-info-grid dd { margin: 0; text-align: right; }
+.sql-info-fks { display: grid; gap: 2px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 11px; color: var(--fg-muted); }
+/* A cell whose value is a key: Ctrl+click follows it */
+.sql-cell.fk .truncate { text-decoration: underline dotted color-mix(in srgb, var(--accent) 55%, transparent); text-underline-offset: 3px; }
+.sql-fval-text.fk { text-decoration: underline dotted color-mix(in srgb, var(--accent) 55%, transparent); text-underline-offset: 3px; }
+.sql-cell.fk.mod:hover { cursor: pointer; color: var(--accent); }
+.sql-refs { display: grid; max-height: 50vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+.sql-ref { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; font: 12px var(--mono); text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.sql-ref:hover, .sql-ref.is-sel { background: var(--hover); }
+.sql-ref.is-sel { box-shadow: inset 2px 0 0 var(--accent); }
+.sql-hit { display: grid; gap: 1px; width: 100%; padding: 4px 10px; font: 11.5px var(--mono); text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.sql-hit:hover { background: var(--hover); }
+/* Editing in place (dev only) */
+.sql-cell.edited { background: color-mix(in srgb, var(--warn) 16%, transparent); box-shadow: inset 3px 0 0 var(--warn); }
+.sql-cell.editable:hover { cursor: text; }
+.sql-cell-input { width: 100%; height: 100%; margin: 0 -4px; padding: 0 4px; font: inherit; color: var(--fg); background: var(--surface); border: 0; outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Result tabs: the live result, pinned ones, a script's statements */
+.sql-rtabs { display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 6px; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
+.sql-rtab { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 8px; border-radius: 6px; font-size: 11.5px; color: var(--fg-muted); cursor: pointer; flex: none; border: 1px solid transparent; white-space: nowrap; }
+.sql-rtab:hover { color: var(--fg); background: var(--hover); }
+.sql-rtab.is-active { background: var(--raised); color: var(--fg); border-color: var(--line); }
+.sql-rtab.pin.is-active { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.sql-rtab .dot { width: 6px; height: 6px; box-shadow: none !important; }
+.sql-rtab-x { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; color: var(--fg-faint); opacity: 0; }
+.sql-rtab:hover .sql-rtab-x, .sql-rtab.is-active .sql-rtab-x { opacity: 1; }
+.sql-rtab-x:hover { background: var(--hover); color: var(--fg); }
+.sql-script-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 12px; font-size: 12px; text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.sql-script-row:hover:not(:disabled) { background: var(--hover); }
+.sql-script-row:disabled { color: var(--fg-faint); cursor: default; }
+/* Column stats */
+.sql-stat { position: relative; overflow: hidden; }
+.sql-stat-bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent-soft); }
+/* EXPLAIN plan */
+.sql-plan-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 28px; padding-right: 10px; font-size: 12px; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.sql-plan-row.warn { background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.sql-plan-row.crit { background: var(--crit-soft); }
+.sql-plan-cond { padding-right: 10px; padding-bottom: 3px; font-size: 11px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sql-params { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; }
 .sql-pre { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .sql-status { display: flex; align-items: center; gap: 10px; height: 26px; padding: 0 10px; border-top: 1px solid var(--line); font-size: 11.5px; flex: none; background: color-mix(in srgb, var(--raised) 35%, var(--surface)); }

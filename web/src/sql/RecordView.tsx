@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react';
-import { Braces, ChevronLeft, ChevronRight, ClipboardCopy, Maximize2, Search } from 'lucide-react';
-import type { SqlColumn, SqlValue } from '../lib/api';
+import { Braces, ChevronLeft, ChevronRight, ClipboardCopy, CornerDownRight, Link2, Maximize2, Search } from 'lucide-react';
+import type { SqlColumn, SqlFk, SqlValue } from '../lib/api';
 import { actions } from '../lib/store';
 import { copy, csv, rowJson } from './copy';
 import { looksJson } from './ResultGrid';
 
 /** One row turned on its side: field and value, searchable, with the NULL fields folded away. The usual way to read a single case. */
-export function RecordView({ columns, row, position, count, onMove, onOpenCell }: {
+export function RecordView({ columns, row, position, count, onMove, onOpenCell, keys, onFollow, onReferencedBy }: {
   columns: SqlColumn[]; row: SqlValue[] | null; position: number; count: number; onMove: (to: number) => void; onOpenCell: (col: number) => void;
+  /** As in ResultGrid: a key field gets a button to open the row it points at, and the primary key one to what points at it. */
+  keys?: { fk: (col: number) => SqlFk | null; pk: (col: number) => { db: string; table: string; column: string } | null };
+  onFollow?: (fk: SqlFk, v: SqlValue) => void; onReferencedBy?: (target: { db: string; table: string; column: string }, v: SqlValue) => void;
 }) {
   const [q, setQ] = useState('');
   const [showNulls, setShowNulls] = useState(false);
@@ -41,8 +44,10 @@ export function RecordView({ columns, row, position, count, onMove, onOpenCell }
           <div key={i} className="sql-field">
             <div className="sql-fname" title={`${c.name} · ${c.type}`}>{c.name}<span className="sql-ftype">{c.type}</span></div>
             <div className={`sql-fval ${c.kind === 'number' ? 'num' : ''}`}>
-              {v == null ? <span className="sql-null">NULL</span> : <span className="sql-fval-text">{String(v).length > 600 ? `${String(v).slice(0, 600)}…` : String(v)}</span>}
+              {v == null ? <span className="sql-null">NULL</span> : <span className={`sql-fval-text ${keys?.fk(i) ? "fk" : ""}`}>{String(v).length > 600 ? `${String(v).slice(0, 600)}…` : String(v)}</span>}
               <span className="sql-factions">
+                {(() => { const fk = v != null && onFollow ? keys?.fk(i) : null; return fk ? <button className="iconbtn h-6 w-6" title={`Open ${fk.refDb}.${fk.refTable} where ${fk.refColumn} = ${v}`} aria-label={`Open ${fk.refTable} ${v}`} onClick={() => onFollow!(fk, v)}><Link2 size={12} /></button> : null; })()}
+                {(() => { const pk = v != null && onReferencedBy ? keys?.pk(i) : null; return pk ? <button className="iconbtn h-6 w-6" title="Referenced by…" aria-label="Referenced by" onClick={() => onReferencedBy!(pk, v)}><CornerDownRight size={12} /></button> : null; })()}
                 {v != null && (looksJson(v) || String(v).length > 120) && <button className="iconbtn h-6 w-6" aria-label={`Open ${c.name}`} onClick={() => onOpenCell(i)}>{looksJson(v) ? <Braces size={12} /> : <Maximize2 size={12} />}</button>}
                 <button className="iconbtn h-6 w-6" aria-label={`Copy ${c.name}`} onClick={async () => { const ok = await copy(v == null ? 'NULL' : String(v)); actions.toast(ok ? `Copied ${c.name}` : 'The clipboard is not available here', ok ? 'info' : 'error'); }}><ClipboardCopy size={12} /></button>
               </span>
