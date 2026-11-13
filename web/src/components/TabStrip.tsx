@@ -3,6 +3,7 @@ import { BarChart3, Bot, Database, FolderGit2, PictureInPicture2, GitBranch, Kan
 import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
+import { BackgroundCount } from './ui';
 import { actions, tabKey, useStore, type Tab, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { POPOUT, popOut } from '../lib/popout';
@@ -45,7 +46,7 @@ export function TabStrip() {
 
 interface TabDrag { dragging: boolean; dropAt?: 'before' | 'after'; onDragStart: () => void; onDragEnd: () => void; onDragOver: (e: DragEvent<HTMLDivElement>) => void; onDrop: (e: DragEvent<HTMLDivElement>) => void }
 
-function TabButton({ tab, active, label, dragging, dropAt, onDragStart, onDragEnd, onDragOver, onDrop }: { tab: Tab; active: boolean; label: { text: string; hint: string; state?: string } } & TabDrag) {
+function TabButton({ tab, active, label, dragging, dropAt, onDragStart, onDragEnd, onDragOver, onDrop }: { tab: Tab; active: boolean; label: { text: string; hint: string; state?: string; bg?: number } } & TabDrag) {
   const Icon = iconFor(tab.view, label.state);
   const close = (e: MouseEvent) => { e.stopPropagation(); actions.closeTab(tab.key); };
   // Moves the tab into its own window; it comes back with Pop back in there.
@@ -68,6 +69,7 @@ function TabButton({ tab, active, label, dragging, dropAt, onDragStart, onDragEn
     >
       {label.state ? <span className="dot shrink-0" data-s={label.state} aria-hidden="true" /> : <Icon size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />}
       <span className="min-w-0 flex-1 truncate">{label.text}</span>
+      <BackgroundCount n={label.bg || 0} />
       <button className="iconbtn shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" style={{ width: 20, height: 20 }} aria-label={`Pop out ${label.text}`} title="Pop out into its own window" onClick={pop}>
         <PictureInPicture2 size={12} aria-hidden="true" />
       </button>
@@ -93,7 +95,7 @@ export function iconFor(v: View, state?: string) {
 }
 
 /** Live titles: a renamed chat or a session's current state show up in its tab without reopening it. */
-export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: string; state?: string } {
+export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: string; state?: string; bg?: number } {
   switch (v.kind) {
     case 'overview': return { text: 'Overview', hint: 'Overview' };
     case 'hub': return { text: 'Hub', hint: 'AWS credentials and other chores' };
@@ -106,7 +108,10 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
       const s = snap?.sessions.find(x => x.chatId === v.chatId);
       const c = snap?.chats.find(x => x.id === v.chatId);
       const text = s?.title || c?.title || v.title || 'Chat';
-      return { text, hint: `${text}${c?.repo ? `\n${c.repo} / ${c.branch || ''}` : ''}`, state: s?.state || c?.status };
+      const bg = c?.background.length || 0;
+      return { text, hint: `${text}${c?.repo ? `
+${c.repo} / ${c.branch || ''}` : ''}${bg ? `
+${bg} running in the background` : ''}`, state: s?.state || c?.status, bg };
     }
     case 'session': {
       const s = snap?.sessions.find(x => x.id === v.id);

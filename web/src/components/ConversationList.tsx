@@ -5,6 +5,7 @@ import { age, shortPath } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu, type MenuItem } from './ContextMenu';
+import { BackgroundCount } from './ui';
 import { exportConversation, forwardLastReply, openMove } from './SidebarDialogs';
 import { SectionHeader, useSectionOpen } from './SectionHeader';
 
@@ -64,6 +65,7 @@ export function ConversationList() {
           {live && <span className="dot" data-s={live} aria-label={live} />}
           {c.pinned && <Pin size={11} className="shrink-0 text-fg-faint" aria-label="Pinned" />}
           <span className={`grow ${c.archived ? 'text-fg-muted' : ''}`}>{c.title}</span>
+          <BackgroundCount n={c.chat?.background || 0} />
           <span className="num text-[10px] text-fg-faint">{age(c.lastModified)}</span>
         </button>
       </div>

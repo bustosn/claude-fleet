@@ -11,7 +11,7 @@ import { ForwardDialog } from '../components/SidebarDialogs';
 import { AttachmentChips, MAX_ATTACHMENT, clipboardImages, fmtBytes, readAttachment, toSend, type Pending } from '../components/Attachments';
 import type { AskQuestion, EditPreview, TodoItem, TokenUsage } from '../../../shared/types';
 import { CodeTextarea, type CodeTextareaHandle } from '../components/CodeTextarea';
-import { ContextPopover, DiffView, EFFORTS, FileMenu, MODES, PermissionCard, RewindButton, TaskRow, TodoPanel, type TaskEntry } from './chatParts';
+import { ContextPopover, DiffView, EFFORTS, FileMenu, MODES, PermissionCard, BackgroundBar, RewindButton, TaskRow, TodoPanel, type TaskEntry } from './chatParts';
 
 type Entry =
   | { k: 'user'; id: number; text: string; origin: MessageOrigin; attachments?: string[]; uuid?: string }
@@ -93,6 +93,7 @@ function apply(state: ChatState, ev: ChatEvent, history: boolean): ChatState {
     case 'init': if (summary && ev.model) summary = { ...summary, model: ev.model }; break;
     case 'model': push({ k: 'sys', text: `model set to ${ev.model}` }); if (summary) summary = { ...summary, model: ev.model }; break;
     case 'todos': todos = ev.todos; break;
+    case 'background': if (summary) summary = { ...summary, background: ev.tasks }; break;
     case 'mode': push({ k: 'sys', text: `permission mode: ${MODES.find(m => m.value === ev.mode)?.label || ev.mode}` }); if (summary) summary = { ...summary, permissionMode: ev.mode }; break;
     case 'task': {
       const { t: _t, at: _at, ...rest } = ev;
@@ -320,6 +321,7 @@ export function ChatView({ chatId }: { chatId: string }) {
         </div>
       </div>
 
+      {s && s.background.length > 0 && <BackgroundBar tasks={s.background} chatId={chatId} />}
       {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
       <TokenStrip t={state.tokens} running={state.status === 'running'} chatId={chatId} ready={initDone && state.status !== 'ended'} />
       <form className="composer" onSubmit={send}>

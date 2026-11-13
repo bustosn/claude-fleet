@@ -6,6 +6,7 @@ import { shortPath, ticketKey } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu, type MenuItem } from './ContextMenu';
+import { BackgroundCount } from './ui';
 import { exportConversation, forwardLastReply, openMove } from './SidebarDialogs';
 
 /** Repos → worktrees → the sessions living in each. The spine of the app. */
@@ -171,6 +172,7 @@ export function SessionRow({ session: s, indent }: { session: Session; indent: n
   const selected = (view.kind === 'chat' && s.chatId === view.chatId) || (view.kind === 'session' && view.id === s.id);
   const Icon = s.kind === 'dashboard' ? MessageSquare : s.kind === 'background' ? Bot : Terminal;
   const open = () => s.kind === 'dashboard' && s.chatId ? actions.go({ kind: 'chat', chatId: s.chatId, title: s.title }) : actions.go({ kind: 'session', id: s.id });
+  const bg = useStore(st => st.snapshot?.chats.find(c => c.id === s.chatId)?.background.length ?? 0);
   const [menu, openMenu] = useContextMenu();
   const items: MenuItem[] = [
     { label: 'Open', icon: Icon, onSelect: open },
@@ -187,6 +189,7 @@ export function SessionRow({ session: s, indent }: { session: Session; indent: n
       <button className="row" style={{ paddingLeft: indent }} aria-current={selected ? 'true' : undefined} onClick={open} onContextMenu={e => openMenu(e, items)} title={`${s.title}\n${s.kind === 'dashboard' ? 'chat' : s.kind === 'background' ? 'background' : 'terminal'} · ${s.state}${s.locatedBy && s.locatedBy !== 'cwd' ? `\nplaced here by ${s.locatedBy}` : ''}`}>
         <span className="dot" data-s={s.state} aria-hidden="true" />
         <span className={`grow ${quiet(s.state) ? 'text-fg-muted' : 'text-fg'}`}>{s.title || s.name || s.id}</span>
+        <BackgroundCount n={bg} />
       </button>
       {menu}
     </>
