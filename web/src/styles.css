@@ -282,6 +282,9 @@ dialog label { display: grid; gap: 4px; margin-bottom: 10px; font-size: 12px; co
 .todo-panel { width: 100%; max-width: 900px; margin: 0 auto 6px; padding: 0 20px; }
 .todo-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 12px; box-shadow: var(--shadow-sm); text-align: left; }
 .todo-panel:has(.todo-list) .todo-head { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.sidebar-edge { position: absolute; top: 50%; right: -11px; z-index: 11; width: 22px; height: 40px; padding: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg-muted); opacity: 0; transition: opacity .12s; }
+.sidebar:hover .sidebar-edge, .sidebar-edge:focus-visible, .sidebar-edge.collapsed { opacity: 1; }
+.sidebar-edge:hover { color: var(--fg); background: var(--hover); }
 .todo-bar { flex: none; width: 70px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; }
 .todo-bar i { display: block; height: 100%; background: var(--grad); border-radius: 999px; transition: width 0.4s var(--ease); }
 .todo-list { margin: 0; padding: 6px 12px 8px; list-style: none; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px; background: var(--surface); display: grid; gap: 3px; font-size: 12.5px; max-height: 180px; overflow: auto; }

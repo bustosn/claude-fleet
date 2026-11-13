@@ -10,7 +10,8 @@ import { StatusStrip } from './components/StatusStrip';
 import { CommandPalette } from './components/CommandPalette';
 import { Toast } from './components/ui';
 import { Notifier } from './components/Notifier';
-import { modKey } from './lib/platform';
+import { modKey, MOD } from './lib/platform';
+import { ChevronRight } from 'lucide-react';
 
 export function App() {
   const collapsed = useStore(s => s.sidebarCollapsed);
@@ -50,7 +51,10 @@ export function App() {
       <TitleBar />
       <div className="grid min-h-0" style={{ gridTemplateColumns: collapsed ? '1fr' : 'auto 1fr' }}>
         {!collapsed && <Sidebar />}
-        <Main />
+        <div className="relative grid min-h-0 min-w-0">
+          <Main />
+          {collapsed && <button className="sidebar-edge collapsed" style={{ left: 0, right: 'auto', borderRadius: '0 8px 8px 0' }} aria-label="Show sidebar" title={`Show sidebar (${MOD}B)`} onClick={actions.toggleSidebar}><ChevronRight size={14} aria-hidden="true" /></button>}
+        </div>
       </div>
       <StatusStrip />
       <CommandPalette />

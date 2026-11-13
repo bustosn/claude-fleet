@@ -1,5 +1,5 @@
 import { useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { ChevronDown, Database, KanbanSquare, ListPlus, MessageSquarePlus, Plus, SquareTerminal, Users } from 'lucide-react';
+import { ChevronDown, ChevronLeft, Database, KanbanSquare, ListPlus, MessageSquarePlus, Plus, SquareTerminal, Users } from 'lucide-react';
 import { actions, useStore } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { useContextMenu } from './ContextMenu';
@@ -7,6 +7,7 @@ import { ProjectTree } from './ProjectTree';
 import { ConversationList } from './ConversationList';
 import { TerminalList } from './TerminalList';
 import { DialogueList } from './DialogueList';
+import { MOD } from '../lib/platform';
 import { SidebarDialogs } from './SidebarDialogs';
 
 export function Sidebar() {
@@ -38,6 +39,7 @@ export function Sidebar() {
         <ConversationList />
       </div>
       <SidebarDialogs />
+      <button className="sidebar-edge" aria-label="Hide sidebar" title={`Hide sidebar (${MOD}B)`} onClick={actions.toggleSidebar}><ChevronLeft size={14} aria-hidden="true" /></button>
       <div
         role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabIndex={0}
         className="absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize"
