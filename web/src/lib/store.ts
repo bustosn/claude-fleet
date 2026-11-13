@@ -87,11 +87,11 @@ export const actions = {
   go: (view: View, opts: { replace?: string } = {}) => set(s => {
     // In a popped-out window, any other view opens in the main window.
     if (POPOUT && (view.kind === 'overview' || tabKey(view) !== tabKey(POPOUT))) { post({ t: 'go', view }); return { paletteOpen: false }; }
-    if (view.kind === 'overview' || isPage(view)) { persistTabs(s.tabs, view); return { view, paletteOpen: false }; }
     const key = tabKey(view);
     // A view that lives in a popped-out window goes there (a SQL lookup runs in the popped-out SQL view), and that window comes to the front.
-    const popped = POPOUT ? null : poppedWindow(key);
+    const popped = POPOUT || view.kind === 'overview' ? null : poppedWindow(key);
     if (popped) { post({ t: 'go', view, to: key }); popped.focus(); return { paletteOpen: false }; }
+    if (view.kind === 'overview' || isPage(view)) { persistTabs(s.tabs, view); return { view, paletteOpen: false }; }
     let tabs = s.tabs;
     const at = tabs.findIndex(t => t.key === key);
     const replaceAt = opts.replace ? tabs.findIndex(t => t.key === opts.replace) : -1;
