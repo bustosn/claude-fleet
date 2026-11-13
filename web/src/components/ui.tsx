@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react';
+import { Layers } from 'lucide-react';
 import { api } from '../lib/api';
 import { shortPath, stateLabel } from '../lib/format';
 import { actions, useStore } from '../lib/store';
+
+/** How many background tasks a chat has running. Nothing when there are none. */
+export function BackgroundCount({ n }: { n: number }) {
+  if (!n) return null;
+  return <span className="bg-count" title={`${n} running in the background`} aria-label={`${n} running in the background`}><Layers size={11} className="animate-pulse" aria-hidden="true" /><span className="num">{n}</span></span>;
+}
 
 /** Status dot with its label beside it, so state is never color alone. */
 export function Status({ state, label, className = '' }: { state: string; label?: string; className?: string }) {

@@ -279,6 +279,12 @@ dialog label { display: grid; gap: 4px; margin-bottom: 10px; font-size: 12px; co
 .msg.task.failed .task-icon, .msg.task.stopped .task-icon { background: var(--crit-soft); color: var(--crit); }
 
 /* Pinned task list above the composer. */
+.bg-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.bg-item { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 8px; background: var(--surface); font-size: 12px; }
+.bg-count { display: inline-flex; align-items: center; gap: 2px; flex: none; margin-left: 4px; font-size: 10px; line-height: 1; color: var(--accent); }
+.sidebar-edge { position: absolute; top: 50%; right: -11px; z-index: 11; width: 22px; height: 40px; padding: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg-muted); opacity: 0; transition: opacity .12s; }
+.sidebar:hover .sidebar-edge, .sidebar-edge:focus-visible, .sidebar-edge.collapsed { opacity: 1; }
+.sidebar-edge:hover { color: var(--fg); background: var(--hover); }
 .todo-panel { width: 100%; max-width: 900px; margin: 0 auto 6px; padding: 0 20px; }
 .todo-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 12px; box-shadow: var(--shadow-sm); text-align: left; }
 .todo-panel:has(.todo-list) .todo-head { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }

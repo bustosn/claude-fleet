@@ -142,7 +142,7 @@ export class Collector extends EventEmitter {
       const a = running.get(c.sessionId); const wt = this.locate(c.cwd, c.sessionId, c.title); const chat = chatBySession.get(c.sessionId);
       return { ...c, repo: wt?.repo || null, branch: wt?.branch || null, worktree: wt?.path || null, locatedBy: wt?.by || null,
         running: a ? { id: a.id, kind: a.kind, name: a.name, state: a.state } : null,
-        chat: chat ? { id: chat.id, status: chat.status } : null, ...this.marks.state(c.sessionId, c.lastModified) };
+        chat: chat ? { id: chat.id, status: chat.status, background: chat.background.length } : null, ...this.marks.state(c.sessionId, c.lastModified) };
     });
 
     const byWorktree = new Map<string, Worktree['sessions']>();

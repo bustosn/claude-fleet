@@ -38,7 +38,7 @@ export interface Conversation {
   createdAt: number | null; lastModified: number | null; fileSize: number | null;
   repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null;
   running: { id: string; kind: SessionKind; name: string; state: string } | null;
-  chat: { id: string; status: ChatStatus } | null;
+  chat: { id: string; status: ChatStatus; background: number } | null;
   /** Listed under Archived, collapsed, instead of with the recent ones: put there by the user, or idle long enough (`autoArchived`). */
   archived: boolean; autoArchived: boolean;
   /** Kept at the top of the recent ones, and never archived automatically. */
@@ -77,11 +77,16 @@ export type PermissionChoice = { behavior: 'allow' | 'deny'; message?: string; a
 /** Token counts. `input` is uncached prompt tokens; cacheRead and cacheWrite are the cached parts of the same prompt. */
 export interface TokenUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
 
+/** Work a chat started that keeps running after its turn ends: a background shell command, a subagent, a monitor, a workflow. */
+export interface BackgroundTask { taskId: string; kind: string; description: string }
+
 export interface ChatSummary {
   id: string; sessionId: string | null; resumeId: string | null; forked: boolean; cwd: string; model: string; title: string;
   repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null; permissionMode: string; effort: string | null; status: ChatStatus; startedAt: number;
   pending: PermissionView[]; error: string | null;
   asksIn: { id: string; from: string }[]; asksOut: { id: string; to: string }[];
+  /** What is still running in the background right now, whether or not a turn is in progress. */
+  background: BackgroundTask[];
   /** Set while a dialogue orchestrates this chat: its turns arrive from Fleet, not from the person typing. */
   dialogueId: string | null;
   /** Set when the chat is the worker on a board task. */
@@ -201,6 +206,8 @@ export type ChatEvent =
   | { t: 'mode'; mode: string; at: number }
   /** A subagent or background task: one event per change, matched by `taskId`. */
   | { t: 'task'; taskId: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description: string; kind: string; tools: number; tokens: number; lastTool?: string; summary?: string; at: number }
+  /** The full set of live background tasks after a change (replaces the previous set). */
+  | { t: 'background'; tasks: BackgroundTask[]; at: number }
   | { t: 'assistant'; uuid: string; blocks: ContentBlock[]; at: number }
   | { t: 'tool_result'; toolUseId: string; isError: boolean; text: string; length: number; at: number }
   | ({ t: 'permission'; at: number } & PermissionView)
