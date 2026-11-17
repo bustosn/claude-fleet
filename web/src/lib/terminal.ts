@@ -13,6 +13,16 @@ export function currentFolder(): string | undefined {
   return undefined;
 }
 
+/** Shows herdr in its terminal tab, starting the client if needed. With a folder, herdr's focus moves to that folder's workspace (made if missing). */
+export async function openHerdr(cwd?: string, paneId?: string) {
+  try {
+    const r = await api.openHerdr(cwd);
+    if (paneId) await api.focusHerdrAgent(paneId).catch(() => {});
+    actions.go({ kind: 'terminal', id: r.terminal.id });
+    if (r.note) actions.toast(`herdr opened, but could not switch workspace: ${r.note}`, 'error');
+  } catch (e: any) { actions.toast(e.message, 'error'); }
+}
+
 export async function openTerminal(cwd: string | undefined = currentFolder()) {
   try { const t = await api.openTerminal(cwd); actions.go({ kind: 'terminal', id: t.id }); }
   catch (e: any) { actions.toast(`Could not open a terminal: ${e.message}`, 'error'); }
