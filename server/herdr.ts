@@ -14,13 +14,16 @@ export function findHerdr(): string | null {
   const exe = process.platform === 'win32' ? ['herdr.exe', 'herdr.cmd', 'herdr.bat'] : ['herdr'];
   const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
   dirs.push(path.join(os.homedir(), '.local', 'bin'), path.join(os.homedir(), '.cargo', 'bin'));
-  if (process.env.LOCALAPPDATA) dirs.push(path.join(process.env.LOCALAPPDATA, 'Programs', 'herdr'));
+  // The Windows installer puts a versioned release under ~/.herdr and keeps this folder as a stable alias; PATH only reaches a server started after it ran.
+  if (process.env.LOCALAPPDATA) dirs.push(path.join(process.env.LOCALAPPDATA, 'Programs', 'Herdr', 'bin'));
+  dirs.push(path.join(os.homedir(), '.herdr', 'packages', 'standalone', 'current'));
   for (const d of dirs) for (const e of exe) { const p = path.join(d, e); try { if (fs.statSync(p).isFile()) return p; } catch {} }
   return null;
 }
 
 /** herdr's API socket for the default session. On Windows it is a named pipe called `\\.\pipe\` plus the socket file's path. */
 function socketPath(): string | null {
+  if (process.env.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH;
   if (process.platform === 'win32') {
     const dir = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
     return `\\\\.\\pipe\\${path.join(dir, 'herdr', 'herdr.sock')}`;
