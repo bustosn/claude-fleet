@@ -110,10 +110,21 @@ test('dev connections: any one statement, transactions refused, risky writes fla
   for (const r of ['SELECT 1', 'SHOW TABLES']) assert.deepEqual([classifyWrite(r).ok, classifyWrite(r).write], [true, false], r);
   const fine = ["UPDATE cb911.t SET a = 1 WHERE id = 5", 'DELETE FROM t WHERE id IN (1, 2)', "INSERT INTO t (a) VALUES (1)", 'CREATE TABLE x (id INT)', 'ALTER TABLE x ADD COLUMN b INT', 'INSERT INTO t SELECT * FROM u'];
   for (const w of fine) { const c = classifyWrite(w); assert.equal(c.ok, true, w); assert.equal(c.write, true, w); assert.equal(c.danger, null, w); }
+  assert.equal(classifyWrite('DROP TEMPORARY TABLE x').danger, null);
   const risky = ['UPDATE t SET a = 1', 'DELETE FROM t', 'UPDATE t SET a = (SELECT b FROM u WHERE u.id = 1)', 'TRUNCATE TABLE t', 'DROP TABLE t', 'WITH x AS (SELECT 1) DELETE FROM t'];
   for (const w of risky) { const c = classifyWrite(w); assert.equal(c.ok, true, w); assert.ok(c.danger, w); }
-  for (const t of ['BEGIN', 'START TRANSACTION', 'COMMIT', 'ROLLBACK', 'SET autocommit = 0', 'LOCK TABLES t WRITE', 'UPDATE t SET a = 1 WHERE id = 1; DELETE FROM t'])
+  for (const t of ['SET autocommit = 0', 'SET SESSION autocommit = 0', 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED', 'LOCK TABLES t WRITE', 'UNLOCK TABLES', 'XA START x', 'START SLAVE', 'UPDATE t SET a = 1 WHERE id = 1; DELETE FROM t'])
     assert.equal(classifyWrite(t).ok, false, t);
+  // Transaction control is allowed and labeled; the server pins a connection to the tab for it.
+  const tx: [string, string][] = [['BEGIN', 'begin'], ['begin work', 'begin'], ['START TRANSACTION', 'begin'], ['start transaction read write', 'begin'], ['COMMIT', 'commit'], ['commit work', 'commit'],
+    ['ROLLBACK', 'rollback'], ['ROLLBACK TO SAVEPOINT a', 'savepoint'], ['rollback work to a', 'savepoint'], ['SAVEPOINT a', 'savepoint'], ['RELEASE SAVEPOINT a', 'savepoint']];
+  for (const [s, want] of tx) { const c = classifyWrite(s); assert.equal(c.ok, true, s); assert.equal(c.tx, want, s); }
+  // DDL commits an open transaction in MySQL; DML does not.
+  for (const s of ['ALTER TABLE x ADD b INT', 'CREATE TABLE y (id INT)', 'TRUNCATE TABLE t', 'DROP TABLE t']) assert.equal(classifyWrite(s).implicitCommit, true, s);
+  for (const s of ['UPDATE t SET a = 1 WHERE id = 1', 'INSERT INTO t VALUES (1)', 'DELETE FROM t WHERE id = 1', 'CREATE TEMPORARY TABLE x (id INT)', 'DROP TEMPORARY TABLE x'])
+    assert.equal(classifyWrite(s).implicitCommit, undefined, s);
+  // Prod never runs transaction control.
+  for (const s of ['BEGIN', 'START TRANSACTION', 'COMMIT']) assert.equal(classify(s).ok, false, s);
   // Prod keeps the read-only check.
   assert.equal(classify('UPDATE t SET a = 1 WHERE id = 5').ok, false);
 });

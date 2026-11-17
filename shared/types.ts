@@ -285,12 +285,18 @@ export type SqlEvent =
   | { t: 'columns'; columns: SqlColumn[] }
   | { t: 'rows'; rows: SqlValue[][] }
   | { t: 'done'; ms: number; rowCount: number; truncated: boolean; autoLimited: boolean; affected: number | null }
-  | { t: 'error'; message: string; code: string | null; offset: number | null; length: number; line: number | null };
+  | { t: 'error'; message: string; code: string | null; offset: number | null; length: number; line: number | null }
+  /** After a run in a tab's session: whether that tab now holds an open transaction, and why it ended when it just did. */
+  | { t: 'tx'; tx: SqlTx | null; note?: string };
+/** A transaction a SQL tab holds on its own dev connection, from START TRANSACTION until COMMIT or ROLLBACK. */
+export interface SqlTx { session: string; alias: string; startedAt: number; lastAt: number; statements: number; idleMs: number }
 export interface SqlRunRequest { alias: string; text: string; cursor: number; selection?: { from: number; to: number } | null; db?: string | null; limit?: 'auto' | 'max';
   /** Run a risky write (UPDATE or DELETE with no WHERE, TRUNCATE, DROP) that the server asked about with an error coded CONFIRM. */
   confirm?: boolean;
   /** Values for the statement's :name and ? parameters (shared/sqlClassify params), bound on the server through mysql2's escaping. */
-  params?: Record<string, string> }
+  params?: Record<string, string>;
+  /** The tab this run comes from. A transaction started in it keeps its connection for every later run with the same session. */
+  session?: string }
 export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
 /** A tab in the SQL view: a query editor, or the connection's live process list. */
 export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes';

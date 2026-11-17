@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, SqlTableMeta, SqlReference, SqlColumnHit, SqlSaved, SqlSnippet, SqlValue, UsageReport } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, SqlTableMeta, SqlReference, SqlColumnHit, SqlSaved, SqlSnippet, SqlValue, UsageReport, SqlTx } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -118,6 +118,8 @@ export const api = {
   sqlProcesses: (alias: string) => j<SqlProcess[]>(`/api/sql/processes/${encodeURIComponent(alias)}`),
   sqlKill: (alias: string, id: number, mode: 'query' | 'connection') => post<{ ok: true; via: string }>(`/api/sql/processes/${encodeURIComponent(alias)}/${id}/kill`, { mode }),
   usage: (days: number) => j<UsageReport>(`/api/usage?days=${days}`),
+  sqlTxState: (session: string) => j<{ txs: SqlTx[]; notes: string[] }>(`/api/sql/tx/${encodeURIComponent(session)}`),
+  sqlTxEnd: (session: string, alias: string, action: 'commit' | 'rollback') => post<{ ok: true; note: string }>(`/api/sql/tx/${encodeURIComponent(session)}/${encodeURIComponent(alias)}/${action}`),
   sqlCancel: (id: string) => j<{ ok: boolean }>(`/api/sql/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 

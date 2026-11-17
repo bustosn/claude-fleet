@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { Activity, AlignLeft, Ban, ChevronDown, Columns3, Copy, Database, Download, Gauge, KeyRound, LayoutList, ListChecks, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
+import { Activity, AlignLeft, CheckCheck, Undo2, Ban, ChevronDown, Columns3, Copy, Database, Download, Gauge, KeyRound, LayoutList, ListChecks, MessageSquareShare, Pencil, Play, PlayCircle, Plus, Rows3, Search, ShieldCheck, Table, X } from 'lucide-react';
 import type { SQLNamespace } from '@codemirror/lang-sql';
-import { api, type SqlFk, type SqlLookup, type SqlSaved, type SqlSnippet, type SqlReference, type SqlRunRequest, type SqlValue, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
+import { api, type SqlTx, type SqlFk, type SqlLookup, type SqlSaved, type SqlSnippet, type SqlReference, type SqlRunRequest, type SqlValue, type SqlColumnInfo, type SqlHistoryEntry, type SqlInfo, type SqlSchema, type SqlTab } from '../lib/api';
 import { actions } from '../lib/store';
 import { useContextMenu, type MenuItem } from '../components/ContextMenu';
 import { Empty, Kbd } from '../components/ui';
@@ -63,6 +63,8 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
   const [share, setShare] = useState<Intent | null>(null);
   const [login, setLogin] = useState(false);
   const [confirm, setConfirm] = useState<{ tab: string; req: SqlRunRequest; reason: string } | null>(null);
+  // Open transactions by tab id (dev only), as the server last reported them.
+  const [txs, setTxs] = useState<Record<string, SqlTx | null>>({});
   const [ask, setAsk] = useState<{ tab: string; req: SqlRunRequest; params: Param[]; statement: string; markErrors: boolean; script?: string[] } | null>(null);
   const [refsOf, setRefsOf] = useState<{ alias: string; prod: boolean; target: { db: string; table: string; column: string }; value: SqlValue } | null>(null);
   // Bumped when table facts for a result arrive, so its key columns are known.
@@ -104,7 +106,7 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
     { label: 'Duplicate', icon: Copy, onSelect: () => addTab({ alias: t.alias, db: t.db, text: t.text, title: `${t.title} copy` }) },
     'separator',
     { label: 'Close', icon: X, onSelect: () => closeTab(t.id) },
-    { label: 'Close others', disabled: (tabs?.length || 0) < 2, onSelect: () => { for (const o of tabs || []) if (o.id !== t.id) aborts.current[o.id]?.(); setTabs(ts => ts && ts.filter(o => o.id === t.id)); setActiveId(t.id); } },
+    { label: 'Close others', disabled: (tabs?.length || 0) < 2, onSelect: async () => { for (const o of tabs || []) if (o.id !== t.id && !(await releaseTx(o.id, `Close "${o.title}"?`))) return; for (const o of tabs || []) if (o.id !== t.id) aborts.current[o.id]?.(); setTabs(ts => ts && ts.filter(o => o.id === t.id)); setActiveId(t.id); } },
   ]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [, tick] = useState(0);
@@ -121,6 +123,27 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
     api.sqlSnippets().then(setSnippets).catch(() => {});
   }, []);
   const tabsReady = tabs != null && info != null;
+  // What the server holds for each tab: after a reload or a pop-out the transaction is still open there. Polled while one is open,
+  // to catch the idle-limit rollback and say so.
+  const loadTx = useCallback((ids: string[]) => {
+    for (const id of ids) api.sqlTxState(id).then(st => {
+      setTxs(x => ({ ...x, [id]: st.txs[0] || null }));
+      for (const n of st.notes) actions.toast(n, 'error');
+    }).catch(() => {});
+  }, []);
+  useEffect(() => { if (tabsReady) loadTx((tabs || []).filter(t => t.kind !== 'processes').map(t => t.id)); }, [tabsReady]);
+  const openTxTabs = Object.entries(txs).filter(([, t]) => t).map(([id]) => id).join(',');
+  useEffect(() => {
+    if (!openTxTabs) return;
+    const h = setInterval(() => { loadTx(openTxTabs.split(',')); tick(n => n + 1); }, 30000);
+    return () => clearInterval(h);
+  }, [openTxTabs, loadTx]);
+  const endTx = async (id: string, action: 'commit' | 'rollback') => {
+    const t = txs[id];
+    if (!t) return;
+    try { const r = await api.sqlTxEnd(id, t.alias, action); setTxs(x => ({ ...x, [id]: null })); actions.toast(r.note); api.sqlHistory().then(setHistory).catch(() => {}); }
+    catch (err: any) { actions.toast(err.message, 'error'); loadTx([id]); }
+  };
   // At least one tab, on the default connection.
   useEffect(() => {
     if (!tabsReady || !info) return;
@@ -156,7 +179,18 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
     if (opts.preferRecord) patchUi(t.id, { preferRecord: true });
     return t;
   };
-  const closeTab = (id: string) => {
+  // An open transaction holds locks on dev: it is rolled back before its tab goes or changes connection, after asking.
+  const releaseTx = async (id: string, why: string): Promise<boolean> => {
+    const t = txs[id];
+    if (!t) return true;
+    if (!window.confirm(`${why}
+
+This tab has an open transaction on ${t.alias} (${t.statements} statement${t.statements === 1 ? '' : 's'}). It will be rolled back: nothing it changed is kept.`)) return false;
+    try { await api.sqlTxEnd(id, t.alias, 'rollback'); setTxs(x => ({ ...x, [id]: null })); actions.toast('Rolled back.'); return true; }
+    catch (err: any) { actions.toast(err.message, 'error'); return false; }
+  };
+  const closeTab = async (id: string) => {
+    if (!(await releaseTx(id, 'Close this tab?'))) return;
     aborts.current[id]?.();
     setTabs(ts => {
       if (!ts) return ts;
@@ -236,7 +270,15 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
     if (ps.length) { setAsk({ tab: active.id, req, params: ps, statement: stmt!, markErrors: !override }); return; }
     launch(active.id, req, !override);
   };
-  const launch = (id: string, req: SqlRunRequest, markErrors: boolean) => {
+  // The tab's transaction, from what each run reports. A note (committed, rolled back, why it ended) shows once per run.
+  const shownTxNotes = useRef(new Set<string>());
+  const noteTx = (tab: string, r: SqlResult) => {
+    if (r.tx !== undefined) setTxs(x => ({ ...x, [tab]: r.tx ?? null }));
+    if (r.txNote && r.status !== 'running' && r.runId && !shownTxNotes.current.has(r.runId)) { shownTxNotes.current.add(r.runId); actions.toast(r.txNote); }
+  };
+  const launch = (id: string, given: SqlRunRequest, markErrors: boolean) => {
+    // Every run names its tab, so a transaction started in it keeps its connection.
+    const req: SqlRunRequest = { ...given, session: id };
     aborts.current[id]?.();
     lastReq.current[id] = req;
     setViews(v => v[id] && v[id] !== id ? { ...v, [id]: id } : v);
@@ -245,6 +287,7 @@ export function SqlView({ lookup, open }: { lookup?: { name: string; value: stri
       // A risky write on dev: the server asks first, and the same request goes again with confirm once you say so.
       if (r.status === 'error' && r.error?.code === 'CONFIRM') { delete aborts.current[id]; setResults(x => { const { [id]: _, ...rest } = x; return rest; }); setConfirm({ tab: id, req, reason: r.error.message }); return; }
       setResults(x => ({ ...x, [id]: r }));
+      noteTx(id, r);
       if (r.status === 'running') return;
       delete aborts.current[id];
       // Facts for the tables the columns came from: primary and foreign keys, for following them from a cell.
@@ -475,6 +518,7 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
     lastReq.current[key] = req;
     const { abort } = startRun(req, r => {
       setResults(x => ({ ...x, [key]: r }));
+      if (req.session) noteTx(req.session, r);
       if (r.status === 'running') return;
       if (r.status === 'done') for (const t of resultTables(r.columns)) tableMeta(req.alias, t.db, t.table).then(() => setMetaTick(n => n + 1), () => {});
       resolve(r);
@@ -498,7 +542,7 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
     for (let i = 0; i < stmts.length; i++) {
       if (stopped) { for (let j = i; j < stmts.length; j++) patch(j, { status: 'skipped' }); break; }
       patch(i, { status: 'running' });
-      const r = await runOne({ alias: a.alias, text: stmts[i], cursor: 0, db, limit: 'auto', params: values, confirm: confirmed }, key(i), ab => { current = ab; });
+      const r = await runOne({ alias: a.alias, text: stmts[i], cursor: 0, db, limit: 'auto', params: values, confirm: confirmed, session: id }, key(i), ab => { current = ab; });
       if (r.status === 'error') {
         patch(i, { status: 'error', error: r.error?.code === 'CONFIRM' ? 'Needs a confirmation: run it on its own' : r.error?.message || 'Failed', ms: r.ms });
         for (let j = i + 1; j < stmts.length; j++) patch(j, { status: 'skipped' });
@@ -643,7 +687,7 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
                 onClick={() => setActiveId(t.id)} onDoubleClick={() => setRenaming(t.id)} onAuxClick={e => { if (e.button === 1) closeTab(t.id); }} onContextMenu={e => tabMenu(e, t)}
                 title={`${t.title} · ${t.alias}${i < 9 ? `  (Alt+${i + 1})` : ''}
 Double-click to rename; right-click for more`}>
-                <span className={`dot ${r?.status === 'running' ? '' : ''}`} data-s={r?.status === 'running' ? 'running' : env?.prod ? 'failed' : 'done'} aria-hidden="true" />
+                <span className={`dot ${r?.status === 'running' ? '' : ''}`} data-s={r?.status === 'running' ? 'running' : txs[t.id] ? 'blocked' : env?.prod ? 'failed' : 'done'} aria-hidden="true" />
                 {renaming === t.id
                   ? <input autoFocus className="sql-tab-input" defaultValue={t.title} onBlur={e => { patchTab(t.id, { title: e.target.value.trim() || t.title }); setRenaming(null); }}
                     onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenaming(null); }} onClick={e => e.stopPropagation()} />
@@ -660,9 +704,9 @@ Double-click to rename; right-click for more`}>
         {/* Query tabs stay mounted behind a Processes tab, so their editors keep undo history. */}
         {active && <div style={{ display: active.kind === 'processes' ? 'none' : 'contents' }}>
           <div className="sql-toolbar">
-            <label className={`sql-conn ${alias?.prod ? 'prod' : 'dev'}`} title={alias?.prod ? 'Production reader: read-only' : 'Development: reads and writes, each statement committed as it runs'}>
+            <label className={`sql-conn ${alias?.prod ? 'prod' : 'dev'}`} title={alias?.prod ? 'Production reader: read-only' : 'Development: reads and writes, each statement committed as it runs unless the tab has a transaction open (START TRANSACTION … COMMIT)'}>
               <Database size={13} aria-hidden="true" />
-              <select value={active.alias} onChange={e => patchTab(active.id, { alias: e.target.value, db: null })} aria-label="Connection">
+              <select value={active.alias} onChange={async e => { const next = e.target.value; if (await releaseTx(active.id, `Switch this tab to ${next}?`)) patchTab(active.id, { alias: next, db: null }); }} aria-label="Connection">
                 {info.aliases.map(a => <option key={a.alias} value={a.alias}>{a.alias}{a.prod ? ' (PRD)' : ''}</option>)}
               </select>
               <ChevronDown size={12} aria-hidden="true" />
@@ -693,6 +737,7 @@ Double-click to rename; right-click for more`}>
             </div>
           </div>
 
+          {txs[active.id] && <TxBar tx={txs[active.id]!} onCommit={() => endTx(active.id, 'commit')} onRollback={() => endTx(active.id, 'rollback')} />}
           <div ref={right} className="relative flex min-h-0 flex-1 flex-col">
             <div className={`sql-editor-wrap ${alias?.prod ? 'prod' : ''}`} style={{ height: `${split * 100}%` }}>
               {tabs.filter(t => t.kind !== 'processes').map(t => (
@@ -807,7 +852,7 @@ function EmptyResult({ history, onOpen, autoLimit }: { history: SqlHistoryEntry[
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1.5">
         {keys.map(([k, what]) => <div key={what} className="contents"><span className="flex gap-1">{k.map(x => <Kbd key={x}>{x}</Kbd>)}</span><span>{what}</span></div>)}
       </div>
-      <div className="text-fg-faint">Prod connections are read-only. Dev connections run anything, each statement committed as it runs, and ask first before an UPDATE or DELETE with no WHERE, a TRUNCATE or a DROP. A SELECT without a LIMIT gets LIMIT {autoLimit}.</div>
+      <div className="text-fg-faint">Prod connections are read-only. Dev connections run anything, each statement committed as it runs unless you START TRANSACTION (then nothing is kept until COMMIT), and ask first before an UPDATE or DELETE with no WHERE, a TRUNCATE or a DROP. A SELECT without a LIMIT gets LIMIT {autoLimit}.</div>
       {history.length > 0 && <div className="grid gap-1">
         <div className="section-title !m-0 !h-auto !p-0"><LayoutList size={11} aria-hidden="true" /> Recent on this connection</div>
         {history.map(h => <button key={h.at} className="sql-hist" onClick={() => onOpen(h)}><div className="text-[10.5px] text-fg-faint">{age(h.at)} ago</div><div className="sql-hist-sql">{h.sql}</div></button>)}
@@ -831,5 +876,24 @@ function ConfirmWrite({ reason, statement, alias, onClose, onRun }: { reason: st
         <button className="btn danger" onClick={onRun}>Run it</button>
       </div>
     </dialog>
+  );
+}
+
+/** While a tab holds a transaction: what is pending, for how long, when the idle limit rolls it back, and Commit or Rollback. */
+function TxBar({ tx, onCommit, onRollback }: { tx: SqlTx; onCommit: () => void; onRollback: () => void }) {
+  const [, setNow] = useState(0);
+  useEffect(() => { const h = setInterval(() => setNow(n => n + 1), 15000); return () => clearInterval(h); }, []);
+  const mins = (ms: number) => ms < 60000 ? `${Math.max(0, Math.round(ms / 1000))}s` : `${Math.round(ms / 60000)}m`;
+  const left = tx.lastAt + tx.idleMs - Date.now();
+  return (
+    <div className="sql-banner warn sql-txbar" role="status">
+      <span className="dot" data-s="blocked" aria-hidden="true" />
+      <span className="grow">
+        <b>Transaction open on {tx.alias}</b> · {tx.statements} statement{tx.statements === 1 ? '' : 's'} · {mins(Date.now() - tx.startedAt)} · nothing is saved until you commit, and rows it changed stay locked for everyone else.
+        <span className="text-fg-muted"> Rolls back after {mins(tx.idleMs)} idle{left < 5 * 60000 ? ` (in ${mins(left)})` : ''}.</span>
+      </span>
+      <button className="btn sm" onClick={onRollback} title="ROLLBACK: undo everything since START TRANSACTION"><Undo2 size={13} aria-hidden="true" /> Rollback</button>
+      <button className="btn sm primary" onClick={onCommit} title="COMMIT: keep everything since START TRANSACTION"><CheckCheck size={13} aria-hidden="true" /> Commit</button>
+    </div>
   );
 }
