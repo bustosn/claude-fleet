@@ -124,14 +124,20 @@ export function classify(stmt: string): Classified {
   return { ok: true, kind };
 }
 
-// Transaction control: each run may land on a different pooled connection and every statement commits on its own,
-// so a BEGIN in one run and a COMMIT in the next would not be the same transaction.
-const TX = new Set(['BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'XA', 'LOCK', 'UNLOCK']);
+// Transaction control. A dev SQL tab can hold a transaction: START TRANSACTION pins a connection to the tab until COMMIT or ROLLBACK
+// (server/sql.ts). What the statement does to that transaction is `tx`. Table locks, XA and autocommit switches stay out:
+// they would outlive the tab or change how every later run behaves.
+const REFUSED_TX = new Set(['XA', 'LOCK', 'UNLOCK']);
+// MySQL commits an open transaction before these run (implicit commit), so nothing before them can be rolled back afterwards.
+const IMPLICIT_COMMIT = new Set(['CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'RENAME', 'GRANT', 'REVOKE', 'ANALYZE', 'OPTIMIZE', 'REPAIR', 'INSTALL', 'UNINSTALL', 'FLUSH', 'LOAD', 'CACHE']);
 
-export interface WriteClassified extends Classified { write: boolean; danger: string | null }
+/** begin: starts one. commit, rollback: ends it. savepoint: SAVEPOINT, RELEASE SAVEPOINT or ROLLBACK TO, which keep it open. */
+export type TxAction = 'begin' | 'commit' | 'rollback' | 'savepoint';
+export interface WriteClassified extends Classified { write: boolean; danger: string | null; tx?: TxAction; implicitCommit?: boolean }
 
-/** For a connection that may write (dev): any one statement except transaction control. `write` says whether it changes anything;
- *  `danger` names the ones worth a second look before they run: UPDATE or DELETE with no WHERE, TRUNCATE, DROP. */
+/** For a connection that may write (dev): any one statement. `write` says whether it changes anything; `tx` marks transaction control;
+ *  `implicitCommit` marks DDL, which commits an open transaction; `danger` names the ones worth a second look before they run:
+ *  UPDATE or DELETE with no WHERE, TRUNCATE, DROP. */
 export function classifyWrite(stmt: string): WriteClassified {
   const toks = tokenize(stmt);
   if (toks.some(t => t.type === 'punct' && t.value === ';')) return { ok: false, kind: '', reason: 'One statement at a time.', write: false, danger: null };
@@ -139,16 +145,30 @@ export function classifyWrite(stmt: string): WriteClassified {
   const head = toks.find(t => !(t.type === 'punct' && t.value === '('));
   if (!head) return { ok: false, kind: '', reason: 'Nothing to run.', write: false, danger: null };
   const kind = head.type === 'word' ? head.value : head.value.slice(0, 20);
-  if (TX.has(kind) || (kind === 'SET' && words[1] && ['AUTOCOMMIT', 'TRANSACTION'].includes(words[1].value)) || (kind === 'SET' && words.some(w => w.value === 'AUTOCOMMIT')))
-    return { ok: false, kind, reason: `${kind} is not supported here: every statement commits on its own, and the next run may use another connection. Run the statements one by one.`, write: true, danger: null };
+  const w1 = words[1]?.value;
+  if (REFUSED_TX.has(kind) || (kind === 'SET' && words.some(w => w.value === 'AUTOCOMMIT')) || (kind === 'SET' && w1 === 'TRANSACTION'))
+    return { ok: false, kind, reason: `${kind === 'SET' ? 'SET autocommit and SET TRANSACTION are' : `${kind} is`} not supported here. Use START TRANSACTION (or BEGIN) to hold changes in this tab, then COMMIT or ROLLBACK.`, write: true, danger: null };
+  const txOf = (): TxAction | undefined => {
+    if (kind === 'BEGIN' || (kind === 'START' && w1 === 'TRANSACTION')) return 'begin';
+    if (kind === 'COMMIT') return 'commit';
+    // ROLLBACK TO [SAVEPOINT] x undoes back to the savepoint and keeps the transaction open.
+    if (kind === 'ROLLBACK') return w1 === 'TO' || words[2]?.value === 'TO' ? 'savepoint' : 'rollback';
+    if (kind === 'SAVEPOINT' || (kind === 'RELEASE' && w1 === 'SAVEPOINT')) return 'savepoint';
+    return undefined;
+  };
+  const tx = txOf();
+  if (tx) return { ok: true, kind, write: false, danger: null, tx };
+  if (kind === 'START' || kind === 'RELEASE') return { ok: false, kind, reason: `${kind} ${w1 || ''}`.trim() + ' is not something the SQL view runs.', write: true, danger: null };
   const read = classify(stmt);
   if (read.ok) return { ok: true, kind, write: false, danger: null };
+  // CREATE and DROP TEMPORARY TABLE are the exception: they live on the connection and do not commit.
+  const implicitCommit = IMPLICIT_COMMIT.has(kind) && !((kind === 'CREATE' || kind === 'DROP') && w1 === 'TEMPORARY');
   const top = (w: string) => toks.some(t => t.type === 'word' && t.value === w && t.depth === 0);
   let danger: string | null = null;
   if (kind === 'TRUNCATE') danger = 'TRUNCATE empties the whole table.';
-  else if (kind === 'DROP') danger = `DROP ${words[1]?.value || ''} removes it for good.`.replace('  ', ' ');
+  else if (kind === 'DROP' && w1 !== 'TEMPORARY') danger = `DROP ${words[1]?.value || ''} removes it for good.`.replace('  ', ' ');
   else if ((top('DELETE') || top('UPDATE')) && !top('WHERE')) danger = `${top('DELETE') ? 'DELETE' : 'UPDATE'} without a WHERE changes every row in the table.`;
-  return { ok: true, kind, write: true, danger };
+  return { ok: true, kind, write: true, danger, ...(implicitCommit ? { implicitCommit } : {}) };
 }
 
 /** How many ? placeholders a statement has, outside strings and comments. */

@@ -477,6 +477,13 @@ app.post('/api/sql/run', (req, res) => {
     .finally(() => { finished = true; s.stop(); res.end(); });
 });
 app.delete('/api/sql/runs/:id', (req, res) => res.json({ ok: sql.cancel(String(req.params.id)) }));
+// A tab's open transactions (dev only): read on load, and the Commit and Rollback buttons.
+app.get('/api/sql/tx/:session', sqlRoute(req => sql.txState(sqlName(req.params.session))));
+app.post('/api/sql/tx/:session/:alias/:action', sqlRoute(req => {
+  const action = String(req.params.action);
+  if (action !== 'commit' && action !== 'rollback') throw new Error('commit or rollback');
+  return sql.txEnd(sqlName(req.params.session), sqlName(req.params.alias), action);
+}));
 // An export: the read run again up to sql.exportMaxRows and streamed out as CSV, never held in memory. Closing the download cancels the query.
 app.post('/api/sql/export', (req, res) => {
   let runId: string | null = null, started = false, finished = false;

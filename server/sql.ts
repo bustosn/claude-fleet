@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
-import type { SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnHit, SqlColumnInfo, SqlFk, SqlReference, SqlTableMeta, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
+import type { SqlTx, SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnHit, SqlColumnInfo, SqlFk, SqlReference, SqlTableMeta, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
 import { buildEdit, type EditSpec } from './sqlEdit.js';
 import { bindParams, classify, classifyWrite, countParams, errorOffset, limitable, paramNames, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
@@ -16,6 +16,10 @@ const serverIds = new WeakMap<object, number>();
 const fleetIds = new Map<string, Set<number>>();
 
 interface Run { id: string; alias: string; conn: object | null; cancelled: boolean; timedOut: boolean }
+/** A tab's open transaction: the connection is kept out of the pool until COMMIT, ROLLBACK, the idle limit, or the tab goes away. */
+interface Tx { key: string; session: string; alias: string; conn: mysql.PoolConnection; startedAt: number; lastAt: number; statements: number; timer: NodeJS.Timeout | null }
+// An open transaction holds row locks that make COR3, the parsers and everyone else on dev wait, so an idle one is rolled back.
+const TX_IDLE_MS = 15 * 60 * 1000, TX_PER_ALIAS = 2;
 interface SchemaCache extends SqlSchema { columns: Record<string, Record<string, SqlColumnInfo[]>>; indexes: Record<string, SqlIndexInfo[]> }
 type Emit = (ev: SqlEvent) => void;
 
@@ -24,6 +28,9 @@ type Emit = (ev: SqlEvent) => void;
 export class SqlManager {
   private pools = new Map<string, mysql.Pool>();
   private runs = new Map<string, Run>();
+  private txs = new Map<string, Tx>();
+  // Why a transaction ended while nobody was running anything (the idle limit), kept until the tab asks.
+  private txNotes = new Map<string, string>();
   private schemas = new Map<string, SchemaCache>();
   // One table's columns, for completion, by alias/db.table; dropped with the schema on Refresh.
   private tableCols = new Map<string, SqlColumnInfo[]>();
@@ -174,6 +181,10 @@ export class SqlManager {
     entry.sql = stmtText;
     const writable = !a.prod && !opts.readOnly;
     const check = (sql: string) => writable ? classifyWrite(sql) : { ...classify(sql), write: false, danger: null };
+    // Transaction control on prod (or from fleet_sql) gets a plain answer rather than "START is not a read".
+    if (!writable && classifyWrite(stmtText).tx) return fail(a.prod
+      ? `${a.alias} is a production reader: it is read-only, so there is nothing to commit. Transactions are for dev connections.`
+      : 'Transactions are not available here: this run is read-only.');
     // The statement as written is checked, then again with the values in: each value is one escaped literal, so the two agree.
     let c = check(stmtText);
     if (!c.ok) return fail(c.reason || 'Not a read.');
@@ -186,8 +197,21 @@ export class SqlManager {
       c = check(stmtText);
       if (!c.ok) return fail(c.reason || 'Not a read.');
     }
+    // A transaction belongs to the tab (session) and the connection; prod and read-only runs never get one.
+    const key = writable && req.session ? `${String(req.session).slice(0, 64)}|${a.alias}` : null;
+    const held = key ? this.txs.get(key) : undefined;
+    if (c.tx) {
+      if (!key) return fail('Transactions need a SQL tab on a dev connection.');
+      if (c.tx === 'begin' && held) return fail('A transaction is already open in this tab. COMMIT or ROLLBACK it first.');
+      if (c.tx !== 'begin' && !held) return fail(`There is no open transaction in this tab: every statement here committed as it ran.${c.tx === 'savepoint' ? ' Start one with START TRANSACTION first.' : ''}`);
+      if (c.tx === 'begin' && [...this.txs.values()].filter(t => t.alias === a.alias).length >= TX_PER_ALIAS)
+        return fail(`${a.alias} already has ${TX_PER_ALIAS} open transactions in other tabs. Commit or roll one back first.`);
+    }
+    const danger = held && c.implicitCommit
+      ? `${c.kind} commits your open transaction first (MySQL does that before DDL), so what you ran before it can no longer be rolled back.${c.danger ? ` ${c.danger}` : ''}`
+      : c.danger;
     // Asked once, answered in the browser: the same request again with confirm set.
-    if (c.danger && !req.confirm) return emit({ t: 'error', message: c.danger, code: 'CONFIRM', offset: null, length: 0, line: null });
+    if (danger && !req.confirm) return emit({ t: 'error', message: danger, code: 'CONFIRM', offset: null, length: 0, line: null });
     const db = req.db ? String(req.db) : null;
     if (db && !/^[\w$]+$/.test(db)) return fail(`Not a database name: ${db}`);
 
@@ -200,9 +224,11 @@ export class SqlManager {
     emit({ t: 'start', id: run.id, statement: stmtText, offset });
 
     let rowCount = 0, truncated = false, affected: number | null = null;
+    // A new transaction's connection, taken from the pool and kept once START TRANSACTION has run on it.
+    let fresh: mysql.PoolConnection | null = null;
     const timer = setTimeout(() => { run.timedOut = true; this.kill(a, run); }, this.cfg.timeoutMs + 2000);
     try {
-      await this.withConn(a, conn => new Promise<void>((resolve, reject) => {
+      const execOn = (conn: mysql.PoolConnection) => new Promise<void>((resolve, reject) => {
         run.conn = conn;
         if (run.cancelled) return reject(Object.assign(new Error('Cancelled.'), { code: 'CANCELLED' }));
         const go = () => {
@@ -223,13 +249,33 @@ export class SqlManager {
           q.on('end', () => { if (failed) return; clearInterval(tick); flush(); if (!fields) emit({ t: 'columns', columns: [] }); resolve(); });
         };
         if (db) conn.query(`USE \`${db}\``, err => err ? reject(err) : go()); else go();
-      }), text => emit({ t: 'notice', text }));
+      });
+      if (held) await execOn(held.conn);
+      else if (c.tx === 'begin') { fresh = await this.getConn(a); await execOn(fresh); }
+      else await this.withConn(a, execOn, text => emit({ t: 'notice', text }));
       // A killed SLEEP or a query stopped between rows can still end cleanly; it was stopped all the same.
       if (run.cancelled || run.timedOut) throw Object.assign(new Error('Cancelled.'), { code: 'CANCELLED' });
+      // What the statement did to the tab's transaction.
+      if (fresh && key) { this.openTx(key, String(req.session), a.alias, fresh); fresh = null; emit({ t: 'tx', tx: this.txView(key) }); }
+      else if (held) {
+        if (c.tx === 'commit' || c.tx === 'rollback') { this.endTx(held.key, null, 'release'); emit({ t: 'tx', tx: null, note: c.tx === 'commit' ? 'Committed.' : 'Rolled back.' }); }
+        else if (c.implicitCommit) { this.endTx(held.key, null, 'release'); emit({ t: 'tx', tx: null, note: `${c.kind} committed the transaction: MySQL commits before DDL. What ran after it commits as it runs again.` }); }
+        else { held.statements++; this.touchTx(held); emit({ t: 'tx', tx: this.txView(held.key) }); }
+      }
       const ms = Date.now() - t0;
       emit({ t: 'done', ms, rowCount, truncated, autoLimited: appended && req.limit !== 'max' && rowCount >= limit, affected });
       entry.rows = affected ?? rowCount; entry.ms = ms; this.addHistory(entry);
     } catch (err: any) {
+      // START TRANSACTION itself failed: the connection goes back unused.
+      if (fresh) { fresh.release(); fresh = null; }
+      if (held) {
+        // A failed statement leaves the transaction open, as in MySQL, except when the connection is gone or InnoDB rolled it back (deadlock).
+        const deadlock = Number(err.errno) === 1213, gone = !!err.fatal || tunnelError(err);
+        if (deadlock || gone) {
+          this.endTx(held.key, null, gone ? 'destroy' : 'release');
+          emit({ t: 'tx', tx: null, note: deadlock ? 'MySQL rolled the whole transaction back: it was chosen as the victim of a deadlock.' : 'The connection dropped, so the server rolled the transaction back.' });
+        } else { this.touchTx(held); emit({ t: 'tx', tx: this.txView(held.key) }); }
+      }
       // Hitting the row cap kills the query on purpose; what was read is the result.
       if (truncated && /interrupted/i.test(String(err.message))) {
         const ms = Date.now() - t0;
@@ -281,6 +327,66 @@ export class SqlManager {
       try { await this.queryAll(a, rds); log(rds, null); return { ok: true, via: rds }; }
       catch (e: any) { log(rds, e.message); throw new Error(`${err.message} (and ${rds}: ${e.message})`); }
     }
+  }
+
+  // Transactions per tab (dev only). The connection that ran START TRANSACTION stays out of the pool, and every later run from that tab
+  // on that connection alias uses it, until COMMIT or ROLLBACK, a statement that commits implicitly, the idle limit, or the tab closing.
+  private openTx(key: string, session: string, alias: string, conn: mysql.PoolConnection) {
+    const tx: Tx = { key, session, alias, conn, startedAt: Date.now(), lastAt: Date.now(), statements: 0, timer: null };
+    this.txs.set(key, tx);
+    this.touchTx(tx);
+  }
+  private touchTx(tx: Tx) {
+    tx.lastAt = Date.now();
+    if (tx.timer) clearTimeout(tx.timer);
+    tx.timer = setTimeout(() => {
+      if (this.txs.get(tx.key) !== tx) return;
+      this.txNotes.set(tx.key, `Rolled back after ${Math.round(TX_IDLE_MS / 60000)} minutes without a statement: an open transaction holds locks that make everyone else on ${tx.alias} wait.`);
+      this.addHistory({ at: Date.now(), alias: tx.alias, db: null, sql: 'ROLLBACK -- idle limit', rows: null, ms: null, error: null });
+      this.endTx(tx.key, 'ROLLBACK', 'release');
+    }, TX_IDLE_MS);
+  }
+  private txView(key: string): SqlTx | null {
+    const t = this.txs.get(key);
+    return t ? { session: t.session, alias: t.alias, startedAt: t.startedAt, lastAt: t.lastAt, statements: t.statements, idleMs: TX_IDLE_MS } : null;
+  }
+  /** Ends a tab's transaction: runs COMMIT or ROLLBACK first when asked (the statement may have run already), then returns the connection,
+   *  or destroys it when it is broken. Resolves once the connection is back. */
+  private endTx(key: string, statement: 'COMMIT' | 'ROLLBACK' | null, then: 'release' | 'destroy'): Promise<void> {
+    const t = this.txs.get(key);
+    if (!t) return Promise.resolve();
+    this.txs.delete(key);
+    if (t.timer) clearTimeout(t.timer);
+    return new Promise((resolve, reject) => {
+      const finish = (err?: Error | null) => {
+        // A ROLLBACK that failed leaves the connection in doubt: closing it makes the server roll back.
+        if (then === 'destroy' || (err && statement)) t.conn.destroy(); else t.conn.release();
+        err ? reject(err) : resolve();
+      };
+      if (statement && then === 'release') t.conn.query(statement, err => finish(err)); else finish();
+    });
+  }
+  /** The open transactions of one tab, and why one ended on its own since the tab last asked. */
+  txState(session: string): { txs: SqlTx[]; notes: string[] } {
+    const txs = [...this.txs.values()].filter(t => t.session === session).map(t => this.txView(t.key)!);
+    const notes: string[] = [];
+    for (const [k, n] of this.txNotes) if (k.startsWith(`${session}|`)) { notes.push(n); this.txNotes.delete(k); }
+    return { txs, notes };
+  }
+  /** The Commit and Rollback buttons, and closing a tab or switching its connection (rollback). Recorded in history like a typed COMMIT. */
+  async txEnd(session: string, alias: string, action: 'commit' | 'rollback'): Promise<{ ok: true; note: string }> {
+    const key = `${session.slice(0, 64)}|${alias}`;
+    const t = this.txs.get(key);
+    if (!t) return { ok: true, note: 'No open transaction.' };
+    const sql = action === 'commit' ? 'COMMIT' : 'ROLLBACK';
+    const t0 = Date.now();
+    try { await this.endTx(key, sql, 'release'); }
+    catch (err: any) {
+      this.addHistory({ at: t0, alias, db: null, sql, rows: null, ms: Date.now() - t0, error: err.message });
+      throw new Error(`${sql} failed: ${err.message}.${action === 'commit' ? ' The connection was closed, so the server rolled the transaction back.' : ''}`);
+    }
+    this.addHistory({ at: t0, alias, db: null, sql, rows: null, ms: Date.now() - t0, error: null });
+    return { ok: true, note: action === 'commit' ? 'Committed.' : 'Rolled back.' };
   }
 
   cancel(id: string): boolean {

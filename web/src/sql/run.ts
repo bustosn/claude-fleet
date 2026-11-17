@@ -1,4 +1,4 @@
-import type { SqlColumn, SqlEvent, SqlRunRequest, SqlValue } from '../lib/api';
+import type { SqlColumn, SqlEvent, SqlRunRequest, SqlTx, SqlValue } from '../lib/api';
 
 /** One run's result as it streams in. `rows` grows in place; `version` changes on every flush so React sees a new value. */
 export interface SqlResult {
@@ -10,6 +10,10 @@ export interface SqlResult {
   affected: number | null;
   error: { message: string; code: string | null; offset: number | null; length: number; line: number | null } | null;
   notice: string | null; version: number;
+  /** The tab's transaction after this run: undefined when the run said nothing about one, null when there is none (any more). */
+  tx?: SqlTx | null;
+  /** Why it just ended (committed, rolled back, DDL, deadlock, dropped connection). */
+  txNote?: string;
 }
 
 export const emptyResult = (): SqlResult => ({ status: 'running', runId: null, statement: '', offset: 0, startedAt: Date.now(), columns: [], rows: [], ms: null, truncated: false, autoLimited: false, affected: null, error: null, notice: null, version: 0 });
@@ -29,6 +33,7 @@ export function startRun(req: SqlRunRequest, onChange: (r: SqlResult) => void): 
     switch (ev.t) {
       case 'start': r.runId = ev.id; r.statement = ev.statement; r.offset = ev.offset; break;
       case 'notice': r.notice = ev.text; break;
+      case 'tx': r.tx = ev.tx; r.txNote = ev.note; break;
       // Columns again means the tunnel was restarted and the statement re-run: start the rows over.
       case 'columns': r.columns = ev.columns; r.rows = []; break;
       case 'rows': for (const row of ev.rows) r.rows.push(row); break;

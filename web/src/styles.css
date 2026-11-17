@@ -542,3 +542,4 @@ textarea.rich-code-body { display: block; width: 100%; padding: 10px 12px; borde
 .split { display: flex; height: 10px; gap: 2px; border-radius: 999px; overflow: hidden; }
 .split > i { display: block; height: 100%; min-width: 3px; }
 .swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.sql-txbar { align-items: center; }
