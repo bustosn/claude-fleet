@@ -28,7 +28,7 @@ export function statRefs(cwd: string, paths: string[]): FileRef[] {
 // @-mention completion: the files under a chat's folder, from git when it is a repo (so ignored folders stay out), else a bounded walk.
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.venv', '__pycache__', 'target', 'vendor', '.cache']);
 const fileLists = new Map<string, { at: number; files: string[] }>();
-function listFiles(cwd: string): string[] {
+export function listFiles(cwd: string): string[] {
   const hit = fileLists.get(cwd);
   if (hit && Date.now() - hit.at < 30_000) return hit.files;
   let files: string[] = [];
@@ -49,6 +49,9 @@ function listFiles(cwd: string): string[] {
   fileLists.set(cwd, { at: Date.now(), files });
   return files;
 }
+
+/** Drops the cached file list for a folder, so a file just created shows up in the next search. */
+export function forgetFiles(cwd: string) { fileLists.delete(cwd); }
 
 /** Best matches for what follows an `@`: a name prefix beats a name substring beats the letters appearing in order. Shorter paths win ties. */
 export function suggestFiles(cwd: string, query: string, limit = 12): string[] {

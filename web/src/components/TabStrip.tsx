@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react';
-import { BarChart3, Bot, Database, FolderGit2, PictureInPicture2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
+import { BarChart3, Bot, Code2, Database, FolderGit2, PictureInPicture2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, Terminal, Users, X } from 'lucide-react';
 import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
@@ -85,6 +85,7 @@ export function iconFor(v: View, state?: string) {
   if (v.kind === 'hub') return KeyRound;
   if (v.kind === 'jira') return KanbanSquare;
   if (v.kind === 'sql') return Database;
+  if (v.kind === 'ide') return Code2;
   if (v.kind === 'usage') return BarChart3;
   if (v.kind === 'session') return state ? Terminal : Bot;
   if (v.kind === 'terminal') return Terminal;
@@ -101,6 +102,7 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
     case 'hub': return { text: 'Hub', hint: 'AWS credentials and other chores' };
     case 'jira': return { text: 'Jira', hint: 'Your Jira tickets by status' };
     case 'sql': return { text: 'SQL', hint: 'SQL over the Teleport tunnels: dev read-write, prod read-only' };
+    case 'ide': return { text: `${shortPath(v.root).split('/').pop() || v.root} · code`, hint: `Files in ${v.root}` };
     case 'usage': return { text: 'Usage', hint: 'Your Claude usage' };
     case 'new-chat': return { text: 'New chat', hint: v.cwd ? `New chat in ${shortPath(v.cwd)}` : 'New chat' };
     case 'resume': return { text: v.title, hint: `Opening ${v.title}` };

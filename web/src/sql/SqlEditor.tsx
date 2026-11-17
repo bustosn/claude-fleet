@@ -34,7 +34,7 @@ interface Props {
 }
 
 // Fleet's palette: the same keyword/string/number colors as chat code blocks, everything else from the theme tokens.
-const highlight = HighlightStyle.define([
+export const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.operatorKeyword, t.modifier], color: 'light-dark(#a626a4, #c792ea)', fontWeight: '500' },
   { tag: [t.string, t.special(t.string)], color: 'light-dark(#2f8a3c, #9ece6a)' },
   { tag: [t.number, t.bool, t.null], color: 'light-dark(#b45f06, #ff9e64)' },
@@ -45,7 +45,7 @@ const highlight = HighlightStyle.define([
   { tag: t.punctuation, color: 'var(--fg-muted)' },
 ]);
 
-const theme = EditorView.theme({
+export const theme = EditorView.theme({
   '&': { height: '100%', fontSize: '12.5px', backgroundColor: 'var(--surface)', color: 'var(--fg)' },
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': { fontFamily: 'var(--mono)', lineHeight: '1.6' },

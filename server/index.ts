@@ -19,6 +19,10 @@ import { SavedQueries, Snippets, defaultSnippets } from './sqlSaved.js';
 import { usageReport } from './usage.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
+import { ConflictError, Ide } from './ide.js';
+import { grep } from './ideGrep.js';
+import * as git from './ideGit.js';
+import { LspManager, type LspKind } from './lsp.js';
 import { run, errText } from './util.js';
 
 // Fleet tools are deliberately auto-approved via allowedTools; the SDK warns about that on every chat start.
@@ -64,8 +68,8 @@ fs.mkdirSync(scratchDir, { recursive: true });
 
 const app = express();
 // Sending a message can carry attachments (base64 images and files), so that one route takes a larger body.
-const smallJson = express.json({ limit: '1mb' }), sendJson = express.json({ limit: '60mb' });
-app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/send$/.test(req.path) ? sendJson : smallJson)(req, res, next));
+const smallJson = express.json({ limit: '1mb' }), sendJson = express.json({ limit: '60mb' }), saveJson = express.json({ limit: '12mb' });
+app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/send$/.test(req.path) ? sendJson : req.path === '/api/ide/file' ? saveJson : smallJson)(req, res, next));
 
 function sse(res: Response) {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -280,6 +284,33 @@ app.post('/api/chats/:id/file/open', (req, res) => {
   try { openFile(c.cwd, String(req.body?.path || ''), how, Number(req.body?.line) || undefined); res.json({ ok: true }); }
   catch (err) { res.status(400).json({ error: errText(err) }); }
 });
+// The IDE view: browse, open and save files under a checkout Fleet knows (or a chat's folder).
+const ide = new Ide(() => [...collector.repos.flatMap(r => [r.path, ...r.worktrees.map(w => w.path)]), ...chats.list().map(c => c.cwd)]);
+const ideRoute = (fn: (req: Request) => unknown) => async (req: Request, res: Response) => {
+  try { res.json(await fn(req)); } catch (err) { res.status(err instanceof ConflictError ? 409 : 400).json({ error: errText(err), conflict: err instanceof ConflictError || undefined }); }
+};
+const ideRoot = (req: Request) => ide.root(String(req.query.root ?? req.body?.root ?? ''));
+app.get('/api/ide/list', ideRoute(req => ide.list(ideRoot(req), String(req.query.dir || ''))));
+app.get('/api/ide/file', ideRoute(req => ide.read(ideRoot(req), String(req.query.path || ''))));
+app.put('/api/ide/file', ideRoute(req => ide.write(ideRoot(req), String(req.body?.path || ''), String(req.body?.text ?? ''), { expect: typeof req.body?.expect === 'number' ? req.body.expect : undefined, eol: req.body?.eol === 'crlf' ? 'crlf' : 'lf', bom: !!req.body?.bom, force: !!req.body?.force })));
+app.get('/api/ide/find', ideRoute(req => ide.find(ideRoot(req), String(req.query.q || ''), Math.min(200, Number(req.query.limit) || 50))));
+app.get('/api/ide/grep', async (req, res) => {
+  // A search the person has typed past is cancelled with the request, so a slow one does not pile up behind a newer one.
+  const stop = new AbortController();
+  res.on('close', () => stop.abort());
+  try {
+    const flag = (k: string) => req.query[k] === '1';
+    res.json(await grep(ideRoot(req), { q: String(req.query.q || ''), regex: flag('regex'), caseSensitive: flag('case'), word: flag('word'), glob: String(req.query.glob || ''), limit: Number(req.query.limit) || 500 }, stop.signal));
+  } catch (err) { res.status(400).json({ error: errText(err) }); }
+});
+const ideFile = (req: Request) => ide.check(ideRoot(req), String(req.query.path || ''));
+app.get('/api/ide/git/status', ideRoute(async req => await git.status(ideRoot(req))));
+app.get('/api/ide/git/changes', ideRoute(req => git.changes(ideRoot(req), ideFile(req))));
+app.get('/api/ide/git/blame', ideRoute(req => git.blame(ideRoot(req), ideFile(req))));
+app.get('/api/ide/git/log', ideRoute(req => git.log(ideRoot(req), ideFile(req))));
+app.get('/api/ide/git/show', ideRoute(req => { const rev = String(req.query.rev || ''); if (!git.validRev(rev)) throw new Error('bad revision'); return git.show(ideRoot(req), rev, ideFile(req)); }));
+app.post('/api/ide/lines', ideRoute(req => ide.lines(ideRoot(req), (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 300).map((i: any) => ({ path: String(i?.path || ''), line: Number(i?.line) || 0 })))));
+app.post('/api/ide/stale', ideRoute(req => ({ stale: (Array.isArray(req.body?.files) ? req.body.files : []).slice(0, 100).filter((f: any) => f && typeof f.path === 'string' && !ide.unchanged(ideRoot(req), f.path, Number(f.mtime))).map((f: any) => f.path) })));
 app.get('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); c ? res.json(c.summary()) : res.status(404).json({ error: 'no such chat' }); });
 app.get('/api/chats/:id/events', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).end();
@@ -540,7 +571,18 @@ dialogues.persistTo(path.join(stateDir, `dialogues-${config.port}.json`));
 tasks.persistTo(path.join(stateDir, `tasks-${config.port}.json`));
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const lsp = new LspManager(stateDir);
 server.on('upgrade', (req, socket, head) => {
+  // The IDE's language servers: /api/ide/lsp?root=<folder>&kind=php|ts|python
+  if ((req.url || '').startsWith('/api/ide/lsp?')) {
+    const q = new URL(req.url!, 'http://x').searchParams;
+    const kind = q.get('kind') as LspKind;
+    let folder: string | null = null;
+    try { folder = originAllowed(req) && ['php', 'ts', 'python'].includes(kind) ? ide.root(q.get('root') || '') : null; } catch {}
+    if (!folder) { socket.destroy(); return; }
+    wss.handleUpgrade(req, socket, head, ws => lsp.attach(folder!, kind, ws));
+    return;
+  }
   const m = /^\/api\/terminals\/([a-z0-9]{4,16})\/ws$/i.exec(req.url || '');
   const t = m && originAllowed(req) ? terminals.get(m[1]) : null;
   if (!t) { socket.destroy(); return; }
@@ -557,4 +599,4 @@ server.listen(config.port, '127.0.0.1', () => {
   jira.start();
   if (jira.status.jql) console.log(`watching Jira every ${config.jira.everyMinutes} min: ${jira.status.jql}`);
 });
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); lsp.stopAll(); process.exit(0); });

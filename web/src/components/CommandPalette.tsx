@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BarChart3, Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
+import { BarChart3, Code2, Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
@@ -10,12 +10,13 @@ interface Item { id: string; label: string; hint: string; icon: typeof Search; v
 
 export function CommandPalette() {
   const open = useStore(s => s.paletteOpen);
+  const startQuery = useStore(s => s.paletteQuery);
   const snap = useStore(s => s.snapshot);
   const [q, setQ] = useState('');
   const [cursor, setCursor] = useState(0);
   const input = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { if (open) { setQ(''); setCursor(0); setTimeout(() => input.current?.focus(), 0); } }, [open]);
+  useEffect(() => { if (open) { setQ(startQuery); setCursor(0); setTimeout(() => input.current?.focus(), 0); } }, [open]);
   // The SQL view's lookups ("cb 123456"), read each time the palette opens so new ones show up.
   const [lookups, setLookups] = useState<SqlLookup[]>([]);
   useEffect(() => { if (open) api.sqlInfo().then(i => setLookups(i.lookups)).catch(() => {}); }, [open]);
@@ -40,6 +41,7 @@ export function CommandPalette() {
     for (const s of snap.sessions) out.push({ id: `s:${s.id}`, label: s.title || s.name, hint: `${s.kind === 'dashboard' ? 'chat' : s.kind} · ${s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)} · ${s.state}`, icon: s.kind === 'dashboard' ? MessageSquare : Terminal,
       view: s.kind === 'dashboard' && s.chatId ? { kind: 'chat', chatId: s.chatId, title: s.title } : { kind: 'session', id: s.id } });
     for (const r of snap.repos) for (const w of r.worktrees) out.push({ id: `w:${w.path}`, label: `${r.name} / ${w.branch || shortPath(w.path)}`, hint: shortPath(w.path), icon: GitBranch, view: { kind: 'worktree', path: w.path } });
+    for (const r of snap.repos) for (const w of r.worktrees) out.push({ id: `ide:${w.path}`, label: `Code: ${r.name} / ${w.branch || shortPath(w.path)}`, hint: `edit files · ${shortPath(w.path)}`, icon: Code2, view: { kind: 'ide', root: w.path } });
     for (const c of snap.conversations) if (!c.running && !c.chat) out.push({ id: `c:${c.sessionId}`, label: c.title, hint: `saved · ${c.repo || shortPath(c.cwd)}`, icon: MessageSquare, view: { kind: 'resume', sessionId: c.sessionId, cwd: c.cwd, title: c.title } });
     return out;
   }, [snap]);

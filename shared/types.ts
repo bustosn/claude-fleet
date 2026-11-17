@@ -329,3 +329,15 @@ export interface SqlSaved { id: string; name: string; folder: string; jira: stri
 export interface SqlSnippet { name: string; label: string; body: string; source?: 'config' | 'user' }
 /** A connection's login as the SQL view shows it: never the password, only whether one is set. */
 export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }
+
+/** The IDE view: a folder listing, and a file read for editing. `mtime` guards a save against the file having changed on disk meanwhile. */
+export interface IdeEntry { name: string; dir: boolean; ignored: boolean }
+export interface IdeFile { kind: 'text' | 'binary' | 'too-large'; size: number; mtime: number; text?: string; eol?: 'lf' | 'crlf'; bom?: boolean }
+
+/** Git for the IDE view. Blame: one entry per commit, and `lines[i]` is the index of the commit that last changed line i+1. */
+export interface IdeBlame { commits: { sha: string; author: string; time: number; summary: string }[]; lines: number[] }
+/** A run of lines that differ from HEAD. A `deleted` run sits after line `start` (0 for the top of the file). */
+export interface IdeHunk { kind: 'added' | 'modified' | 'deleted'; start: number; count: number }
+export interface IdeLogEntry { sha: string; author: string; time: number; subject: string }
+/** Status codes by path under the folder: M modified, A added, D deleted, R renamed, ? untracked, U conflict. */
+export interface IdeGitStatus { branch: string; ahead: number; behind: number; files: Record<string, string> }

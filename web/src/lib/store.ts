@@ -16,6 +16,8 @@ export type View =
   | { kind: 'jira'; create?: boolean }
   /** The SQL workbench. `lookup` opens a new query tab already run, like "cb 123456" from the palette; `at` makes each one distinct. */
   | { kind: 'sql'; lookup?: { name: string; value: string; at: number }; open?: { saved: string; at: number } }
+  /** The IDE for one folder. `open` shows a file, at a line when given; `at` makes each request distinct. */
+  | { kind: 'ide'; root: string; open?: { path: string; line?: number; at: number } }
   | { kind: 'hub' }
   | { kind: 'usage' };
 
@@ -30,7 +32,7 @@ export type Theme = 'system' | 'light' | 'dark';
 
 interface State {
   snapshot: Snapshot | null; live: boolean; view: View; tabs: Tab[]; theme: Theme;
-  sidebarWidth: number; sidebarCollapsed: boolean; paletteOpen: boolean;
+  sidebarWidth: number; sidebarCollapsed: boolean; paletteOpen: boolean; paletteQuery: string;
   openRepos: Record<string, boolean>; openSections: Record<string, boolean>; convoFilter: string; toast: { id: number; text: string; level: 'info' | 'error' } | null;
 }
 
@@ -52,6 +54,7 @@ export function tabKey(v: View): string {
     case 'hub': return 'hub';
     case 'jira': return 'jira';
     case 'sql': return 'sql';
+    case 'ide': return `ide:${v.root.toLowerCase()}`;
     case 'usage': return 'usage';
   }
 }
@@ -66,7 +69,7 @@ let state: State = {
   snapshot: null, live: false,
   tabs: savedTabs, view: POPOUT || savedPage || savedTabs.find(t => t.key === savedActive)?.view || { kind: 'overview' },
   theme: read<Theme>('fleet.theme.mode', 'system'),
-  sidebarWidth: read('fleet.sidebar.width', 300), sidebarCollapsed: read('fleet.sidebar.collapsed', false), paletteOpen: false,
+  sidebarWidth: read('fleet.sidebar.width', 300), sidebarCollapsed: read('fleet.sidebar.collapsed', false), paletteOpen: false, paletteQuery: '',
   // Repos and sidebar sections start collapsed; only what you open stays open.
   openRepos: read('fleet.repos.open', {}), openSections: read('fleet.sections.open', {}), convoFilter: '', toast: null,
 };
@@ -131,7 +134,8 @@ export const actions = {
   },
   setSidebarWidth: (w: number) => { const width = Math.min(480, Math.max(220, Math.round(w))); write('fleet.sidebar.width', width); set({ sidebarWidth: width }); },
   toggleSidebar: () => set(s => { write('fleet.sidebar.collapsed', !s.sidebarCollapsed); return { sidebarCollapsed: !s.sidebarCollapsed }; }),
-  setPalette: (paletteOpen: boolean) => set({ paletteOpen }),
+  /** `query` is what the palette starts with, so a button can open it already narrowed. */
+  setPalette: (paletteOpen: boolean, query = '') => set({ paletteOpen, paletteQuery: query }),
   toggleRepo: (name: string) => set(s => { const openRepos = { ...s.openRepos, [name]: !s.openRepos[name] }; write('fleet.repos.open', openRepos); return { openRepos }; }),
   toggleSection: (name: string) => set(s => { const openSections = { ...s.openSections, [name]: !s.openSections[name] }; write('fleet.sections.open', openSections); return { openSections }; }),
   setConvoFilter: (convoFilter: string) => set({ convoFilter }),
