@@ -104,7 +104,13 @@ export interface Role { model: string; effort: string; purpose: string }
 export interface DispatchDefaults { permissionMode: string; defaultModel: string; maxConcurrent: number }
 
 /** A shell running inside Fleet. The browser attaches over a WebSocket; it keeps running when its tab closes. */
-export interface TerminalSummary { id: string; cwd: string; shell: string; title: string; startedAt: number; exitCode: number | null }
+export interface TerminalSummary { id: string; cwd: string; shell: string; title: string; startedAt: number; exitCode: number | null; /** This terminal runs the herdr client. */ herdr?: boolean }
+
+export type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
+export interface HerdrAgent { paneId: string; workspaceId: string; workspace: string; status: HerdrStatus; agent: string; title: string; cwd?: string }
+export interface HerdrWorkspace { id: string; label: string; status: HerdrStatus; cwd?: string }
+/** herdr as seen over its local socket. `installed` is whether the binary was found; `running` whether its server answered. */
+export interface HerdrState { installed: boolean; running: boolean; agents: HerdrAgent[]; workspaces: HerdrWorkspace[]; error?: string }
 
 /** A unit of work on the board. A chat is its worker: Fleet starts one when a slot is free, and the chat reports back with fleet_report.
  *  queued → working → review | blocked → (approve) done, or (send back) working again. `failed` means the worker is gone. */
@@ -154,6 +160,7 @@ export interface JiraCreated { key: string; url: string; warnings: string[] }
 export interface Snapshot {
   jira: JiraStatus | null;
   generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[]; dialogues: DialogueSummary[]; tasks: TaskSummary[];
+  herdr: HerdrState;
   errors: Record<string, string>; roles: Record<string, Role>; dispatch: DispatchDefaults;
 }
 

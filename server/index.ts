@@ -11,6 +11,7 @@ import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
 import { Teleport } from './teleport.js';
 import { TerminalManager, type Terminal } from './terminals.js';
+import { HerdrMonitor } from './herdr.js';
 import { DialogueManager } from './dialogue.js';
 import { TaskManager } from './tasks.js';
 import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
@@ -40,6 +41,9 @@ const aws = new AwsCreds(config.aws, stateDir, process.env.FLEET_CONFIG || path.
 const teleport = new Teleport(config.teleport, stateDir, process.env.FLEET_CONFIG || path.join(root, 'fleet.config.json'));
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
+const herdr = new HerdrMonitor();
+collector.herdr = herdr;
+herdr.on('change', () => collector.publish());
 const sql = new SqlManager(config.sql, teleport, stateDir);
 const saved = new SavedQueries(stateDir, a => sql.aliases().some(x => x.alias === a));
 const snippets = new Snippets(stateDir, defaultSnippets(CASE_JOINS));
@@ -531,6 +535,31 @@ app.post('/api/terminals', (req, res) => {
   try { res.json(terminals.open({ cwd: dir, cols: Number(req.body?.cols) || undefined, rows: Number(req.body?.rows) || undefined }).summary()); }
   catch (err) { res.status(500).json({ error: `could not start a shell: ${errText(err)}` }); }
 });
+// herdr: its client runs in a terminal here (one at a time); the socket API gives agent state and moves its focus.
+app.post('/api/herdr/open', async (req, res) => {
+  await herdr.refresh();
+  const bin = herdr.binary;
+  if (!bin) return res.status(400).json({ error: 'herdr is not installed (no herdr on PATH). See https://herdr.dev/' });
+  const dir = String(req.body?.cwd || config.reposRoot);
+  let t = terminals.findHerdr();
+  if (!t) {
+    try { t = terminals.open({ cwd: fs.existsSync(dir) ? dir : config.reposRoot, shell: bin, herdr: true, cols: Number(req.body?.cols) || undefined, rows: Number(req.body?.rows) || undefined }); }
+    catch (err) { return res.status(500).json({ error: `could not start herdr: ${errText(err)}` }); }
+  }
+  let hop: { workspaceId: string; opened: boolean } | null = null, note: string | undefined;
+  if (req.body?.cwd && fs.existsSync(dir)) {
+    // A fresh client needs a moment to start the herdr server before its socket answers.
+    for (let i = 0; i < 8 && !hop; i++) {
+      try { hop = await herdr.hop(dir); } catch (err) { note = errText(err); await new Promise(r => setTimeout(r, 500)); }
+    }
+    if (hop) note = undefined;
+  }
+  res.json({ terminal: t.summary(), hop, note });
+});
+app.post('/api/herdr/focus', async (req, res) => {
+  try { await herdr.focusAgent(String(req.body?.paneId || '')); res.json({ ok: true }); }
+  catch (err) { res.status(502).json({ error: errText(err) }); }
+});
 app.delete('/api/terminals/:id', (req, res) => terminals.close(req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'no such terminal' }));
 
 // Browsers do not apply same-origin rules to WebSockets, so any web page could otherwise open a shell here. Only Fleet's own pages may.
@@ -565,6 +594,7 @@ if (fs.existsSync(webDist)) {
 }
 
 collector.start();
+herdr.start();
 chats.persistTo(path.join(stateDir, `chats-${config.port}.json`));
 sql.persistTo(path.join(stateDir, `sql-${config.port}.json`));
 dialogues.persistTo(path.join(stateDir, `dialogues-${config.port}.json`));

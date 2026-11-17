@@ -6,6 +6,7 @@ import { useContextMenu } from './ContextMenu';
 import { ProjectTree } from './ProjectTree';
 import { ConversationList } from './ConversationList';
 import { TerminalList } from './TerminalList';
+import { HerdrList } from './HerdrList';
 import { DialogueList } from './DialogueList';
 import { MOD } from '../lib/platform';
 import { SidebarDialogs } from './SidebarDialogs';
@@ -34,6 +35,7 @@ export function Sidebar() {
         ])}><Plus size={14} aria-hidden="true" /> New <ChevronDown size={13} className="ml-auto text-fg-faint" aria-hidden="true" /></button>
         {menu}
         <ProjectTree />
+        <HerdrList />
         <TerminalList />
         <DialogueList />
         <ConversationList />

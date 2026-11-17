@@ -8,6 +8,7 @@ import { SessionHomes, type WorktreeRef, type Placement } from './sources/homes.
 import { ConversationMarks } from './sources/marks.js';
 import type { ChatManager } from './chat.js';
 import type { TerminalManager } from './terminals.js';
+import type { HerdrMonitor } from './herdr.js';
 import type { DialogueManager } from './dialogue.js';
 import type { TaskManager } from './tasks.js';
 import type { JiraWatcher } from './jira.js';
@@ -19,7 +20,7 @@ type Located = (Omit<Worktree, 'sessions'> & { repo: string; by: Placement['by']
 export class Collector extends EventEmitter {
   config: FleetConfig; chats: ChatManager | null; homes: SessionHomes;
   /** Set by the server after construction; its `change` events call publish(). */
-  terminals: TerminalManager | null = null; dialogues: DialogueManager | null = null; tasks: TaskManager | null = null; jira: JiraWatcher | null = null;
+  terminals: TerminalManager | null = null; herdr: HerdrMonitor | null = null; dialogues: DialogueManager | null = null; tasks: TaskManager | null = null; jira: JiraWatcher | null = null;
   agents: AgentRow[] = []; jobs: Record<string, JobRecord> = {}; repos: RepoScan[] = []; conversations: SavedConversation[] = [];
   errors: Record<string, string> = {};
   snapshot: Snapshot; private lastSig = '';
@@ -93,7 +94,7 @@ export class Collector extends EventEmitter {
 
   publish() {
     const next = this.build();
-    const sig = JSON.stringify({ s: next.sessions, r: next.repos, c: next.conversations, ch: next.chats, t: next.terminals, d: next.dialogues, tk: next.tasks, j: next.jira, e: next.errors });
+    const sig = JSON.stringify({ s: next.sessions, r: next.repos, c: next.conversations, ch: next.chats, t: next.terminals, h: next.herdr, d: next.dialogues, tk: next.tasks, j: next.jira, e: next.errors });
     if (sig === this.lastSig) return;
     this.lastSig = sig;
     this.snapshot = next;
@@ -153,7 +154,7 @@ export class Collector extends EventEmitter {
     }
     const repos = this.repos.map(r => ({ ...r, worktrees: r.worktrees.map(w => ({ ...w, sessions: byWorktree.get(normPath(w.path)) || [] })) }));
 
-    return { generatedAt: Date.now(), sessions, repos, conversations, chats, terminals: this.terminals?.list() || [], dialogues: this.dialogues?.list() || [], tasks: this.tasks?.list() || [], jira: this.jira ? { ...this.jira.status } : null, errors: { ...this.errors }, roles: this.config.roles, dispatch: this.config.dispatch };
+    return { generatedAt: Date.now(), sessions, repos, conversations, chats, terminals: this.terminals?.list() || [], dialogues: this.dialogues?.list() || [], tasks: this.tasks?.list() || [], herdr: this.herdr?.state || { installed: false, running: false, agents: [], workspaces: [] }, jira: this.jira ? { ...this.jira.status } : null, errors: { ...this.errors }, roles: this.config.roles, dispatch: this.config.dispatch };
   }
 }
 

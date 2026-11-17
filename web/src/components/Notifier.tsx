@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { actions, getState, useStore } from '../lib/store';
+import { openHerdr } from '../lib/terminal';
 import type { ChatStatus, TaskStatus } from '../lib/api';
 
 const BASE_TITLE = 'Fleet';
@@ -36,6 +37,25 @@ export function Notifier() {
       n.onclick = () => { window.focus(); actions.go({ kind: 'overview' }); n.close(); };
     }
   }, [tasks]);
+
+  // herdr agents: one notification when one becomes blocked (needs you) or finishes a turn, unless you are already looking at herdr.
+  const agents = useStore(s => s.snapshot?.herdr.agents);
+  const agentsSeen = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    if (!agents) return;
+    const before = agentsSeen.current;
+    agentsSeen.current = new Map(agents.map(a => [a.paneId, a.status]));
+    if (!before || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const { view, snapshot } = getState();
+    const looking = !document.hidden && view.kind === 'terminal' && !!snapshot?.terminals.find(t => t.id === view.id)?.herdr;
+    if (looking) return;
+    for (const a of agents) {
+      const was = before.get(a.paneId);
+      if (!was || was === a.status || !(a.status === 'blocked' || a.status === 'done')) continue;
+      const n = new Notification(a.status === 'blocked' ? `${a.agent} needs you` : `${a.agent} finished`, { body: `${a.title || a.workspace} · ${a.workspace}`, tag: `fleet-herdr-${a.paneId}` });
+      n.onclick = () => { window.focus(); openHerdr(undefined, a.paneId); n.close(); };
+    }
+  }, [agents]);
 
   useEffect(() => {
     if (!chats) return;

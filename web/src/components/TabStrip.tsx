@@ -134,7 +134,10 @@ ${bg} running in the background` : ''}`, state: s?.state || c?.status, bg };
     case 'terminal': {
       const t = snap?.terminals.find(x => x.id === v.id);
       if (!t) return { text: 'Terminal', hint: 'Terminal (no longer running)', state: 'ended' };
-      return { text: t.title, hint: `${t.shell}\n${t.cwd}`, state: t.exitCode == null ? undefined : 'ended' };
+      const agents = t.herdr ? snap?.herdr.agents || [] : [];
+      const blocked = agents.filter(a => a.status === 'blocked').length, working = agents.filter(a => a.status === 'working').length;
+      const tally = agents.length ? `\n${agents.length} agents${blocked ? `, ${blocked} blocked` : ''}${working ? `, ${working} working` : ''}` : '';
+      return { text: t.herdr ? 'herdr' : t.title, hint: `${t.shell}\n${t.cwd}${tally}`, state: t.exitCode != null ? 'ended' : blocked ? 'blocked' : working ? 'working' : undefined };
     }
   }
 }
