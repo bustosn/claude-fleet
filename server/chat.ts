@@ -15,6 +15,11 @@ import type { SqlManager } from './sql.js';
 import type { DialogueManager } from './dialogue.js';
 import type { AskQuestion, Attachment, ChatEvent, ContextUsage, PermissionChoice, RewindPreview, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
+/** Extra CLI flags for a chat's Claude process. Chats get the same Claude in Chrome access as the terminal CLI; QA reviewers never do (read-only, no browser). */
+export function cliExtraArgs(config: Pick<FleetConfig, 'claudeInChrome'>, qa: boolean): Record<string, string | null> | undefined {
+  return !qa && config.claudeInChrome ? { chrome: null } : undefined;
+}
+
 // Async queue the SDK consumes as its prompt stream: one live subprocess per chat, prompts pushed in over time.
 class Inbox implements AsyncIterable<SDKUserMessage> {
   private items: SDKUserMessage[] = []; private waiters: ((r: IteratorResult<SDKUserMessage>) => void)[] = []; closed = false;
@@ -383,6 +388,8 @@ export class Chat extends EventEmitter {
         canUseTool: async (toolName: string, input: Record<string, unknown>) => allowed.includes(toolName) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: `${toolName} is not available to QA reviewers; use Read, Grep, Glob and the fleet tools.` },
       });
     }
+    const extraArgs = cliExtraArgs(this.mgr.config, !!this.qa);
+    if (extraArgs) opts.extraArgs = extraArgs;
     if (this.resumeId) { opts.resume = this.resumeId; if (this.fork) opts.forkSession = true; }
     this.q = query({ prompt: this.inbox, options: opts });
     this.setStatus('idle');

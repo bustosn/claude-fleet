@@ -11,6 +11,7 @@
   "conversations": {
     "archiveAfterDays": 14
   },
+  "claudeInChrome": true,
   "dispatch": {
     "permissionMode": "auto",
     "defaultModel": "fable",

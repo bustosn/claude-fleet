@@ -26,6 +26,8 @@ export interface FleetConfig {
   terminal: { shell: string | null };
   /** Saved conversations idle this many days move to Archived on their own. 0 turns it off. */
   conversations: { archiveAfterDays: number };
+  /** Start chats with the CLI's --chrome, so they can drive the person's Chrome through the Claude in Chrome extension. Never applies to QA reviewers. */
+  claudeInChrome: boolean;
   jira: JiraConfig;
   sql: SqlConfig;
   qa: QaConfig;
@@ -102,6 +104,7 @@ export function loadConfig(): FleetConfig {
     roles: raw.roles || {}, aws: raw.aws || {}, teleport: raw.teleport || {},
     terminal: { shell: raw.terminal?.shell ? String(raw.terminal.shell) : null },
     conversations: { archiveAfterDays: Number(raw.conversations?.archiveAfterDays ?? 14) || 0 },
+    claudeInChrome: raw.claudeInChrome !== false,
     jira: {
       baseUrl: String(raw.jira?.baseUrl || '').replace(/\/+$/, ''), email: String(raw.jira?.email || ''),
       // The token can stay out of the file.

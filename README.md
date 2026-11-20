@@ -99,6 +99,6 @@ Design and roadmap: [`docs/plans/`](docs/plans/). If you are an agent working on
 
 ## Config
 
-`fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), the `aws` section, the `sql` section (`envFile`, `aliases`, `defaultAlias`, `autoLimit`, `maxRows`, `timeoutMs`, `lookups`), and `terminal.shell` (null picks PowerShell on Windows, `$SHELL` elsewhere).
+`fleet.config.json`: `reposRoot`, `claudeHome`, `port`, poll intervals, `dispatch` defaults, the `roles` model map (director, manager, coder, reviewer, searcher), the `aws` section, the `sql` section (`envFile`, `aliases`, `defaultAlias`, `autoLimit`, `maxRows`, `timeoutMs`, `lookups`), `terminal.shell` (null picks PowerShell on Windows, `$SHELL` elsewhere), and `claudeInChrome` (default on: chats start with `--chrome`, so they can drive your Chrome through the Claude in Chrome extension like the terminal CLI; QA reviewers never get it. Needs Chrome open with the extension signed in).
 
 It is not tracked: each machine (and each worktree) keeps its own copy, made from `fleet.config.example.json`. `reposRoot` is the only value that has to change; `claudeHome` defaults to `~/.claude`. Leave `aws.profile` empty and the credential hub turns itself off — no AWS CLI or SSO profile needed.
