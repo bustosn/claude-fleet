@@ -324,6 +324,8 @@ export interface UsageReport {
   projects: ({ project: string; sessions: number } & UsageTotals)[];
 }
 export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null;
+  /** How long a statement may run before the server stops it (sql.timeoutMs). */
+  timeoutMs: number;
   /** Column name to the db.table its value is the id of, for keys the schema does not declare. */
   fkGuesses: Record<string, string>;
   /** The most rows an export re-run on the server writes. */

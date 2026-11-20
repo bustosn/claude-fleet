@@ -595,12 +595,13 @@ WHERE ${r.column} = ${keyLiteral(refsOf.value)}` });
     return () => removeEventListener('keydown', onKey);
   });
 
-  // Elapsed time while running.
+  // Elapsed time while anything runs: the result on screen, a script, or a query in another tab (its tab shows the time).
+  const anyRunning = Object.values(results).some(r => r.status === 'running') || Object.values(scripts).some(sc => sc?.running);
   useEffect(() => {
-    if (result?.status !== 'running') return;
-    const h = setInterval(() => tick(n => n + 1), 250);
+    if (!anyRunning) return;
+    const h = setInterval(() => tick(n => n + 1), 100);
     return () => clearInterval(h);
-  }, [result?.status]);
+  }, [anyRunning]);
 
   // Draggable splits: the left pane's width, and the editor's share of the height (per tab).
   const right = useRef<HTMLDivElement>(null);
@@ -692,6 +693,7 @@ Double-click to rename; right-click for more`}>
                   ? <input autoFocus className="sql-tab-input" defaultValue={t.title} onBlur={e => { patchTab(t.id, { title: e.target.value.trim() || t.title }); setRenaming(null); }}
                     onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenaming(null); }} onClick={e => e.stopPropagation()} />
                   : <span className="truncate">{t.title}</span>}
+                {t.id !== activeId && results[t.id]?.status === 'running' && <span className="sql-tab-time num" title="Running">{elapsed(Date.now() - results[t.id].startedAt, true)}</span>}
                 <button className="sql-tab-x" aria-label={`Close ${t.title}`} onClick={e => { e.stopPropagation(); closeTab(t.id); }}><X size={12} /></button>
               </div>
             );
@@ -721,7 +723,7 @@ Double-click to rename; right-click for more`}>
             </label>
             <span className="sql-tsep" />
             {running
-              ? <button className="btn sm danger" onClick={cancel} title="Esc"><Ban size={13} aria-hidden="true" /> Cancel</button>
+              ? <button className="btn sm danger" onClick={cancel} title="Esc"><Ban size={13} aria-hidden="true" /> Cancel{live?.status === 'running' ? <span className="num">· {elapsed(Date.now() - live.startedAt, true)}</span> : null}</button>
               : <button className="btn sm primary" onClick={() => run('auto')} title={`Run the statement under the cursor (Ctrl+Enter). Adds LIMIT ${info.autoLimit} when there is none.`}><Play size={13} aria-hidden="true" /> Run</button>}
             <button className="btn sm ghost" onClick={runScript} disabled={running} title="Run every statement in the tab, one result tab each, stopping at the first error (Alt+Enter). Select some to run only those."><ListChecks size={13} aria-hidden="true" /> Script</button>
             <button className="btn sm ghost" onClick={() => run('max')} disabled={running} title={`Run up to ${info.maxRows.toLocaleString()} rows (Ctrl+Shift+Enter)`}><PlayCircle size={13} aria-hidden="true" /> {info.maxRows.toLocaleString()}</button>
@@ -752,6 +754,7 @@ Double-click to rename; right-click for more`}>
             <div className="flex min-h-0 flex-1 flex-col bg-surface">
               {slots.length > 0 && <ResultTabs slots={slots} view={vk} liveKey={active.id} results={results} onView={k => setViews(v => ({ ...v, [active.id]: k }))} onClose={closeSlot} onPin={pin} />}
               {running && <div className="sql-progress" aria-hidden="true" />}
+              {live?.status === 'running' && vk === active.id && !live.rows.length && <RunningClock result={live} alias={alias} timeoutMs={info.timeoutMs} onCancel={cancel} />}
               {summary && script && <ScriptSummary run={script} onView={k => setViews(v => ({ ...v, [active.id]: k }))} />}
               {result?.notice && running && <div className="sql-banner warn">{result.notice}</div>}
               {result?.status === 'error' && result.error && (
@@ -838,7 +841,7 @@ function StatusBar({ alias, db, result, autoLimit, maxRows, onCancel, onRunMax }
       {result && (result.affected != null
         ? <span className="num">{result.affected.toLocaleString()} row{result.affected === 1 ? '' : 's'} affected</span>
         : <span className="num">{result.rows.length.toLocaleString()} row{result.rows.length === 1 ? '' : 's'}</span>)}
-      {ms != null && <span className="num text-fg-muted">{ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`}</span>}
+      {ms != null && <span className={`num ${running ? 'text-fg' : 'text-fg-muted'}`}>{running ? elapsed(ms) : ms < 1000 ? `${ms} ms` : elapsed(ms)}</span>}
       {running && <button className="chip crit" onClick={onCancel}>Cancel · Esc</button>}
     </div>
   );
@@ -894,6 +897,29 @@ function TxBar({ tx, onCommit, onRollback }: { tx: SqlTx; onCommit: () => void; 
       </span>
       <button className="btn sm" onClick={onRollback} title="ROLLBACK: undo everything since START TRANSACTION"><Undo2 size={13} aria-hidden="true" /> Rollback</button>
       <button className="btn sm primary" onClick={onCommit} title="COMMIT: keep everything since START TRANSACTION"><CheckCheck size={13} aria-hidden="true" /> Commit</button>
+    </div>
+  );
+}
+
+/** Elapsed time as people read it: 0.4 s, 12.4 s, then 1:05 and 1:02:03. `short` drops the tenths past ten seconds, for tight spots. */
+function elapsed(ms: number, short = false): string {
+  const s = Math.max(0, ms) / 1000;
+  if (s < 60) return s < 10 || !short ? `${s.toFixed(1)} s` : `${Math.floor(s)} s`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+/** While a query runs and nothing has come back yet: how long it has been, where it runs, and Cancel. Past ten seconds, how long until the
+ *  server's time limit stops it. Rows arriving replace this with the grid, and the status bar keeps counting. */
+function RunningClock({ result, alias, timeoutMs, onCancel }: { result: SqlResult; alias: { alias: string; prod: boolean } | null; timeoutMs: number; onCancel: () => void }) {
+  const ms = Date.now() - result.startedAt;
+  const left = timeoutMs - ms;
+  return (
+    <div className="sql-clock" role="status" aria-live="off">
+      <div className="sql-clock-time num">{elapsed(ms)}</div>
+      <div className="text-[12px] text-fg-muted">Running on <b className={alias?.prod ? 'text-crit' : 'text-fg'}>{alias?.alias}</b>{result.statement ? <> · <span className="mono">{result.statement.replace(/s+/g, ' ').slice(0, 80)}{result.statement.length > 80 ? '…' : ''}</span></> : null}</div>
+      {ms > 10000 && left > 0 && <div className="text-[11.5px] text-fg-faint">The server stops it at {elapsed(timeoutMs, true)}, in {elapsed(left, true)}.</div>}
+      <button className="btn sm danger mt-1" onClick={onCancel}><Ban size={13} aria-hidden="true" /> Cancel · Esc</button>
     </div>
   );
 }
