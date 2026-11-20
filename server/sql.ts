@@ -53,7 +53,7 @@ export class SqlManager {
     let error: string | null = null;
     if (!aliases.length) error = 'No tunnels to offer. The SQL view uses the Teleport tunnels named in sql.aliases (main-dev, data-dev, main-prd-reader, data-prd-reader by default).';
     const defaultAlias = aliases.find(a => a.alias === this.cfg.defaultAlias)?.alias || aliases[0]?.alias || '';
-    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error, fkGuesses: this.cfg.fkGuesses, exportMaxRows: this.cfg.exportMaxRows };
+    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error, fkGuesses: this.cfg.fkGuesses, exportMaxRows: this.cfg.exportMaxRows, timeoutMs: this.cfg.timeoutMs };
   }
   private alias(name: string): SqlAlias {
     const a = this.aliases().find(x => x.alias === name);
