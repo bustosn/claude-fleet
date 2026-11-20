@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, classifyWrite, countParams, tableRefs, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset } from '../shared/sqlClassify.js';
+import { classify, classifyWrite, countParams, tableRefs, split, statementAt, hasTopLevelLimit, limitable, withLimit, errorOffset, paramNames, bindParams } from '../shared/sqlClassify.js';
 
 const reads = [
   'SELECT * FROM cb911.cb_chargebacks WHERE id = 1',
@@ -110,10 +110,21 @@ test('dev connections: any one statement, transactions refused, risky writes fla
   for (const r of ['SELECT 1', 'SHOW TABLES']) assert.deepEqual([classifyWrite(r).ok, classifyWrite(r).write], [true, false], r);
   const fine = ["UPDATE cb911.t SET a = 1 WHERE id = 5", 'DELETE FROM t WHERE id IN (1, 2)', "INSERT INTO t (a) VALUES (1)", 'CREATE TABLE x (id INT)', 'ALTER TABLE x ADD COLUMN b INT', 'INSERT INTO t SELECT * FROM u'];
   for (const w of fine) { const c = classifyWrite(w); assert.equal(c.ok, true, w); assert.equal(c.write, true, w); assert.equal(c.danger, null, w); }
+  assert.equal(classifyWrite('DROP TEMPORARY TABLE x').danger, null);
   const risky = ['UPDATE t SET a = 1', 'DELETE FROM t', 'UPDATE t SET a = (SELECT b FROM u WHERE u.id = 1)', 'TRUNCATE TABLE t', 'DROP TABLE t', 'WITH x AS (SELECT 1) DELETE FROM t'];
   for (const w of risky) { const c = classifyWrite(w); assert.equal(c.ok, true, w); assert.ok(c.danger, w); }
-  for (const t of ['BEGIN', 'START TRANSACTION', 'COMMIT', 'ROLLBACK', 'SET autocommit = 0', 'LOCK TABLES t WRITE', 'UPDATE t SET a = 1 WHERE id = 1; DELETE FROM t'])
+  for (const t of ['SET autocommit = 0', 'SET SESSION autocommit = 0', 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED', 'LOCK TABLES t WRITE', 'UNLOCK TABLES', 'XA START x', 'START SLAVE', 'UPDATE t SET a = 1 WHERE id = 1; DELETE FROM t'])
     assert.equal(classifyWrite(t).ok, false, t);
+  // Transaction control is allowed and labeled; the server pins a connection to the tab for it.
+  const tx: [string, string][] = [['BEGIN', 'begin'], ['begin work', 'begin'], ['START TRANSACTION', 'begin'], ['start transaction read write', 'begin'], ['COMMIT', 'commit'], ['commit work', 'commit'],
+    ['ROLLBACK', 'rollback'], ['ROLLBACK TO SAVEPOINT a', 'savepoint'], ['rollback work to a', 'savepoint'], ['SAVEPOINT a', 'savepoint'], ['RELEASE SAVEPOINT a', 'savepoint']];
+  for (const [s, want] of tx) { const c = classifyWrite(s); assert.equal(c.ok, true, s); assert.equal(c.tx, want, s); }
+  // DDL commits an open transaction in MySQL; DML does not.
+  for (const s of ['ALTER TABLE x ADD b INT', 'CREATE TABLE y (id INT)', 'TRUNCATE TABLE t', 'DROP TABLE t']) assert.equal(classifyWrite(s).implicitCommit, true, s);
+  for (const s of ['UPDATE t SET a = 1 WHERE id = 1', 'INSERT INTO t VALUES (1)', 'DELETE FROM t WHERE id = 1', 'CREATE TEMPORARY TABLE x (id INT)', 'DROP TEMPORARY TABLE x'])
+    assert.equal(classifyWrite(s).implicitCommit, undefined, s);
+  // Prod never runs transaction control.
+  for (const s of ['BEGIN', 'START TRANSACTION', 'COMMIT']) assert.equal(classify(s).ok, false, s);
   // Prod keeps the read-only check.
   assert.equal(classify('UPDATE t SET a = 1 WHERE id = 5').ok, false);
 });
@@ -132,4 +143,29 @@ test('table references and aliases, for column completion', () => {
   assert.deepEqual(tableRefs('SELECT * FROM t WHERE x = 1'), [{ db: null, table: 't', alias: null }]);
   assert.deepEqual(tableRefs('UPDATE cb911.t x SET x.a = 1'), [{ db: 'cb911', table: 't', alias: 'x' }]);
   assert.deepEqual(tableRefs('SELECT * FROM (SELECT id FROM u) sub'), [{ db: null, table: 'u', alias: null }]);
+});
+
+test('parameters: :name and ?, not := or times or strings', () => {
+  assert.deepEqual(paramNames('SELECT * FROM t WHERE case_no = :case AND client_id = :Client OR x = :case'), ['case', 'client']);
+  assert.deepEqual(paramNames('SELECT * FROM t WHERE a = ? AND b = ?'), ['?1', '?2']);
+  assert.deepEqual(paramNames('SET @x := 1'), []);
+  assert.deepEqual(paramNames('SELECT @n := @n + 1 FROM t'), []);
+  assert.deepEqual(paramNames("SELECT * FROM t WHERE created > '2026-01-01 10:30:00' AND tm = '10:30'"), []);
+  assert.deepEqual(paramNames("SELECT TIME '10:30', ':name' AS s, `:col` FROM t -- :nope\n/* :no */"), []);
+  assert.deepEqual(paramNames('SELECT a:b FROM t'), []);
+  assert.deepEqual(paramNames('SELECT * FROM t WHERE a = : name'), []);
+  assert.deepEqual(paramNames("SELECT JSON_EXTRACT(j, '$.a:b') FROM t WHERE id = :id"), ['id']);
+});
+
+test('binding parameters escapes every value', () => {
+  const esc = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  assert.equal(bindParams('SELECT * FROM t WHERE a = :a AND b = :a', { a: "x' OR 1=1 -- " }, esc).text, "SELECT * FROM t WHERE a = 'x\\' OR 1=1 -- ' AND b = 'x\\' OR 1=1 -- '");
+  assert.equal(bindParams('SELECT * FROM t WHERE id IN (:ids)', { ids: '1, 2\n3' }, esc).text, "SELECT * FROM t WHERE id IN ('1', '2', '3')");
+  assert.equal(bindParams('SELECT * FROM t WHERE a = ? AND b = ?', { '?1': '1', '?2': 'two' }, esc).text, "SELECT * FROM t WHERE a = '1' AND b = 'two'");
+  assert.equal(bindParams('SELECT * FROM t LIMIT :n', { n: '10' }, esc).text, 'SELECT * FROM t LIMIT 10');
+  assert.equal(bindParams('SELECT * FROM t LIMIT :n', { n: '1; DROP TABLE t' }, esc).text, "SELECT * FROM t LIMIT '1; DROP TABLE t'");
+  assert.deepEqual(bindParams('SELECT :a, :b', { a: '1' }, esc).missing, ['b']);
+  assert.match(bindParams('SELECT * FROM t WHERE id IN (:ids)', { ids: '1,2,3' }, esc, 2).error || '', /3 values/);
+  // A bound value can never become a write: it is one string token.
+  assert.equal(classify(bindParams('SELECT * FROM t WHERE a = :a', { a: "'; DELETE FROM t; --" }, esc).text).ok, true);
 });

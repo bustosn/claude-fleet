@@ -1,4 +1,4 @@
-import { GitBranch, Plus } from 'lucide-react';
+import { Code2, GitBranch, Plus } from 'lucide-react';
 import { age, shortPath, ticketKey } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { SessionRow } from '../components/ProjectTree';
@@ -24,6 +24,7 @@ export function WorktreeView({ path }: { path: string }) {
           <div className="mono text-[12px] text-fg-faint">{wt.path}</div>
         </div>
         {key && <span className="chip ticket">{key}</span>}
+        <button className="btn" onClick={() => actions.go({ kind: 'ide', root: wt.path })}><Code2 size={13} aria-hidden="true" /> Open code</button>
         <button className="btn primary" onClick={() => actions.go({ kind: 'new-chat', cwd: wt.path })}><Plus size={13} aria-hidden="true" /> New chat here</button>
       </header>
 

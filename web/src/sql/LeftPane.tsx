@@ -1,12 +1,13 @@
-import { useMemo, useState, type MouseEvent as RMouseEvent } from 'react';
-import { ChevronRight, Clock, Copy, Database, Eye, FilePlus2, KeyRound, Pencil, Play, Plus, RefreshCw, Search, Table2, Trash2, Zap } from 'lucide-react';
-import { api, type SqlColumnInfo, type SqlHistoryEntry, type SqlIndexInfo, type SqlLookup, type SqlSchema } from '../lib/api';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent } from 'react';
+import { ChevronRight, Clock, Columns3, Copy, Database, Eye, FilePlus2, KeyRound, Pencil, Play, Plus, RefreshCw, Search, Table2, Trash2, Zap } from 'lucide-react';
+import { api, type SqlColumnInfo, type SqlHistoryEntry, type SqlColumnHit, type SqlIndexInfo, type SqlLookup, type SqlSchema } from '../lib/api';
 import { age } from '../lib/format';
 import { actions } from '../lib/store';
 import { useContextMenu } from '../components/ContextMenu';
 import { copy } from './copy';
+import { TableInfo } from './TableInfo';
 
-export type PaneMode = 'schema' | 'history' | 'lookups';
+export type PaneMode = 'schema' | 'history' | 'lookups' | 'saved';
 
 interface Props {
   mode: PaneMode; onMode: (m: PaneMode) => void;
@@ -17,18 +18,21 @@ interface Props {
   onLookup: (name: string, value: string) => void;
   /** Opens the lookup editor: a lookup to edit, a copy to start from, or the current query as the SQL. */
   onEditLookup: (l: Partial<SqlLookup> & { editing?: string }) => void; onDeleteLookup: (name: string) => void; currentSql: () => string;
+  /** The Saved mode's content (SavedPane), built by the view that owns saved queries and snippets. */
+  saved?: React.ReactNode;
 }
 
 export function LeftPane(p: Props) {
   return (
     <div className="sql-left">
       <div className="sql-seg m-2" role="tablist" aria-label="Left pane">
-        {(['schema', 'history', 'lookups'] as const).map(m => (
-          <button key={m} role="tab" aria-selected={p.mode === m} onClick={() => p.onMode(m)}>{m === 'schema' ? 'Schema' : m === 'history' ? 'History' : 'Lookups'}</button>
+        {(['schema', 'saved', 'history', 'lookups'] as const).map(m => (
+          <button key={m} role="tab" aria-selected={p.mode === m} onClick={() => p.onMode(m)}>{m === 'schema' ? 'Schema' : m === 'saved' ? 'Saved' : m === 'history' ? 'History' : 'Lookups'}</button>
         ))}
       </div>
       {p.mode === 'schema' && <SchemaTree {...p} />}
       {p.mode === 'history' && <History history={p.history} alias={p.alias} onQuery={p.onQuery} />}
+      {p.mode === 'saved' && p.saved}
       {p.mode === 'lookups' && <Lookups lookups={p.lookups} onLookup={p.onLookup} onEdit={p.onEditLookup} onDelete={p.onDeleteLookup} currentSql={p.currentSql} alias={p.alias} />}
     </div>
   );
@@ -42,6 +46,37 @@ function SchemaTree({ alias, schema, schemaError, loading, onRefresh, columns, l
   const [indexes, setIndexes] = useState<Record<string, SqlIndexInfo[] | 'loading' | string>>({});
   const [menu, openMenu] = useContextMenu();
   const toggle = (k: string) => setOpen(o => ({ ...o, [k]: !o[k] }));
+  // The hover card: shown after a short rest on a table, gone when the pointer leaves it.
+  const [hover, setHover] = useState<{ db: string; table: string; rect: DOMRect } | null>(null);
+  const hoverTimer = useRef(0);
+  const enter = (e: RMouseEvent, db: string, table: string) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => setHover({ db, table, rect }), 450);
+  };
+  const leave = () => { clearTimeout(hoverTimer.current); setHover(null); };
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+  // Find a column: the search box looks for column names across every database instead of table names.
+  const [find, setFind] = useState<'tables' | 'columns'>('tables');
+  const [hits, setHits] = useState<{ q: string; rows: SqlColumnHit[] | null; error: string | null } | null>(null);
+  useEffect(() => {
+    const t = q.trim();
+    if (find !== 'columns' || t.length < 2) { setHits(null); return; }
+    let live = true;
+    const h = setTimeout(() => {
+      setHits(x => ({ q: t, rows: x?.rows || null, error: null }));
+      api.sqlFindColumns(alias, t).then(rows => { if (live) setHits({ q: t, rows, error: null }); }, err => { if (live) setHits({ q: t, rows: null, error: err.message }); });
+    }, 350);
+    return () => { live = false; clearTimeout(h); };
+  }, [q, find, alias]);
+  const hitMenu = (e: RMouseEvent, h: SqlColumnHit) => openMenu(e, [
+    { label: `SELECT ${h.column}, … LIMIT 100`, icon: Play, onSelect: () => onQuery(`SELECT ${h.column}, t.*\nFROM ${h.db}.${h.table} t\nLIMIT 100`, { run: true, title: h.table }) },
+    { label: 'Open the table in the tree', onSelect: () => { setFind('tables'); setQ(h.table); setOpen(o => ({ ...o, [h.db]: true, [`${h.db}.${h.table}`]: true })); loadColumns(h.db); } },
+    'separator',
+    { label: 'Insert column name', onSelect: () => onInsert(h.column) },
+    { label: `Insert ${h.db}.${h.table}`, onSelect: () => onInsert(`${h.db}.${h.table}`) },
+    { label: 'Copy db.table.column', onSelect: async () => { await copy(`${h.db}.${h.table}.${h.column}`); actions.toast('Copied'); } },
+  ]);
 
   const dbs = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -74,13 +109,33 @@ function SchemaTree({ alias, schema, schemaError, loading, onRefresh, columns, l
       <div className="flex items-center gap-1 px-2 pb-1.5">
         <div className="sql-search flex-1">
           <Search size={12} aria-hidden="true" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Find a table" aria-label="Find a table" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder={find === 'columns' ? 'Find a column in every database' : 'Find a table'} aria-label={find === 'columns' ? 'Find a column' : 'Find a table'}
+            onKeyDown={e => { if (e.altKey && e.code === 'KeyC') { e.preventDefault(); setFind(f => f === 'columns' ? 'tables' : 'columns'); } }} />
         </div>
+        <button className={`iconbtn h-7 w-7 ${find === 'columns' ? 'is-on' : ''}`} aria-pressed={find === 'columns'} onClick={() => setFind(f => f === 'columns' ? 'tables' : 'columns')}
+          title={find === 'columns' ? 'Searching column names. Click to search tables (Alt+C)' : 'Search column names across every database instead (Alt+C)'} aria-label="Search columns"><Columns3 size={13} /></button>
         <button className="iconbtn h-7 w-7" title={schema ? `Schema read ${age(schema.at)} ago. Refresh` : 'Refresh'} aria-label="Refresh schema" onClick={onRefresh} disabled={loading}>
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
-      <div className="sql-tree" role="tree" aria-label="Schema">
+      {find === 'columns' && <div className="sql-tree" aria-label="Columns found">
+        {q.trim().length < 2 && <div className="p-3 text-[12px] text-fg-faint">Type part of a column name; * is a wildcard (mid*id). Every database on {alias} is searched.</div>}
+        {hits?.error && <div className="m-2 rounded-md border border-crit bg-crit-soft p-2 text-[11.5px]">{hits.error}</div>}
+        {hits && !hits.rows && !hits.error && <div className="p-3 text-[12px] text-fg-faint">Searching…</div>}
+        {hits?.rows && !hits.rows.length && <div className="p-3 text-[12px] text-fg-faint">No column matches "{hits.q}".</div>}
+        {hits?.rows?.map(h => (
+          <button key={`${h.db}.${h.table}.${h.column}`} className="sql-hit" onClick={e => hitMenu(e, h)} onContextMenu={e => hitMenu(e, h)} onDoubleClick={() => onInsert(h.column)}
+            title={`${h.db}.${h.table}.${h.column} ${h.type}${h.key ? ` · ${keyGlyph(h.key)}` : ''}\nClick for queries; double-click to insert the name`}>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="grow truncate">{h.db}.{h.table}</span>
+              {h.key && <KeyRound size={11} className={`flex-none ${h.key === 'PRI' ? 'text-warn' : 'text-accent'}`} aria-label={keyGlyph(h.key)} />}
+            </span>
+            <span className="flex min-w-0 gap-2 text-fg-faint"><span className="truncate text-fg-muted">{h.column}</span><span className="grow" /><span className="flex-none">{h.type}</span></span>
+          </button>
+        ))}
+        {hits?.rows?.length === 500 && <div className="sql-leaf text-fg-faint" style={{ paddingLeft: 8 }}>The first 500. Type more to narrow.</div>}
+      </div>}
+      <div className="sql-tree" role="tree" aria-label="Schema" onScroll={leave} style={find === 'columns' ? { display: 'none' } : undefined}>
         {schemaError && <div className="m-2 rounded-md border border-crit bg-crit-soft p-2 text-[11.5px]">{schemaError}</div>}
         {!schema && !schemaError && <div className="p-3 text-[12px] text-fg-faint">{loading ? 'Reading the schema…' : 'No schema yet.'}</div>}
         {dbs.map(d => {
@@ -98,7 +153,7 @@ function SchemaTree({ alias, schema, schemaError, loading, onRefresh, columns, l
                 const cols = columns[d.name]?.[t.name], ix = indexes[k];
                 return (
                   <div key={t.name} role="treeitem" aria-expanded={!!tOpen}>
-                    <button className="sql-node" style={{ paddingLeft: 20 }} onClick={() => openTable(d.name, t.name)} onDoubleClick={() => onInsert(k)} onContextMenu={e => tableMenu(e, d.name, t.name)} title={`${k}${t.rows != null ? ` · about ${t.rows.toLocaleString()} rows` : ''}\nDouble-click to insert; right-click for queries`}>
+                    <button className="sql-node" style={{ paddingLeft: 20 }} onClick={() => openTable(d.name, t.name)} onDoubleClick={() => onInsert(k)} onContextMenu={e => { leave(); tableMenu(e, d.name, t.name); }} onMouseEnter={e => enter(e, d.name, t.name)} onMouseLeave={leave} aria-label={`${k}. Double-click to insert; right-click for queries`}>
                       <ChevronRight size={12} className={`sql-chev ${tOpen ? 'open' : ''}`} aria-hidden="true" />
                       {t.type === 'view' ? <Eye size={13} className="text-fg-faint" aria-hidden="true" /> : <Table2 size={13} className="text-fg-faint" aria-hidden="true" />}
                       <span className="grow truncate">{t.name}</span>
@@ -134,6 +189,7 @@ function SchemaTree({ alias, schema, schemaError, loading, onRefresh, columns, l
           );
         })}
       </div>
+      {hover && alias && <TableInfo alias={alias} db={hover.db} table={hover.table} rect={hover.rect} />}
       {menu}
     </>
   );

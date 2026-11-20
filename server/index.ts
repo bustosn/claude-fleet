@@ -5,19 +5,26 @@ import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { deleteSession, renameSession } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig, root } from './config.js';
+import { CASE_JOINS, loadConfig, root } from './config.js';
 import { Collector } from './collector.js';
 import { ChatManager } from './chat.js';
 import { AwsCreds } from './aws.js';
 import { Teleport } from './teleport.js';
 import { TerminalManager, type Terminal } from './terminals.js';
+import { HerdrMonitor } from './herdr.js';
 import { DialogueManager } from './dialogue.js';
 import { TaskManager } from './tasks.js';
 import { JiraClient, JiraWatcher, ticketKey } from './jira.js';
 import { SqlManager } from './sql.js';
 import { QaManager } from './qa.js';
+import { SavedQueries, Snippets, defaultSnippets } from './sqlSaved.js';
+import { usageReport } from './usage.js';
 import { conversationHistory, exportMarkdown } from './sources/conversations.js';
 import { openFile, openFolder, preview, rawImage, statRefs, suggestFiles } from './files.js';
+import { ConflictError, Ide } from './ide.js';
+import { grep } from './ideGrep.js';
+import * as git from './ideGit.js';
+import { LspManager, type LspKind } from './lsp.js';
 import { run, errText } from './util.js';
 
 // Fleet tools are deliberately auto-approved via allowedTools; the SDK warns about that on every chat start.
@@ -35,7 +42,12 @@ const aws = new AwsCreds(config.aws, stateDir, process.env.FLEET_CONFIG || path.
 const teleport = new Teleport(config.teleport, stateDir, process.env.FLEET_CONFIG || path.join(root, 'fleet.config.json'));
 const terminals = new TerminalManager(config.terminal.shell);
 collector.terminals = terminals;
+const herdr = new HerdrMonitor();
+collector.herdr = herdr;
+herdr.on('change', () => collector.publish());
 const sql = new SqlManager(config.sql, teleport, stateDir);
+const saved = new SavedQueries(stateDir, a => sql.aliases().some(x => x.alias === a));
+const snippets = new Snippets(stateDir, defaultSnippets(CASE_JOINS));
 chats.terminals = terminals; chats.teleport = teleport; chats.sql = sql; chats.shellDir = path.join(stateDir, 'shell'); chats.attachDir = path.join(stateDir, 'attachments');
 terminals.on('change', () => collector.publish());
 const dialogues = new DialogueManager(chats);
@@ -66,8 +78,8 @@ fs.mkdirSync(scratchDir, { recursive: true });
 
 const app = express();
 // Sending a message can carry attachments (base64 images and files), so that one route takes a larger body.
-const smallJson = express.json({ limit: '1mb' }), sendJson = express.json({ limit: '60mb' });
-app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/send$/.test(req.path) ? sendJson : smallJson)(req, res, next));
+const smallJson = express.json({ limit: '1mb' }), sendJson = express.json({ limit: '60mb' }), saveJson = express.json({ limit: '12mb' });
+app.use((req, res, next) => (/^\/api\/chats\/[^/]+\/send$/.test(req.path) ? sendJson : req.path === '/api/ide/file' ? saveJson : smallJson)(req, res, next));
 
 function sse(res: Response) {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -282,6 +294,33 @@ app.post('/api/chats/:id/file/open', (req, res) => {
   try { openFile(c.cwd, String(req.body?.path || ''), how, Number(req.body?.line) || undefined); res.json({ ok: true }); }
   catch (err) { res.status(400).json({ error: errText(err) }); }
 });
+// The IDE view: browse, open and save files under a checkout Fleet knows (or a chat's folder).
+const ide = new Ide(() => [...collector.repos.flatMap(r => [r.path, ...r.worktrees.map(w => w.path)]), ...chats.list().map(c => c.cwd)]);
+const ideRoute = (fn: (req: Request) => unknown) => async (req: Request, res: Response) => {
+  try { res.json(await fn(req)); } catch (err) { res.status(err instanceof ConflictError ? 409 : 400).json({ error: errText(err), conflict: err instanceof ConflictError || undefined }); }
+};
+const ideRoot = (req: Request) => ide.root(String(req.query.root ?? req.body?.root ?? ''));
+app.get('/api/ide/list', ideRoute(req => ide.list(ideRoot(req), String(req.query.dir || ''))));
+app.get('/api/ide/file', ideRoute(req => ide.read(ideRoot(req), String(req.query.path || ''))));
+app.put('/api/ide/file', ideRoute(req => ide.write(ideRoot(req), String(req.body?.path || ''), String(req.body?.text ?? ''), { expect: typeof req.body?.expect === 'number' ? req.body.expect : undefined, eol: req.body?.eol === 'crlf' ? 'crlf' : 'lf', bom: !!req.body?.bom, force: !!req.body?.force })));
+app.get('/api/ide/find', ideRoute(req => ide.find(ideRoot(req), String(req.query.q || ''), Math.min(200, Number(req.query.limit) || 50))));
+app.get('/api/ide/grep', async (req, res) => {
+  // A search the person has typed past is cancelled with the request, so a slow one does not pile up behind a newer one.
+  const stop = new AbortController();
+  res.on('close', () => stop.abort());
+  try {
+    const flag = (k: string) => req.query[k] === '1';
+    res.json(await grep(ideRoot(req), { q: String(req.query.q || ''), regex: flag('regex'), caseSensitive: flag('case'), word: flag('word'), glob: String(req.query.glob || ''), limit: Number(req.query.limit) || 500 }, stop.signal));
+  } catch (err) { res.status(400).json({ error: errText(err) }); }
+});
+const ideFile = (req: Request) => ide.check(ideRoot(req), String(req.query.path || ''));
+app.get('/api/ide/git/status', ideRoute(async req => await git.status(ideRoot(req))));
+app.get('/api/ide/git/changes', ideRoute(req => git.changes(ideRoot(req), ideFile(req))));
+app.get('/api/ide/git/blame', ideRoute(req => git.blame(ideRoot(req), ideFile(req))));
+app.get('/api/ide/git/log', ideRoute(req => git.log(ideRoot(req), ideFile(req))));
+app.get('/api/ide/git/show', ideRoute(req => { const rev = String(req.query.rev || ''); if (!git.validRev(rev)) throw new Error('bad revision'); return git.show(ideRoot(req), rev, ideFile(req)); }));
+app.post('/api/ide/lines', ideRoute(req => ide.lines(ideRoot(req), (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 300).map((i: any) => ({ path: String(i?.path || ''), line: Number(i?.line) || 0 })))));
+app.post('/api/ide/stale', ideRoute(req => ({ stale: (Array.isArray(req.body?.files) ? req.body.files : []).slice(0, 100).filter((f: any) => f && typeof f.path === 'string' && !ide.unchanged(ideRoot(req), f.path, Number(f.mtime))).map((f: any) => f.path) })));
 app.get('/api/chats/:id', (req, res) => { const c = chats.get(req.params.id); c ? res.json(c.summary()) : res.status(404).json({ error: 'no such chat' }); });
 app.get('/api/chats/:id/events', (req, res) => {
   const c = chats.get(req.params.id); if (!c) return res.status(404).end();
@@ -423,6 +462,10 @@ app.get('/api/jira/issue/:key', async (req, res) => {
   try { res.json(await jira.preview(key)); } catch (err) { res.status(400).json({ error: errText(err) }); }
 });
 app.post('/api/jira/poll', async (_req, res) => res.json(await jira.poll()));
+app.get('/api/usage', async (req, res) => {
+  const days = Math.min(3650, Math.max(0, Math.floor(Number(req.query.days)) || 0));
+  try { res.json(await usageReport(config.claudeHome, days)); } catch (err) { res.status(500).json({ error: errText(err) }); }
+});
 // The Jira view: your tickets by status, moving them, and making new ones. Unlike the watcher, these write to Jira.
 const jiraRoute = (fn: (req: Request) => Promise<unknown>) => async (req: Request, res: Response) => {
   try { res.json(await fn(req)); } catch (err) { res.status(400).json({ error: errText(err) }); }
@@ -469,9 +512,42 @@ app.post('/api/sql/run', (req, res) => {
     .finally(() => { finished = true; s.stop(); res.end(); });
 });
 app.delete('/api/sql/runs/:id', (req, res) => res.json({ ok: sql.cancel(String(req.params.id)) }));
+// A tab's open transactions (dev only): read on load, and the Commit and Rollback buttons.
+app.get('/api/sql/tx/:session', sqlRoute(req => sql.txState(sqlName(req.params.session))));
+app.post('/api/sql/tx/:session/:alias/:action', sqlRoute(req => {
+  const action = String(req.params.action);
+  if (action !== 'commit' && action !== 'rollback') throw new Error('commit or rollback');
+  return sql.txEnd(sqlName(req.params.session), sqlName(req.params.alias), action);
+}));
+// An export: the read run again up to sql.exportMaxRows and streamed out as CSV, never held in memory. Closing the download cancels the query.
+app.post('/api/sql/export', (req, res) => {
+  let runId: string | null = null, started = false, finished = false;
+  const cell = (v: unknown) => { const s = v == null ? '' : String(v); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const name = String(req.body?.name || 'export').replace(/[^\w.-]+/g, '_').slice(0, 80) || 'export';
+  res.on('close', () => { if (!finished && runId) sql.cancel(runId); });
+  sql.exportRun(req.body?.req || {}, {
+    start: id => { runId = id; },
+    columns: cols => {
+      if (started) return;
+      started = true;
+      res.status(200).set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}.csv"`, 'X-Sql-Run': runId || '', 'Cache-Control': 'no-store' });
+      // The byte order mark makes Excel read the file as UTF-8.
+      res.write(`﻿${cols.map(c => cell(c.name)).join(',')}\r\n`);
+    },
+    rows: rows => { res.write(rows.map(r => `${r.map(cell).join(',')}\r\n`).join('')); },
+  }).then(r => {
+    finished = true;
+    if (!started) return res.status(400).json({ error: r.error || 'The statement returned no result set to export.' });
+    // An error after rows went out: end the download broken, so it is not taken for the whole result.
+    if (r.error) res.destroy(new Error(r.error)); else res.end();
+  }, err => { finished = true; if (!started) res.status(400).json({ error: errText(err) }); else res.destroy(); });
+});
 app.get('/api/sql/schema/:alias', sqlRoute(req => sql.schema(sqlName(req.params.alias), req.query.refresh === '1')));
 app.get('/api/sql/schema/:alias/:db/:table/columns', sqlRoute(req => sql.tableColumns(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 app.get('/api/sql/schema/:alias/:db/columns', sqlRoute(req => sql.columns(sqlName(req.params.alias), sqlName(req.params.db))));
+app.get('/api/sql/schema/:alias/:db/:table/meta', sqlRoute(req => sql.tableMeta(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
+app.get('/api/sql/schema/:alias/:db/:table/referenced-by', sqlRoute(req => sql.referencedBy(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table), req.query.all === '1')));
+app.get('/api/sql/find-columns/:alias', sqlRoute(req => sql.findColumns(sqlName(req.params.alias), String(req.query.q || ''), req.query.db ? sqlName(req.query.db) : null)));
 app.get('/api/sql/schema/:alias/:db/:table/indexes', sqlRoute(req => sql.indexes(sqlName(req.params.alias), sqlName(req.params.db), sqlName(req.params.table))));
 // Per-connection logins, like DBeaver's. Passwords are written, never read back.
 app.get('/api/sql/credentials', sqlRoute(() => sql.credentials()));
@@ -484,6 +560,13 @@ app.put('/api/sql/tabs', sqlRoute(req => { sql.setTabs(req.body?.tabs); return {
 app.get('/api/sql/history', sqlRoute(() => sql.getHistory()));
 app.put('/api/sql/lookups/:name', sqlRoute(req => sql.saveLookup(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
 app.delete('/api/sql/lookups/:name', sqlRoute(req => sql.deleteLookup(String(req.params.name))));
+app.post('/api/sql/edit', sqlRoute(req => sql.applyEdit(sqlName(req.body?.alias), { op: req.body?.op === 'delete' ? 'delete' : 'update', db: sqlName(req.body?.db), table: sqlName(req.body?.table), pk: req.body?.pk && typeof req.body.pk === 'object' ? req.body.pk : {}, set: req.body?.set && typeof req.body.set === 'object' ? req.body.set : undefined }, req.body?.dryRun !== false)));
+app.get('/api/sql/saved', sqlRoute(req => { const all = saved.list(); const k = String(req.query.jira || '').toUpperCase(); return k ? all.filter(s => s.jira === k) : all; }));
+app.put('/api/sql/saved/:id', sqlRoute(req => saved.save(String(req.params.id), req.body || {})));
+app.delete('/api/sql/saved/:id', sqlRoute(req => saved.remove(String(req.params.id))));
+app.get('/api/sql/snippets', sqlRoute(() => snippets.list()));
+app.put('/api/sql/snippets/:name', sqlRoute(req => snippets.save(String(req.params.name), req.body || {}, req.body?.rename ? String(req.body.rename) : undefined)));
+app.delete('/api/sql/snippets/:name', sqlRoute(req => snippets.remove(String(req.params.name))));
 app.post('/api/sql/lookup', sqlRoute(req => sql.lookup(String(req.body?.name || ''), String(req.body?.value || ''))));
 
 // Terminals: a shell per tab, attached over a WebSocket. REST creates and lists; the socket carries keystrokes and output.
@@ -493,6 +576,31 @@ app.post('/api/terminals', (req, res) => {
   if (!fs.existsSync(dir)) return res.status(400).json({ error: `cwd not found: ${dir}` });
   try { res.json(terminals.open({ cwd: dir, cols: Number(req.body?.cols) || undefined, rows: Number(req.body?.rows) || undefined }).summary()); }
   catch (err) { res.status(500).json({ error: `could not start a shell: ${errText(err)}` }); }
+});
+// herdr: its client runs in a terminal here (one at a time); the socket API gives agent state and moves its focus.
+app.post('/api/herdr/open', async (req, res) => {
+  await herdr.refresh();
+  const bin = herdr.binary;
+  if (!bin) return res.status(400).json({ error: 'herdr is not installed (no herdr on PATH). See https://herdr.dev/' });
+  const dir = String(req.body?.cwd || config.reposRoot);
+  let t = terminals.findHerdr();
+  if (!t) {
+    try { t = terminals.open({ cwd: fs.existsSync(dir) ? dir : config.reposRoot, shell: bin, herdr: true, cols: Number(req.body?.cols) || undefined, rows: Number(req.body?.rows) || undefined }); }
+    catch (err) { return res.status(500).json({ error: `could not start herdr: ${errText(err)}` }); }
+  }
+  let hop: { workspaceId: string; opened: boolean } | null = null, note: string | undefined;
+  if (req.body?.cwd && fs.existsSync(dir)) {
+    // A fresh client needs a moment to start the herdr server before its socket answers.
+    for (let i = 0; i < 8 && !hop; i++) {
+      try { hop = await herdr.hop(dir); } catch (err) { note = errText(err); await new Promise(r => setTimeout(r, 500)); }
+    }
+    if (hop) note = undefined;
+  }
+  res.json({ terminal: t.summary(), hop, note });
+});
+app.post('/api/herdr/focus', async (req, res) => {
+  try { await herdr.focusAgent(String(req.body?.paneId || '')); res.json({ ok: true }); }
+  catch (err) { res.status(502).json({ error: errText(err) }); }
 });
 app.delete('/api/terminals/:id', (req, res) => terminals.close(req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'no such terminal' }));
 
@@ -528,13 +636,25 @@ if (fs.existsSync(webDist)) {
 }
 
 collector.start();
+herdr.start();
 chats.persistTo(path.join(stateDir, `chats-${config.port}.json`));
 sql.persistTo(path.join(stateDir, `sql-${config.port}.json`));
 dialogues.persistTo(path.join(stateDir, `dialogues-${config.port}.json`));
 tasks.persistTo(path.join(stateDir, `tasks-${config.port}.json`));
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const lsp = new LspManager(stateDir);
 server.on('upgrade', (req, socket, head) => {
+  // The IDE's language servers: /api/ide/lsp?root=<folder>&kind=php|ts|python
+  if ((req.url || '').startsWith('/api/ide/lsp?')) {
+    const q = new URL(req.url!, 'http://x').searchParams;
+    const kind = q.get('kind') as LspKind;
+    let folder: string | null = null;
+    try { folder = originAllowed(req) && ['php', 'ts', 'python'].includes(kind) ? ide.root(q.get('root') || '') : null; } catch {}
+    if (!folder) { socket.destroy(); return; }
+    wss.handleUpgrade(req, socket, head, ws => lsp.attach(folder!, kind, ws));
+    return;
+  }
   const m = /^\/api\/terminals\/([a-z0-9]{4,16})\/ws$/i.exec(req.url || '');
   const t = m && originAllowed(req) ? terminals.get(m[1]) : null;
   if (!t) { socket.destroy(); return; }
@@ -553,4 +673,4 @@ server.listen(config.port, '127.0.0.1', () => {
   jira.start();
   if (jira.status.jql) console.log(`watching Jira every ${config.jira.everyMinutes} min: ${jira.status.jql}`);
 });
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); qa.saveAll(); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { terminals.closeAll(); qa.saveAll(); lsp.stopAll(); process.exit(0); });

@@ -13,7 +13,7 @@ import type { TerminalManager } from './terminals.js';
 import type { Teleport } from './teleport.js';
 import type { SqlManager } from './sql.js';
 import type { DialogueManager } from './dialogue.js';
-import type { AskQuestion, Attachment, ChatEvent, ContextUsage, PermissionChoice, RewindPreview, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
+import type { AskQuestion, BackgroundTask, Attachment, ChatEvent, ContextUsage, PermissionChoice, RewindPreview, ChatStatus, ChatSummary, ContentBlock, McpServerView, MessageOrigin, ModelOption, PermissionView, SlashCommandView, TokenUsage } from '../shared/types.js';
 
 /** Extra CLI flags for a chat's Claude process. Chats get the same Claude in Chrome access as the terminal CLI; QA reviewers never do (read-only, no browser). */
 export function cliExtraArgs(config: Pick<FleetConfig, 'claudeInChrome'>, qa: boolean): Record<string, string | null> | undefined {
@@ -132,6 +132,7 @@ export class Chat extends EventEmitter {
   resumeId: string | null; sessionId: string | null; cwd: string; model: string; fork: boolean; permissionMode: string;
   status: ChatStatus = 'starting'; events: ChatEvent[] = []; pending = new Map<string, Pending>(); inbox = new Inbox();
   abort = new AbortController(); startedAt = Date.now(); error: string | null = null;
+  background: BackgroundTask[] = [];
   firstText = ''; asksIn: AskRecord[] = []; asksOut: AskRecord[] = []; turnText = '';
   /** A dialogue names its participants ("Critic · topic") and owns their turns; both show in the summary. */
   label: string | null = null; dialogueId: string | null = null;
@@ -166,7 +167,7 @@ export class Chat extends EventEmitter {
     return { id: this.id, sessionId: this.sessionId, resumeId: this.resumeId, forked: this.fork, cwd: this.cwd, model: this.model, title: this.title,
       repo: wt?.repo || null, branch: wt?.branch || null, worktree: wt?.path || null, locatedBy: wt?.by || null,
       permissionMode: this.permissionMode, effort: this.effort, status: this.status, startedAt: this.startedAt, pending: [...this.pending.values()].map(p => p.view), error: this.error,
-      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })), dialogueId: this.dialogueId, taskId: this.taskId,
+      asksIn: this.asksIn.map(a => ({ id: a.id, from: a.fromChatId })), asksOut: this.asksOut.map(a => ({ id: a.id, to: a.toChatId })), dialogueId: this.dialogueId, taskId: this.taskId, background: this.background,
       tokens: this.total ? { total: this.total, context: this.context, contextWindow: this.contextWindow } : null };
   }
 
@@ -195,7 +196,7 @@ export class Chat extends EventEmitter {
     if (!run || !this.shell!.queue(runId)) throw new Error('no finished shell command with that id');
     this.send('Look at the output of `' + run.cmd + '` above.');
   }
-  setStatus(s: ChatStatus) { this.status = s; this.emitEvent({ t: 'status', status: s }); this.mgr.emit('change'); }
+  setStatus(s: ChatStatus) { this.status = s; if (s === 'ended') this.background = []; this.emitEvent({ t: 'status', status: s }); this.mgr.emit('change'); }
 
   // origin: null for the person typing; peer/manual for fleet traffic; dialogue text arrives already framed by the orchestrator.
   send(text: string, origin?: MessageOrigin, attachments: Attachment[] = []) {
@@ -441,6 +442,14 @@ export class Chat extends EventEmitter {
     this.emitEvent({ t: 'task', taskId: id, status, description: t.description, kind: t.kind, tools: t.tools, tokens: t.tokens, lastTool: t.lastTool, summary: t.summary });
   }
 
+  /** The SDK sends the whole live set each time, so replacing ours cannot drift the way pairing start and finish events could. */
+  private onBackground(msg: any) {
+    this.background = (Array.isArray(msg.tasks) ? msg.tasks : []).filter((t: any) => t?.task_id && !t.ambient)
+      .map((t: any) => ({ taskId: String(t.task_id), kind: String(t.subagent_type || t.task_type || 'task'), description: String(t.description || '') }));
+    this.emitEvent({ t: 'background', tasks: this.background }, false);
+    this.mgr.emit('change');
+  }
+
   private async pump() {
     for await (const m of this.q!) {
       const msg = m as any;
@@ -454,6 +463,7 @@ export class Chat extends EventEmitter {
             this.emitEvent({ t: 'init', sessionId: msg.session_id, model: msg.model }); this.mgr.emit('change');
           }
           else if (msg.subtype === 'commands_changed') this.commands = msg.commands || [];
+          else if (msg.subtype === 'background_tasks_changed') this.onBackground(msg);
           else if (msg.subtype === 'task_started' || msg.subtype === 'task_progress' || msg.subtype === 'task_notification' || msg.subtype === 'task_updated') this.onTask(msg);
           break;
         case 'stream_event': {

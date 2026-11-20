@@ -1,8 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Anchor, Database, KanbanSquare, KeyRound, LayoutGrid, Moon, PanelLeft, PanelLeftClose, Search, Sun, SunMoon } from 'lucide-react';
-import { actions, useStore } from '../lib/store';
+import { Anchor, BarChart3, Code2, Database, KanbanSquare, KeyRound, LayoutGrid, Moon, PanelLeft, PanelLeftClose, PictureInPicture2, Search, Sun, SunMoon } from 'lucide-react';
+import { actions, getState, useStore } from '../lib/store';
+import { popOut, poppedWindow } from '../lib/popout';
 import { Kbd } from './ui';
 import { MOD, isMac } from '../lib/platform';
+import { openIde } from '../ide/open';
+
+// SQL is a page, not a tab, so it pops out from here. Already popped out: bring that window forward. Otherwise move it, and leave the page it was on.
+function popOutSql() {
+  const open = poppedWindow('sql');
+  if (open) { open.focus(); return; }
+  if (!popOut({ kind: 'sql' }, 'sql')) { actions.toast('The browser blocked the new window. Allow pop-ups for Fleet and try again.', 'error'); return; }
+  if (getState().view.kind === 'sql') actions.go({ kind: 'overview' });
+}
 
 export function TitleBar() {
   const collapsed = useStore(s => s.sidebarCollapsed);
@@ -37,7 +47,10 @@ export function TitleBar() {
       <nav className="flex items-center gap-1">
         <button className={`btn sm ghost ${view.kind === 'overview' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'overview' })}><LayoutGrid size={14} aria-hidden="true" /> Overview</button>
         <button className={`btn sm ghost ${view.kind === 'jira' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'jira' })}><KanbanSquare size={14} aria-hidden="true" /> Jira</button>
+        <button className={`btn sm ghost ${view.kind === 'ide' ? 'text-fg' : ''}`} onClick={openIde} title="Edit code: the folder you are looking at, or the one you used last"><Code2 size={14} aria-hidden="true" /> Code</button>
         <button className={`btn sm ghost ${view.kind === 'sql' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'sql' })}><Database size={14} aria-hidden="true" /> SQL</button>
+        <button className="iconbtn" style={{ width: 24, height: 24 }} aria-label="Pop out SQL" title="Pop out SQL into its own window" onClick={popOutSql}><PictureInPicture2 size={13} aria-hidden="true" /></button>
+        <button className={`btn sm ghost ${view.kind === 'usage' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'usage' })}><BarChart3 size={14} aria-hidden="true" /> Usage</button>
         <button className={`btn sm ghost ${view.kind === 'hub' ? 'text-fg' : ''}`} onClick={() => actions.go({ kind: 'hub' })}><KeyRound size={14} aria-hidden="true" /> Hub</button>
         <button className="iconbtn" aria-label={`Theme: ${theme}. Switch to ${nextTheme}`} title={`Theme: ${theme}`} onClick={() => actions.setTheme(nextTheme)}>
           <ThemeIcon size={16} aria-hidden="true" />

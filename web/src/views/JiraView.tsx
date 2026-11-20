@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react';
-import { ArrowRightLeft, ExternalLink, ListPlus, Plus, RefreshCw } from 'lucide-react';
-import { api, type JiraBoard, type JiraCard, type JiraCreateInfo } from '../lib/api';
+import { ArrowRightLeft, Database, ExternalLink, ListPlus, Plus, RefreshCw } from 'lucide-react';
+import { api, type JiraBoard, type JiraCard, type JiraCreateInfo, type SqlSaved } from '../lib/api';
 import { age } from '../lib/format';
 import { actions, useStore } from '../lib/store';
 import { useContextMenu } from '../components/ContextMenu';
@@ -23,6 +23,12 @@ export function JiraView({ create }: { create: boolean }) {
   const [moving, setMoving] = useState<Record<string, boolean>>({});
   const [dropOn, setDropOn] = useState<string | null>(null);
   const [menu, openMenu] = useContextMenu();
+  // Saved SQL queries by ticket, for the cards: read once per visit.
+  const [savedSql, setSavedSql] = useState<Record<string, SqlSaved[]>>({});
+  useEffect(() => {
+    api.sqlSaved().then(all => { const by: Record<string, SqlSaved[]> = {}; for (const s of all) if (s.jira) (by[s.jira] ||= []).push(s); setSavedSql(by); }).catch(() => {});
+  }, []);
+  const sqlMenu = (e: MouseEvent, list: SqlSaved[]) => openMenu(e, list.map(s => ({ label: s.name, icon: Database, onSelect: () => actions.go({ kind: 'sql', open: { saved: s.id, at: Date.now() } }) })));
   // The project picked in the switcher, remembered across visits. Unset means the server's default: the first configured project.
   const [project, setProject] = useState<string | undefined>(() => localStorage.getItem('fleet.jira.project') || undefined);
   const pick = (key: string) => { localStorage.setItem('fleet.jira.project', key); setBoard(null); setProject(key); };
@@ -109,7 +115,7 @@ export function JiraView({ create }: { create: boolean }) {
                 <div className="section-title"><span className="dot" data-s={dotFor[col.category] || 'idle'} aria-hidden="true" />{col.name}<span className="count num">{list.length}</span></div>
                 <div className="grid min-h-0 content-start gap-1.5 overflow-y-auto">
                   {list.length === 0 && <div className="px-2 py-3 text-[11px] text-fg-faint">Drop a ticket here to move it</div>}
-                  {list.map(card => <Card key={card.key} card={card} busy={!!moving[card.key]} onMove={e => openMove(e, card)} />)}
+                  {list.map(card => <Card key={card.key} card={card} busy={!!moving[card.key]} onMove={e => openMove(e, card)} sql={savedSql[card.key]} onSql={e => sqlMenu(e, savedSql[card.key] || [])} />)}
                 </div>
               </section>
             );
@@ -121,7 +127,7 @@ export function JiraView({ create }: { create: boolean }) {
   );
 }
 
-function Card({ card, busy, onMove }: { card: JiraCard; busy: boolean; onMove: (e: MouseEvent) => void }) {
+function Card({ card, busy, onMove, sql, onSql }: { card: JiraCard; busy: boolean; onMove: (e: MouseEvent) => void; sql?: SqlSaved[]; onSql: (e: MouseEvent) => void }) {
   const onTask = useStore(s => s.snapshot?.tasks.find(t => t.ticket === card.key && t.status !== 'done'));
   return (
     <div draggable={!busy} onDragStart={e => { e.dataTransfer.setData('text/x-jira-key', card.key); e.dataTransfer.effectAllowed = 'move'; }}
@@ -138,6 +144,8 @@ function Card({ card, busy, onMove }: { card: JiraCard; busy: boolean; onMove: (
         </button>
         {onTask ? <span className="chip" title="Already a task on the board">task: {onTask.status}</span>
           : <button className="btn sm ghost" style={{ height: 22, padding: '0 8px' }} title="Queue a Fleet task built from this ticket" onClick={() => actions.go({ kind: 'new-task', ticket: card.key })}><ListPlus size={12} aria-hidden="true" /> Task</button>}
+        {sql && sql.length > 0 && <button className="btn sm ghost" style={{ height: 22, padding: '0 8px' }} onClick={onSql} title={`Saved SQL for ${card.key}: ${sql.map(s => s.name).join(', ')}`}>
+          <Database size={12} aria-hidden="true" /> {sql.length === 1 ? sql[0].name.slice(0, 18) : `${sql.length} queries`}</button>}
         <a className="btn sm ghost ml-auto" style={{ height: 22, padding: '0 6px' }} href={card.url} target="_blank" rel="noreferrer" aria-label={`Open ${card.key} in Jira`}><ExternalLink size={12} aria-hidden="true" /></a>
       </div>
     </div>

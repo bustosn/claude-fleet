@@ -1,4 +1,4 @@
-import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, QaRunSummary, QaRunDetail } from '../../../shared/types';
+import type { Attachment, ContextUsage, PermissionChoice, RewindPreview, AwsRun, AwsStatus, TeleportRun, TeleportSetupInfo, TeleportStatus, TeleportTunnel, TunnelSpec, ChatEvent, ChatSummary, DialogueSummary, FilePreview, FileRef, IdeEntry, IdeFile, IdeBlame, IdeHunk, IdeLogEntry, IdeGitStatus, McpServerView, ModelOption, SlashCommandView, Snapshot, TaskSummary, TerminalSummary, JiraIssuePreview, JiraStatus, JiraBoard, JiraTransition, JiraCreateInfo, JiraCreated, SqlInfo, SqlSchema, SqlColumnInfo, SqlIndexInfo, SqlTab, SqlHistoryEntry, SqlCredential, SqlLookup, SqlProcess, SqlTableMeta, SqlReference, SqlColumnHit, SqlSaved, SqlSnippet, SqlValue, UsageReport, SqlTx, QaRunSummary, QaRunDetail } from '../../../shared/types';
 
 export interface DialogueSpec { topic: string; rounds: number; maxWords: number; cwd?: string; permissionMode?: string; participants: { name: string; persona: string; model?: string; chatId?: string }[] }
 export type * from '../../../shared/types';
@@ -19,6 +19,18 @@ export const api = {
   rename: (sessionId: string, title: string) => post<{ ok: true; title: string }>(`/api/conversations/${sessionId}/rename`, { title }),
   pin: (sessionId: string, pinned: boolean) => post<{ ok: true }>(`/api/conversations/${sessionId}/pin`, { pinned }),
   openWorktree: (path: string, how: 'editor' | 'folder') => post<{ ok: true }>('/api/worktrees/open', { path, how }),
+  ideList: (root: string, dir: string) => j<IdeEntry[]>(`/api/ide/list?root=${encodeURIComponent(root)}&dir=${encodeURIComponent(dir)}`),
+  ideFile: (root: string, path: string) => j<IdeFile>(`/api/ide/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  ideSave: (body: { root: string; path: string; text: string; expect?: number; eol: 'lf' | 'crlf'; bom: boolean; force?: boolean }) => j<{ mtime: number }>('/api/ide/file', { method: 'PUT', body: JSON.stringify(body) }),
+  ideFind: (root: string, q: string, limit = 50) => j<string[]>(`/api/ide/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}&limit=${limit}`),
+  ideGrep: (root: string, o: { q: string; regex: boolean; caseSensitive: boolean; word: boolean; glob: string }, signal?: AbortSignal) => j<{ hits: { path: string; line: number; col: number; text: string }[]; truncated: boolean; error?: string }>(`/api/ide/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(o.q)}&regex=${+o.regex}&case=${+o.caseSensitive}&word=${+o.word}&glob=${encodeURIComponent(o.glob)}`, { signal }),
+  ideGitStatus: (root: string) => j<IdeGitStatus | null>(`/api/ide/git/status?root=${encodeURIComponent(root)}`),
+  ideGitChanges: (root: string, path: string) => j<{ tracked: boolean; hunks: IdeHunk[] }>(`/api/ide/git/changes?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  ideGitBlame: (root: string, path: string) => j<IdeBlame | null>(`/api/ide/git/blame?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  ideGitLog: (root: string, path: string) => j<IdeLogEntry[]>(`/api/ide/git/log?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  ideGitShow: (root: string, rev: string, path: string) => j<{ text: string; exists: boolean }>(`/api/ide/git/show?root=${encodeURIComponent(root)}&rev=${encodeURIComponent(rev)}&path=${encodeURIComponent(path)}`),
+  ideLines: (root: string, items: { path: string; line: number }[]) => post<string[]>('/api/ide/lines', { root, items }),
+  ideStale: (root: string, files: { path: string; mtime: number }[]) => post<{ stale: string[] }>('/api/ide/stale', { root, files }).then(r => r.stale),
   archive: (sessionId: string, archived: boolean) => post<{ ok: true }>(`/api/conversations/${sessionId}/archive`, { archived }),
   deleteConversation: (sessionId: string) => j<{ ok: true }>(`/api/conversations/${sessionId}`, { method: 'DELETE' }),
   logs: (bgId: string) => j<{ logs: string }>(`/api/sessions/${encodeURIComponent(bgId)}/logs`).then(r => r.logs),
@@ -69,6 +81,8 @@ export const api = {
   tunnelProbe: (alias?: string) => post<TeleportTunnel[]>('/api/teleport/probe', alias ? { alias } : {}),
   terminals: () => j<TerminalSummary[]>('/api/terminals'),
   openTerminal: (cwd?: string) => post<TerminalSummary>('/api/terminals', { cwd }),
+  openHerdr: (cwd?: string) => post<{ terminal: TerminalSummary; hop: { workspaceId: string; opened: boolean } | null; note?: string }>('/api/herdr/open', { cwd }),
+  focusHerdrAgent: (paneId: string) => post<{ ok: true }>('/api/herdr/focus', { paneId }),
   closeTerminal: (id: string) => j<{ ok: true }>(`/api/terminals/${id}`, { method: 'DELETE' }),
   dialogue: (id: string) => j<DialogueSummary>(`/api/dialogues/${id}`),
   startDialogue: (spec: DialogueSpec) => post<DialogueSummary>('/api/dialogues', spec),
@@ -100,6 +114,17 @@ export const api = {
   sqlColumns: (alias: string, db: string) => j<Record<string, SqlColumnInfo[]>>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/columns`),
   sqlTableColumns: (alias: string, db: string, table: string) => j<SqlColumnInfo[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/columns`),
   sqlIndexes: (alias: string, db: string, table: string) => j<SqlIndexInfo[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/indexes`),
+  sqlTableMeta: (alias: string, db: string, table: string) => j<SqlTableMeta>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/meta`),
+  sqlReferencedBy: (alias: string, db: string, table: string, all = false) => j<SqlReference[]>(`/api/sql/schema/${encodeURIComponent(alias)}/${encodeURIComponent(db)}/${encodeURIComponent(table)}/referenced-by${all ? '?all=1' : ''}`),
+  sqlFindColumns: (alias: string, q: string, db?: string | null) => j<SqlColumnHit[]>(`/api/sql/find-columns/${encodeURIComponent(alias)}?q=${encodeURIComponent(q)}${db ? `&db=${encodeURIComponent(db)}` : ''}`),
+  sqlSaved: (jira?: string) => j<SqlSaved[]>(`/api/sql/saved${jira ? `?jira=${encodeURIComponent(jira)}` : ''}`),
+  sqlSaveQuery: (id: string, v: Partial<SqlSaved>) => j<SqlSaved[]>(`/api/sql/saved/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(v) }),
+  sqlDeleteSaved: (id: string) => j<SqlSaved[]>(`/api/sql/saved/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  sqlSnippets: () => j<SqlSnippet[]>('/api/sql/snippets'),
+  sqlSaveSnippet: (name: string, v: Partial<SqlSnippet> & { rename?: string }) => j<SqlSnippet[]>(`/api/sql/snippets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(v) }),
+  sqlDeleteSnippet: (name: string) => j<SqlSnippet[]>(`/api/sql/snippets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  sqlEdit: (body: { alias: string; op: 'update' | 'delete'; db: string; table: string; pk: Record<string, SqlValue>; set?: Record<string, SqlValue>; dryRun: boolean }) =>
+    post<{ sql: string; matches: number | null; affected: number | null }>('/api/sql/edit', body),
   sqlTabs: () => j<SqlTab[]>('/api/sql/tabs'),
   sqlSaveTabs: (tabs: SqlTab[]) => j<{ ok: true }>('/api/sql/tabs', { method: 'PUT', body: JSON.stringify({ tabs }) }),
   sqlHistory: () => j<SqlHistoryEntry[]>('/api/sql/history'),
@@ -111,6 +136,9 @@ export const api = {
   sqlDeleteLookup: (name: string) => j<SqlLookup[]>(`/api/sql/lookups/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   sqlProcesses: (alias: string) => j<SqlProcess[]>(`/api/sql/processes/${encodeURIComponent(alias)}`),
   sqlKill: (alias: string, id: number, mode: 'query' | 'connection') => post<{ ok: true; via: string }>(`/api/sql/processes/${encodeURIComponent(alias)}/${id}/kill`, { mode }),
+  usage: (days: number) => j<UsageReport>(`/api/usage?days=${days}`),
+  sqlTxState: (session: string) => j<{ txs: SqlTx[]; notes: string[] }>(`/api/sql/tx/${encodeURIComponent(session)}`),
+  sqlTxEnd: (session: string, alias: string, action: 'commit' | 'rollback') => post<{ ok: true; note: string }>(`/api/sql/tx/${encodeURIComponent(session)}/${encodeURIComponent(alias)}/${action}`),
   sqlCancel: (id: string) => j<{ ok: boolean }>(`/api/sql/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 

@@ -4,17 +4,22 @@ import { randomUUID } from 'node:crypto';
 import mysql from 'mysql2';
 import type { SqlConfig } from './config.js';
 import type { Teleport } from './teleport.js';
-import type { SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnInfo, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
-import { classify, classifyWrite, countParams, errorOffset, limitable, split, statementAt, withLimit } from '../shared/sqlClassify.js';
+import type { SqlTx, SqlLookup, SqlProcess, SqlAlias, SqlColumn, SqlColumnHit, SqlColumnInfo, SqlFk, SqlReference, SqlTableMeta, SqlEvent, SqlHistoryEntry, SqlIndexInfo, SqlInfo, SqlKind, SqlRunRequest, SqlSchema, SqlTab, SqlValue } from '../shared/types.js';
+import { buildEdit, type EditSpec } from './sqlEdit.js';
+import { bindParams, classify, classifyWrite, countParams, errorOffset, limitable, paramNames, split, statementAt, withLimit } from '../shared/sqlClassify.js';
 
 const SYSTEM_DBS = ['mysql', 'sys', 'performance_schema', 'information_schema'];
 const BATCH = 200, FLUSH_MS = 80, HISTORY = 500;
-const IDLE_MS = 5 * 60 * 1000;
+const IDLE_MS = 5 * 60 * 1000, META_MS = 10 * 60 * 1000;
 const serverIds = new WeakMap<object, number>();
 // The same ids by connection alias, so the process list can mark Fleet's own connections.
 const fleetIds = new Map<string, Set<number>>();
 
 interface Run { id: string; alias: string; conn: object | null; cancelled: boolean; timedOut: boolean }
+/** A tab's open transaction: the connection is kept out of the pool until COMMIT, ROLLBACK, the idle limit, or the tab goes away. */
+interface Tx { key: string; session: string; alias: string; conn: mysql.PoolConnection; startedAt: number; lastAt: number; statements: number; timer: NodeJS.Timeout | null }
+// An open transaction holds row locks that make COR3, the parsers and everyone else on dev wait, so an idle one is rolled back.
+const TX_IDLE_MS = 15 * 60 * 1000, TX_PER_ALIAS = 2;
 interface SchemaCache extends SqlSchema { columns: Record<string, Record<string, SqlColumnInfo[]>>; indexes: Record<string, SqlIndexInfo[]> }
 type Emit = (ev: SqlEvent) => void;
 
@@ -23,9 +28,15 @@ type Emit = (ev: SqlEvent) => void;
 export class SqlManager {
   private pools = new Map<string, mysql.Pool>();
   private runs = new Map<string, Run>();
+  private txs = new Map<string, Tx>();
+  // Why a transaction ended while nobody was running anything (the idle limit), kept until the tab asks.
+  private txNotes = new Map<string, string>();
   private schemas = new Map<string, SchemaCache>();
   // One table's columns, for completion, by alias/db.table; dropped with the schema on Refresh.
   private tableCols = new Map<string, SqlColumnInfo[]>();
+  // Table facts and who points at a table: they change slowly, so they are kept in memory for ten minutes.
+  private metas = new Map<string, { at: number; v: SqlTableMeta }>();
+  private refs = new Map<string, { at: number; v: SqlReference[] }>();
   private tabs: SqlTab[] = []; private history: SqlHistoryEntry[] = [];
   private persistFile: string | null = null; private saveTimer: NodeJS.Timeout | null = null;
 
@@ -42,7 +53,7 @@ export class SqlManager {
     let error: string | null = null;
     if (!aliases.length) error = 'No tunnels to offer. The SQL view uses the Teleport tunnels named in sql.aliases (main-dev, data-dev, main-prd-reader, data-prd-reader by default).';
     const defaultAlias = aliases.find(a => a.alias === this.cfg.defaultAlias)?.alias || aliases[0]?.alias || '';
-    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error };
+    return { aliases, defaultAlias, autoLimit: this.cfg.autoLimit, maxRows: this.cfg.maxRows, lookups: this.lookups(), error, fkGuesses: this.cfg.fkGuesses, exportMaxRows: this.cfg.exportMaxRows, timeoutMs: this.cfg.timeoutMs };
   }
   private alias(name: string): SqlAlias {
     const a = this.aliases().find(x => x.alias === name);
@@ -169,10 +180,38 @@ export class SqlManager {
     }
     entry.sql = stmtText;
     const writable = !a.prod && !opts.readOnly;
-    const c = writable ? classifyWrite(stmtText) : { ...classify(stmtText), write: false, danger: null };
+    const check = (sql: string) => writable ? classifyWrite(sql) : { ...classify(sql), write: false, danger: null };
+    // Transaction control on prod (or from fleet_sql) gets a plain answer rather than "START is not a read".
+    if (!writable && classifyWrite(stmtText).tx) return fail(a.prod
+      ? `${a.alias} is a production reader: it is read-only, so there is nothing to commit. Transactions are for dev connections.`
+      : 'Transactions are not available here: this run is read-only.');
+    // The statement as written is checked, then again with the values in: each value is one escaped literal, so the two agree.
+    let c = check(stmtText);
     if (!c.ok) return fail(c.reason || 'Not a read.');
+    const bound = paramNames(stmtText).length > 0;
+    if (bound) {
+      const b = bindParams(stmtText, req.params || {}, v => mysql.escape(v));
+      if (b.missing.length) return fail(`This statement needs a value for ${b.missing.map(n => n.startsWith('?') ? `? number ${n.slice(1)}` : `:${n}`).join(', ')}.`, { code: 'PARAMS' });
+      if (b.error) return fail(b.error);
+      stmtText = b.text; entry.sql = stmtText;
+      c = check(stmtText);
+      if (!c.ok) return fail(c.reason || 'Not a read.');
+    }
+    // A transaction belongs to the tab (session) and the connection; prod and read-only runs never get one.
+    const key = writable && req.session ? `${String(req.session).slice(0, 64)}|${a.alias}` : null;
+    const held = key ? this.txs.get(key) : undefined;
+    if (c.tx) {
+      if (!key) return fail('Transactions need a SQL tab on a dev connection.');
+      if (c.tx === 'begin' && held) return fail('A transaction is already open in this tab. COMMIT or ROLLBACK it first.');
+      if (c.tx !== 'begin' && !held) return fail(`There is no open transaction in this tab: every statement here committed as it ran.${c.tx === 'savepoint' ? ' Start one with START TRANSACTION first.' : ''}`);
+      if (c.tx === 'begin' && [...this.txs.values()].filter(t => t.alias === a.alias).length >= TX_PER_ALIAS)
+        return fail(`${a.alias} already has ${TX_PER_ALIAS} open transactions in other tabs. Commit or roll one back first.`);
+    }
+    const danger = held && c.implicitCommit
+      ? `${c.kind} commits your open transaction first (MySQL does that before DDL), so what you ran before it can no longer be rolled back.${c.danger ? ` ${c.danger}` : ''}`
+      : c.danger;
     // Asked once, answered in the browser: the same request again with confirm set.
-    if (c.danger && !req.confirm) return emit({ t: 'error', message: c.danger, code: 'CONFIRM', offset: null, length: 0, line: null });
+    if (danger && !req.confirm) return emit({ t: 'error', message: danger, code: 'CONFIRM', offset: null, length: 0, line: null });
     const db = req.db ? String(req.db) : null;
     if (db && !/^[\w$]+$/.test(db)) return fail(`Not a database name: ${db}`);
 
@@ -185,9 +224,11 @@ export class SqlManager {
     emit({ t: 'start', id: run.id, statement: stmtText, offset });
 
     let rowCount = 0, truncated = false, affected: number | null = null;
+    // A new transaction's connection, taken from the pool and kept once START TRANSACTION has run on it.
+    let fresh: mysql.PoolConnection | null = null;
     const timer = setTimeout(() => { run.timedOut = true; this.kill(a, run); }, this.cfg.timeoutMs + 2000);
     try {
-      await this.withConn(a, conn => new Promise<void>((resolve, reject) => {
+      const execOn = (conn: mysql.PoolConnection) => new Promise<void>((resolve, reject) => {
         run.conn = conn;
         if (run.cancelled) return reject(Object.assign(new Error('Cancelled.'), { code: 'CANCELLED' }));
         const go = () => {
@@ -208,13 +249,33 @@ export class SqlManager {
           q.on('end', () => { if (failed) return; clearInterval(tick); flush(); if (!fields) emit({ t: 'columns', columns: [] }); resolve(); });
         };
         if (db) conn.query(`USE \`${db}\``, err => err ? reject(err) : go()); else go();
-      }), text => emit({ t: 'notice', text }));
+      });
+      if (held) await execOn(held.conn);
+      else if (c.tx === 'begin') { fresh = await this.getConn(a); await execOn(fresh); }
+      else await this.withConn(a, execOn, text => emit({ t: 'notice', text }));
       // A killed SLEEP or a query stopped between rows can still end cleanly; it was stopped all the same.
       if (run.cancelled || run.timedOut) throw Object.assign(new Error('Cancelled.'), { code: 'CANCELLED' });
+      // What the statement did to the tab's transaction.
+      if (fresh && key) { this.openTx(key, String(req.session), a.alias, fresh); fresh = null; emit({ t: 'tx', tx: this.txView(key) }); }
+      else if (held) {
+        if (c.tx === 'commit' || c.tx === 'rollback') { this.endTx(held.key, null, 'release'); emit({ t: 'tx', tx: null, note: c.tx === 'commit' ? 'Committed.' : 'Rolled back.' }); }
+        else if (c.implicitCommit) { this.endTx(held.key, null, 'release'); emit({ t: 'tx', tx: null, note: `${c.kind} committed the transaction: MySQL commits before DDL. What ran after it commits as it runs again.` }); }
+        else { held.statements++; this.touchTx(held); emit({ t: 'tx', tx: this.txView(held.key) }); }
+      }
       const ms = Date.now() - t0;
       emit({ t: 'done', ms, rowCount, truncated, autoLimited: appended && req.limit !== 'max' && rowCount >= limit, affected });
       entry.rows = affected ?? rowCount; entry.ms = ms; this.addHistory(entry);
     } catch (err: any) {
+      // START TRANSACTION itself failed: the connection goes back unused.
+      if (fresh) { fresh.release(); fresh = null; }
+      if (held) {
+        // A failed statement leaves the transaction open, as in MySQL, except when the connection is gone or InnoDB rolled it back (deadlock).
+        const deadlock = Number(err.errno) === 1213, gone = !!err.fatal || tunnelError(err);
+        if (deadlock || gone) {
+          this.endTx(held.key, null, gone ? 'destroy' : 'release');
+          emit({ t: 'tx', tx: null, note: deadlock ? 'MySQL rolled the whole transaction back: it was chosen as the victim of a deadlock.' : 'The connection dropped, so the server rolled the transaction back.' });
+        } else { this.touchTx(held); emit({ t: 'tx', tx: this.txView(held.key) }); }
+      }
       // Hitting the row cap kills the query on purpose; what was read is the result.
       if (truncated && /interrupted/i.test(String(err.message))) {
         const ms = Date.now() - t0;
@@ -224,7 +285,8 @@ export class SqlManager {
         const msg = run.timedOut ? `Stopped after ${Math.round(this.cfg.timeoutMs / 1000)} s (the SQL view's time limit).`
           : run.cancelled ? 'Cancelled.' : explain(String(err.sqlMessage || err.message || err), a);
         const pos = errorOffset(exec, msg);
-        const inStmt = pos.offset != null && pos.offset < stmtText.length;
+        // With values bound, positions in the statement that ran no longer match the editor's text.
+        const inStmt = !bound && pos.offset != null && pos.offset < stmtText.length;
         fail(msg, { code: err.code || null, line: pos.line, offset: inStmt ? offset + pos.offset! : null, length: inStmt ? pos.length : 0 });
       }
     } finally {
@@ -267,6 +329,66 @@ export class SqlManager {
     }
   }
 
+  // Transactions per tab (dev only). The connection that ran START TRANSACTION stays out of the pool, and every later run from that tab
+  // on that connection alias uses it, until COMMIT or ROLLBACK, a statement that commits implicitly, the idle limit, or the tab closing.
+  private openTx(key: string, session: string, alias: string, conn: mysql.PoolConnection) {
+    const tx: Tx = { key, session, alias, conn, startedAt: Date.now(), lastAt: Date.now(), statements: 0, timer: null };
+    this.txs.set(key, tx);
+    this.touchTx(tx);
+  }
+  private touchTx(tx: Tx) {
+    tx.lastAt = Date.now();
+    if (tx.timer) clearTimeout(tx.timer);
+    tx.timer = setTimeout(() => {
+      if (this.txs.get(tx.key) !== tx) return;
+      this.txNotes.set(tx.key, `Rolled back after ${Math.round(TX_IDLE_MS / 60000)} minutes without a statement: an open transaction holds locks that make everyone else on ${tx.alias} wait.`);
+      this.addHistory({ at: Date.now(), alias: tx.alias, db: null, sql: 'ROLLBACK -- idle limit', rows: null, ms: null, error: null });
+      this.endTx(tx.key, 'ROLLBACK', 'release');
+    }, TX_IDLE_MS);
+  }
+  private txView(key: string): SqlTx | null {
+    const t = this.txs.get(key);
+    return t ? { session: t.session, alias: t.alias, startedAt: t.startedAt, lastAt: t.lastAt, statements: t.statements, idleMs: TX_IDLE_MS } : null;
+  }
+  /** Ends a tab's transaction: runs COMMIT or ROLLBACK first when asked (the statement may have run already), then returns the connection,
+   *  or destroys it when it is broken. Resolves once the connection is back. */
+  private endTx(key: string, statement: 'COMMIT' | 'ROLLBACK' | null, then: 'release' | 'destroy'): Promise<void> {
+    const t = this.txs.get(key);
+    if (!t) return Promise.resolve();
+    this.txs.delete(key);
+    if (t.timer) clearTimeout(t.timer);
+    return new Promise((resolve, reject) => {
+      const finish = (err?: Error | null) => {
+        // A ROLLBACK that failed leaves the connection in doubt: closing it makes the server roll back.
+        if (then === 'destroy' || (err && statement)) t.conn.destroy(); else t.conn.release();
+        err ? reject(err) : resolve();
+      };
+      if (statement && then === 'release') t.conn.query(statement, err => finish(err)); else finish();
+    });
+  }
+  /** The open transactions of one tab, and why one ended on its own since the tab last asked. */
+  txState(session: string): { txs: SqlTx[]; notes: string[] } {
+    const txs = [...this.txs.values()].filter(t => t.session === session).map(t => this.txView(t.key)!);
+    const notes: string[] = [];
+    for (const [k, n] of this.txNotes) if (k.startsWith(`${session}|`)) { notes.push(n); this.txNotes.delete(k); }
+    return { txs, notes };
+  }
+  /** The Commit and Rollback buttons, and closing a tab or switching its connection (rollback). Recorded in history like a typed COMMIT. */
+  async txEnd(session: string, alias: string, action: 'commit' | 'rollback'): Promise<{ ok: true; note: string }> {
+    const key = `${session.slice(0, 64)}|${alias}`;
+    const t = this.txs.get(key);
+    if (!t) return { ok: true, note: 'No open transaction.' };
+    const sql = action === 'commit' ? 'COMMIT' : 'ROLLBACK';
+    const t0 = Date.now();
+    try { await this.endTx(key, sql, 'release'); }
+    catch (err: any) {
+      this.addHistory({ at: t0, alias, db: null, sql, rows: null, ms: Date.now() - t0, error: err.message });
+      throw new Error(`${sql} failed: ${err.message}.${action === 'commit' ? ' The connection was closed, so the server rolled the transaction back.' : ''}`);
+    }
+    this.addHistory({ at: t0, alias, db: null, sql, rows: null, ms: Date.now() - t0, error: null });
+    return { ok: true, note: action === 'commit' ? 'Committed.' : 'Rolled back.' };
+  }
+
   cancel(id: string): boolean {
     const run = this.runs.get(id);
     if (!run) return false;
@@ -282,6 +404,42 @@ export class SqlManager {
     const c = mysql.createConnection(this.connOpts(a));
     c.query(`KILL QUERY ${Number(id)}`, err => { if (err && !quiet) console.error(`sql: KILL QUERY on ${a.alias} failed: ${err.message}`); c.end(() => {}); });
     c.on('error', () => {});
+  }
+
+  /** Changes one row on a dev connection. The statement is built here from the table's primary key (information_schema) and the values;
+   *  nothing the browser wrote is run. Prod is refused before anything else, whatever the request says. `dryRun` returns the statement for the preview.
+   *  A real run first counts the rows the key matches (it must be exactly one), then goes through run(): the dev classifier, auto-commit, history. */
+  async applyEdit(alias: string, e: EditSpec, dryRun: boolean): Promise<{ sql: string; matches: number | null; affected: number | null }> {
+    const a = this.alias(alias);
+    if (a.prod) throw new Error(`${a.alias} is a production reader: it is read-only, and rows cannot be edited there.`);
+    const meta = await this.tableMeta(a.alias, e.db, e.table);
+    if (meta.type === 'view') throw new Error(`${e.table} is a view; edit the table behind it.`);
+    const cols = await this.tableColumns(a.alias, meta.db, meta.table);
+    const { sql, countSql } = buildEdit({ ...e, db: meta.db, table: meta.table }, cols.map(c => c.name), meta.pk);
+    const [row] = await this.queryAll<{ n: number | string }>(a, countSql);
+    const matches = Number(row?.n);
+    if (dryRun) return { sql, matches, affected: null };
+    if (matches !== 1) throw new Error(matches === 0 ? 'No row has that key any more. Run the query again.' : `That key matches ${matches} rows, not one. Nothing was changed.`);
+    let affected: number | null = null, error: string | null = null;
+    await this.run({ alias: a.alias, text: sql, cursor: 0, confirm: false }, ev => {
+      if (ev.t === 'done') affected = ev.affected; else if (ev.t === 'error') error = ev.message;
+    });
+    if (error) throw new Error(error);
+    return { sql, matches, affected };
+  }
+
+  /** A read run again for an export: up to sql.exportMaxRows rows, read-only even on dev, through run() like any statement (classifier, READ ONLY
+   *  session on prod, time cap, cancel). `out` gets the columns once and then the rows as they arrive; nothing is kept in memory. */
+  async exportRun(req: SqlRunRequest, out: { start: (id: string) => void; columns: (c: SqlColumn[]) => void; rows: (r: SqlValue[][]) => void }): Promise<{ rows: number; truncated: boolean; error: string | null }> {
+    const res = { rows: 0, truncated: false, error: null as string | null };
+    await this.run({ ...req, limit: 'max', confirm: false }, ev => {
+      if (ev.t === 'start') out.start(ev.id);
+      else if (ev.t === 'columns') out.columns(ev.columns);
+      else if (ev.t === 'rows') { res.rows += ev.rows.length; out.rows(ev.rows); }
+      else if (ev.t === 'done') res.truncated = ev.truncated;
+      else if (ev.t === 'error') res.error = ev.message;
+    }, { maxRows: this.cfg.exportMaxRows, readOnly: true });
+    return res;
   }
 
   /** A whole result at once, for the fleet_sql tool. */
@@ -309,7 +467,7 @@ export class SqlManager {
     let c = this.schemas.get(alias);
     if (!c) { try { c = JSON.parse(fs.readFileSync(this.cacheFile(alias), 'utf8')); } catch {} }
     if (c && !refresh && (!target || !c.target || c.target === target)) { this.schemas.set(alias, c); return c; }
-    for (const k of [...this.tableCols.keys()]) if (k.startsWith(`${alias.toLowerCase()}/`)) this.tableCols.delete(k);
+    for (const m of [this.tableCols, this.metas, this.refs]) for (const k of [...m.keys()]) if (k.startsWith(`${alias.toLowerCase()}/`)) m.delete(k);
     const rows = await this.queryAll<{ TABLE_SCHEMA: string; TABLE_NAME: string; TABLE_TYPE: string; TABLE_ROWS: number | null }>(a,
       `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN (${SYSTEM_DBS.map(() => '?').join(',')}) ORDER BY TABLE_SCHEMA, TABLE_NAME`, SYSTEM_DBS);
     const dbs = new Map<string, SqlSchema['databases'][number]>();
@@ -368,6 +526,78 @@ export class SqlManager {
     return c.indexes[key];
   }
 
+  /** One table's facts from information_schema: size and row estimate (TABLES), primary key and declared foreign keys (KEY_COLUMN_USAGE),
+   *  and foreign keys guessed from column names (sql.fkGuesses) where none is declared. */
+  async tableMeta(alias: string, db: string, table: string): Promise<SqlTableMeta> {
+    const a = this.alias(alias);
+    const key = `${a.alias}/${db}.${table}`.toLowerCase();
+    const hit = this.metas.get(key);
+    if (hit && Date.now() - hit.at < META_MS) return hit.v;
+    const [t] = await this.queryAll<any>(a, `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH, CREATE_TIME, UPDATE_TIME, TABLE_COMMENT
+      FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`, [db, table]);
+    if (!t) throw new Error(`No table ${db}.${table} on ${a.alias}.`);
+    const [keys, cols] = await Promise.all([
+      this.queryAll<any>(a, `SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+        FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION`, [t.TABLE_SCHEMA, t.TABLE_NAME]),
+      this.tableColumns(a.alias, t.TABLE_SCHEMA, t.TABLE_NAME),
+    ]);
+    const num = (v: unknown) => v == null ? null : Number(v);
+    const fks: SqlFk[] = keys.filter(k => k.REFERENCED_TABLE_NAME).map(k => ({ column: k.COLUMN_NAME, refDb: k.REFERENCED_TABLE_SCHEMA, refTable: k.REFERENCED_TABLE_NAME, refColumn: k.REFERENCED_COLUMN_NAME, source: 'fk' as const }));
+    const self = `${t.TABLE_SCHEMA}.${t.TABLE_NAME}`.toLowerCase();
+    for (const c of cols) {
+      const target = this.cfg.fkGuesses[c.name.toLowerCase()];
+      if (!target || target.toLowerCase() === self || fks.some(f => f.column === c.name)) continue;
+      const [refDb, refTable] = target.split('.');
+      fks.push({ column: c.name, refDb, refTable, refColumn: 'id', source: 'guess' });
+    }
+    const v: SqlTableMeta = { db: t.TABLE_SCHEMA, table: t.TABLE_NAME, type: t.TABLE_TYPE === 'VIEW' ? 'view' : 'table', engine: t.ENGINE || null,
+      rows: num(t.TABLE_ROWS), dataBytes: num(t.DATA_LENGTH), indexBytes: num(t.INDEX_LENGTH), created: t.CREATE_TIME || null, updated: t.UPDATE_TIME || null,
+      comment: t.TABLE_COMMENT || '', pk: keys.filter(k => k.CONSTRAINT_NAME === 'PRIMARY').map(k => k.COLUMN_NAME), fks };
+    this.metas.set(key, { at: Date.now(), v });
+    return v;
+  }
+
+  /** Columns elsewhere that point at this table: declared foreign keys in any database, and columns named like a guess for this table
+   *  (cb_id for cb911.cb_chargebacks) in the same database, or in every database with `everywhere` (cb_id alone is ~1,400 columns there). */
+  async referencedBy(alias: string, db: string, table: string, everywhere = false): Promise<SqlReference[]> {
+    const a = this.alias(alias);
+    const key = `${a.alias}/${db}.${table}/${everywhere ? 'all' : 'db'}`.toLowerCase();
+    const hit = this.refs.get(key);
+    if (hit && Date.now() - hit.at < META_MS) return hit.v;
+    const indexed = 'EXISTS (SELECT 1 FROM information_schema.STATISTICS s WHERE s.TABLE_SCHEMA = k.TABLE_SCHEMA AND s.TABLE_NAME = k.TABLE_NAME AND s.COLUMN_NAME = k.COLUMN_NAME AND s.SEQ_IN_INDEX = 1)';
+    const target = `${db}.${table}`.toLowerCase();
+    const names = Object.entries(this.cfg.fkGuesses).filter(([, t]) => t.toLowerCase() === target).map(([n]) => n);
+    const [declared, guessed] = await Promise.all([
+      this.queryAll<any>(a, `SELECT k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_COLUMN_NAME, ${indexed} AS ix
+        FROM information_schema.KEY_COLUMN_USAGE k WHERE k.REFERENCED_TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME = ?`, [db, table]),
+      names.length ? this.queryAll<any>(a, `SELECT k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME, 'id' AS REFERENCED_COLUMN_NAME, ${indexed} AS ix
+        FROM information_schema.COLUMNS k WHERE k.COLUMN_NAME IN (?) AND ${everywhere ? 'k.TABLE_SCHEMA NOT IN (?)' : 'k.TABLE_SCHEMA = ?'}`, [names, everywhere ? SYSTEM_DBS : db]) : Promise.resolve([]),
+    ]);
+    const seen = new Set<string>(), v: SqlReference[] = [];
+    for (const [rows, source] of [[declared, 'fk'], [guessed, 'guess']] as const)
+      for (const r of rows) {
+        const k = `${r.TABLE_SCHEMA}.${r.TABLE_NAME}.${r.COLUMN_NAME}`.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        v.push({ db: r.TABLE_SCHEMA, table: r.TABLE_NAME, column: r.COLUMN_NAME, refColumn: r.REFERENCED_COLUMN_NAME, indexed: Number(r.ix) === 1, source });
+      }
+    v.sort((x, y) => Number(y.indexed) - Number(x.indexed) || Number(y.db === db) - Number(x.db === db) || x.db.localeCompare(y.db) || x.table.localeCompare(y.table));
+    this.refs.set(key, { at: Date.now(), v });
+    return v;
+  }
+
+  /** Columns whose name matches, in every database or one: "mid" finds any name containing it, and * is a wildcard. At most 500. */
+  async findColumns(alias: string, q: string, db?: string | null): Promise<SqlColumnHit[]> {
+    const a = this.alias(alias);
+    const t = q.trim();
+    if (t.length < 2) throw new Error('Type at least two characters of the column name.');
+    const esc = t.replace(/[%\\]/g, m => `\\${m}`);
+    const like = t.includes('*') ? esc.replace(/\*/g, '%') : `%${esc}%`;
+    const rows = await this.queryAll<any>(a, `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, COLUMN_KEY FROM information_schema.COLUMNS
+      WHERE COLUMN_NAME LIKE ? AND ${db ? 'TABLE_SCHEMA = ?' : 'TABLE_SCHEMA NOT IN (?)'} ORDER BY COLUMN_NAME = ? DESC, TABLE_SCHEMA, TABLE_NAME LIMIT 500`, [like, db || SYSTEM_DBS, t]);
+    return rows.map(r => ({ db: r.TABLE_SCHEMA, table: r.TABLE_NAME, column: r.COLUMN_NAME, type: String(r.COLUMN_TYPE), key: r.COLUMN_KEY || '' }));
+  }
+
   // Lookups: the configured ones (fleet.config.json, or the built-ins), plus the ones made in the SQL view, kept in state/sql-lookups.json
   // and shared by every Fleet instance. One made in the view replaces a configured one of the same name.
   private lookupsFile() { return path.join(this.stateDir, 'sql-lookups.json'); }
@@ -424,7 +654,7 @@ export class SqlManager {
     this.tabs = tabs.slice(0, 50).filter((t: any) => t && typeof t.id === 'string').map((t: any): SqlTab => ({
       id: String(t.id).slice(0, 40), title: String(t.title || 'Query').slice(0, 80), alias: String(t.alias || ''), db: t.db ? String(t.db) : null,
       text: String(t.text || '').slice(0, 200000), split: Number.isFinite(t.split) ? Math.min(0.9, Math.max(0.1, Number(t.split))) : undefined,
-      ...(t.kind === 'processes' ? { kind: 'processes' as const } : {}) }));
+      ...(t.kind === 'processes' ? { kind: 'processes' as const } : {}), ...(typeof t.savedId === 'string' && t.savedId ? { savedId: t.savedId.slice(0, 40) } : {}) }));
     this.save();
   }
   getHistory() { return this.history; }
@@ -461,7 +691,7 @@ function column(f: mysql.FieldPacket): SqlColumn {
   const binary = Number((f as any).characterSet) === 63;
   const kind: SqlKind = NUMERIC.has(code) ? 'number' : DATES.has(code) ? 'date' : code === 245 ? 'json' : binary && code >= 249 && code <= 254 ? 'blob' : 'string';
   const type = binary && code >= 249 && code <= 252 ? 'blob' : binary && code >= 253 ? 'binary' : TYPE_NAMES[code] || String(code);
-  return { name: f.name, table: (f as any).orgTable || f.table || '', kind, type };
+  return { name: f.name, table: (f as any).orgTable || f.table || '', kind, type, db: (f as any).schema || '', orgName: (f as any).orgName || '' };
 }
 function cell(v: unknown): SqlValue {
   if (v == null) return null;

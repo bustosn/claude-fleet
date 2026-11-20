@@ -15,19 +15,26 @@ export type View =
   | { kind: 'new-task'; cwd?: string; ticket?: string }
   | { kind: 'jira'; create?: boolean }
   /** The SQL workbench. `lookup` opens a new query tab already run, like "cb 123456" from the palette; `at` makes each one distinct. */
-  | { kind: 'sql'; lookup?: { name: string; value: string; at: number } }
+  | { kind: 'sql'; lookup?: { name: string; value: string; at: number }; open?: { saved: string; at: number } }
+  /** The IDE for one folder. `open` shows a file, at a line when given; `at` makes each request distinct. */
+  | { kind: 'ide'; root: string; open?: { path: string; line?: number; at: number } }
   | { kind: 'hub' }
   /** QA runs: the list and New run form, or one run with `id`. */
-  | { kind: 'qa'; id?: string };
+  | { kind: 'qa'; id?: string }
+  | { kind: 'usage' };
 
-/** Open views, like editor tabs. Overview is the home screen and never a tab. */
+/** Open views, like editor tabs. Overview and the pages (see `isPage`) are never tabs. */
 export interface Tab { key: string; view: View }
+
+/** The views behind the title bar buttons. They open in place of the current view without adding a tab. */
+const PAGES = ['jira', 'sql', 'hub', 'usage'] as const;
+export const isPage = (v: View) => (PAGES as readonly string[]).includes(v.kind);
 
 export type Theme = 'system' | 'light' | 'dark';
 
 interface State {
   snapshot: Snapshot | null; live: boolean; view: View; tabs: Tab[]; theme: Theme;
-  sidebarWidth: number; sidebarCollapsed: boolean; paletteOpen: boolean;
+  sidebarWidth: number; sidebarCollapsed: boolean; paletteOpen: boolean; paletteQuery: string;
   openRepos: Record<string, boolean>; openSections: Record<string, boolean>; convoFilter: string; toast: { id: number; text: string; level: 'info' | 'error' } | null;
 }
 
@@ -50,18 +57,22 @@ export function tabKey(v: View): string {
     case 'jira': return 'jira';
     case 'sql': return 'sql';
     case 'qa': return v.id ? `qa:${v.id}` : 'qa';
+    case 'ide': return `ide:${v.root.toLowerCase()}`;
+    case 'usage': return 'usage';
   }
 }
 
 // A popped-out window holds its one view and leaves the main window's saved tabs alone.
-const savedTabs = POPOUT ? [{ key: tabKey(POPOUT), view: POPOUT }] : read<Tab[]>('fleet.tabs', []).filter(t => t && t.view && t.key === tabKey(t.view));
+// Pages that older versions saved as tabs are dropped.
+const savedTabs = POPOUT ? [{ key: tabKey(POPOUT), view: POPOUT }] : read<Tab[]>('fleet.tabs', []).filter(t => t && t.view && t.key === tabKey(t.view) && !isPage(t.view));
 const savedActive = read<string | null>('fleet.tabs.active', null);
+const savedPage = (PAGES as readonly string[]).includes(savedActive || '') ? { kind: savedActive } as View : null;
 
 let state: State = {
   snapshot: null, live: false,
-  tabs: savedTabs, view: POPOUT || savedTabs.find(t => t.key === savedActive)?.view || { kind: 'overview' },
+  tabs: savedTabs, view: POPOUT || savedPage || savedTabs.find(t => t.key === savedActive)?.view || { kind: 'overview' },
   theme: read<Theme>('fleet.theme.mode', 'system'),
-  sidebarWidth: read('fleet.sidebar.width', 300), sidebarCollapsed: read('fleet.sidebar.collapsed', false), paletteOpen: false,
+  sidebarWidth: read('fleet.sidebar.width', 300), sidebarCollapsed: read('fleet.sidebar.collapsed', false), paletteOpen: false, paletteQuery: '',
   // Repos and sidebar sections start collapsed; only what you open stays open.
   openRepos: read('fleet.repos.open', {}), openSections: read('fleet.sections.open', {}), convoFilter: '', toast: null,
 };
@@ -82,11 +93,11 @@ export const actions = {
   go: (view: View, opts: { replace?: string } = {}) => set(s => {
     // In a popped-out window, any other view opens in the main window.
     if (POPOUT && (view.kind === 'overview' || tabKey(view) !== tabKey(POPOUT))) { post({ t: 'go', view }); return { paletteOpen: false }; }
-    if (view.kind === 'overview') { persistTabs(s.tabs, view); return { view, paletteOpen: false }; }
     const key = tabKey(view);
     // A view that lives in a popped-out window goes there (a SQL lookup runs in the popped-out SQL view), and that window comes to the front.
-    const popped = POPOUT ? null : poppedWindow(key);
+    const popped = POPOUT || view.kind === 'overview' ? null : poppedWindow(key);
     if (popped) { post({ t: 'go', view, to: key }); popped.focus(); return { paletteOpen: false }; }
+    if (view.kind === 'overview' || isPage(view)) { persistTabs(s.tabs, view); return { view, paletteOpen: false }; }
     let tabs = s.tabs;
     const at = tabs.findIndex(t => t.key === key);
     const replaceAt = opts.replace ? tabs.findIndex(t => t.key === opts.replace) : -1;
@@ -105,6 +116,18 @@ export const actions = {
     persistTabs(tabs, view);
     return { tabs, view };
   }),
+  /** Drags a tab to just before or after another. */
+  moveTab: (key: string, target: string, after: boolean) => set(s => {
+    const from = s.tabs.findIndex(t => t.key === key);
+    if (from < 0 || key === target) return {};
+    const moving = s.tabs[from], rest = s.tabs.filter(t => t.key !== key);
+    const at = rest.findIndex(t => t.key === target);
+    if (at < 0) return {};
+    const tabs = [...rest.slice(0, at + (after ? 1 : 0)), moving, ...rest.slice(at + (after ? 1 : 0))];
+    if (tabs.every((t, i) => t === s.tabs[i])) return {};
+    persistTabs(tabs, s.view);
+    return { tabs };
+  }),
   closeOtherTabs: (key: string) => set(s => { const tabs = s.tabs.filter(t => t.key === key); const view = tabs[0]?.view || { kind: 'overview' as const }; persistTabs(tabs, view); return { tabs, view }; }),
   setTheme: (theme: Theme) => {
     write('fleet.theme.mode', theme);
@@ -114,7 +137,8 @@ export const actions = {
   },
   setSidebarWidth: (w: number) => { const width = Math.min(480, Math.max(220, Math.round(w))); write('fleet.sidebar.width', width); set({ sidebarWidth: width }); },
   toggleSidebar: () => set(s => { write('fleet.sidebar.collapsed', !s.sidebarCollapsed); return { sidebarCollapsed: !s.sidebarCollapsed }; }),
-  setPalette: (paletteOpen: boolean) => set({ paletteOpen }),
+  /** `query` is what the palette starts with, so a button can open it already narrowed. */
+  setPalette: (paletteOpen: boolean, query = '') => set({ paletteOpen, paletteQuery: query }),
   toggleRepo: (name: string) => set(s => { const openRepos = { ...s.openRepos, [name]: !s.openRepos[name] }; write('fleet.repos.open', openRepos); return { openRepos }; }),
   toggleSection: (name: string) => set(s => { const openSections = { ...s.openSections, [name]: !s.openSections[name] }; write('fleet.sections.open', openSections); return { openSections }; }),
   setConvoFilter: (convoFilter: string) => set({ convoFilter }),

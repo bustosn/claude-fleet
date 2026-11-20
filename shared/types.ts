@@ -38,7 +38,7 @@ export interface Conversation {
   createdAt: number | null; lastModified: number | null; fileSize: number | null;
   repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null;
   running: { id: string; kind: SessionKind; name: string; state: string } | null;
-  chat: { id: string; status: ChatStatus } | null;
+  chat: { id: string; status: ChatStatus; background: number } | null;
   /** Listed under Archived, collapsed, instead of with the recent ones: put there by the user, or idle long enough (`autoArchived`). */
   archived: boolean; autoArchived: boolean;
   /** Kept at the top of the recent ones, and never archived automatically. */
@@ -77,11 +77,16 @@ export type PermissionChoice = { behavior: 'allow' | 'deny'; message?: string; a
 /** Token counts. `input` is uncached prompt tokens; cacheRead and cacheWrite are the cached parts of the same prompt. */
 export interface TokenUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
 
+/** Work a chat started that keeps running after its turn ends: a background shell command, a subagent, a monitor, a workflow. */
+export interface BackgroundTask { taskId: string; kind: string; description: string }
+
 export interface ChatSummary {
   id: string; sessionId: string | null; resumeId: string | null; forked: boolean; cwd: string; model: string; title: string;
   repo: string | null; branch: string | null; worktree: string | null; locatedBy: LocatedBy | null; permissionMode: string; effort: string | null; status: ChatStatus; startedAt: number;
   pending: PermissionView[]; error: string | null;
   asksIn: { id: string; from: string }[]; asksOut: { id: string; to: string }[];
+  /** What is still running in the background right now, whether or not a turn is in progress. */
+  background: BackgroundTask[];
   /** Set while a dialogue orchestrates this chat: its turns arrive from Fleet, not from the person typing. */
   dialogueId: string | null;
   /** Set when the chat is the worker on a board task. */
@@ -99,7 +104,13 @@ export interface Role { model: string; effort: string; purpose: string }
 export interface DispatchDefaults { permissionMode: string; defaultModel: string; maxConcurrent: number }
 
 /** A shell running inside Fleet. The browser attaches over a WebSocket; it keeps running when its tab closes. */
-export interface TerminalSummary { id: string; cwd: string; shell: string; title: string; startedAt: number; exitCode: number | null }
+export interface TerminalSummary { id: string; cwd: string; shell: string; title: string; startedAt: number; exitCode: number | null; /** This terminal runs the herdr client. */ herdr?: boolean }
+
+export type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
+export interface HerdrAgent { paneId: string; workspaceId: string; workspace: string; status: HerdrStatus; agent: string; title: string; cwd?: string }
+export interface HerdrWorkspace { id: string; label: string; status: HerdrStatus; cwd?: string }
+/** herdr as seen over its local socket. `installed` is whether the binary was found; `running` whether its server answered. */
+export interface HerdrState { installed: boolean; running: boolean; agents: HerdrAgent[]; workspaces: HerdrWorkspace[]; error?: string }
 
 /** A unit of work on the board. A chat is its worker: Fleet starts one when a slot is free, and the chat reports back with fleet_report.
  *  queued → working → review | blocked → (approve) done, or (send back) working again. `failed` means the worker is gone. */
@@ -149,6 +160,7 @@ export interface JiraCreated { key: string; url: string; warnings: string[] }
 export interface Snapshot {
   jira: JiraStatus | null;
   generatedAt: number; sessions: Session[]; repos: Repo[]; conversations: Conversation[]; chats: ChatSummary[]; terminals: TerminalSummary[]; dialogues: DialogueSummary[]; tasks: TaskSummary[];
+  herdr: HerdrState;
   errors: Record<string, string>; roles: Record<string, Role>; dispatch: DispatchDefaults;
 }
 
@@ -201,6 +213,8 @@ export type ChatEvent =
   | { t: 'mode'; mode: string; at: number }
   /** A subagent or background task: one event per change, matched by `taskId`. */
   | { t: 'task'; taskId: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description: string; kind: string; tools: number; tokens: number; lastTool?: string; summary?: string; at: number }
+  /** The full set of live background tasks after a change (replaces the previous set). */
+  | { t: 'background'; tasks: BackgroundTask[]; at: number }
   | { t: 'assistant'; uuid: string; blocks: ContentBlock[]; at: number }
   | { t: 'tool_result'; toolUseId: string; isError: boolean; text: string; length: number; at: number }
   | ({ t: 'permission'; at: number } & PermissionView)
@@ -261,7 +275,8 @@ export interface AwsStatus {
 // SQL view. A connection is a Teleport tunnel alias; prod ones are readers only, and every statement is read-only.
 export interface SqlAlias { alias: string; port: number; prod: boolean; label: string }
 export type SqlKind = 'number' | 'string' | 'date' | 'json' | 'blob';
-export interface SqlColumn { name: string; table: string; kind: SqlKind; type: string }
+/** `db` and `orgName` are where the column came from (empty for an expression), so a cell can follow a foreign key even under an alias. */
+export interface SqlColumn { name: string; table: string; kind: SqlKind; type: string; db?: string; orgName?: string }
 export type SqlValue = string | number | null;
 /** What a run streams: an id first, then the columns, rows in batches, and done or error. */
 export type SqlEvent =
@@ -270,13 +285,23 @@ export type SqlEvent =
   | { t: 'columns'; columns: SqlColumn[] }
   | { t: 'rows'; rows: SqlValue[][] }
   | { t: 'done'; ms: number; rowCount: number; truncated: boolean; autoLimited: boolean; affected: number | null }
-  | { t: 'error'; message: string; code: string | null; offset: number | null; length: number; line: number | null };
+  | { t: 'error'; message: string; code: string | null; offset: number | null; length: number; line: number | null }
+  /** After a run in a tab's session: whether that tab now holds an open transaction, and why it ended when it just did. */
+  | { t: 'tx'; tx: SqlTx | null; note?: string };
+/** A transaction a SQL tab holds on its own dev connection, from START TRANSACTION until COMMIT or ROLLBACK. */
+export interface SqlTx { session: string; alias: string; startedAt: number; lastAt: number; statements: number; idleMs: number }
 export interface SqlRunRequest { alias: string; text: string; cursor: number; selection?: { from: number; to: number } | null; db?: string | null; limit?: 'auto' | 'max';
   /** Run a risky write (UPDATE or DELETE with no WHERE, TRUNCATE, DROP) that the server asked about with an error coded CONFIRM. */
-  confirm?: boolean }
+  confirm?: boolean;
+  /** Values for the statement's :name and ? parameters (shared/sqlClassify params), bound on the server through mysql2's escaping. */
+  params?: Record<string, string>;
+  /** The tab this run comes from. A transaction started in it keeps its connection for every later run with the same session. */
+  session?: string }
 export interface SqlHistoryEntry { at: number; alias: string; db: string | null; sql: string; rows: number | null; ms: number | null; error: string | null }
 /** A tab in the SQL view: a query editor, or the connection's live process list. */
-export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes' }
+export interface SqlTab { id: string; title: string; alias: string; db: string | null; text: string; split?: number; kind?: 'query' | 'processes';
+  /** The saved query this tab was opened from or saved as: Ctrl+S updates it. */
+  savedId?: string }
 /** A palette shortcut like "cb 123456": every ? in `sql` gets the value, escaped. `type` number passes it unquoted (for numeric ids, so the index is used).
  *  `source`: from fleet.config.json (or the built-ins), or made in the SQL view, which can also override a config one by name. */
 export interface SqlLookup { name: string; label: string; pattern: string; alias: string; sql: string; view: 'record' | 'grid'; type?: 'text' | 'number'; source?: 'config' | 'user' }
@@ -287,7 +312,36 @@ export interface SqlSchema { alias: string; target: string | null; at: number; d
 /** One row of the server's process list. `fleet` marks Fleet's own connections. */
 export interface SqlProcess { id: number; user: string; host: string; db: string | null; command: string; time: number; state: string | null; info: string | null;
   trxStarted: string | null; rowsLocked: number | null; rowsModified: number | null; fleet: boolean }
-export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null }
+/** Token counts for a set of assistant messages. */
+export interface UsageTotals { messages: number; input: number; output: number; cacheRead: number; cacheWrite: number }
+/** The Usage page: what the transcripts under ~/.claude/projects add up to. `days` 0 is all time. */
+export interface UsageReport {
+  days: number; generatedAt: number; total: UsageTotals; sessions: number; activeDays: number; longestStreak: number; currentStreak: number;
+  daily: ({ day: string } & UsageTotals)[];
+  /** Messages by local hour of day, and by weekday (0 is Sunday). */
+  hours: number[]; weekdays: number[];
+  models: ({ model: string } & UsageTotals)[];
+  projects: ({ project: string; sessions: number } & UsageTotals)[];
+}
+export interface SqlInfo { aliases: SqlAlias[]; defaultAlias: string; autoLimit: number; maxRows: number; lookups: SqlLookup[]; error: string | null;
+  /** How long a statement may run before the server stops it (sql.timeoutMs). */
+  timeoutMs: number;
+  /** Column name to the db.table its value is the id of, for keys the schema does not declare. */
+  fkGuesses: Record<string, string>;
+  /** The most rows an export re-run on the server writes. */
+  exportMaxRows: number }
+/** A column that points at another table's row: declared in the schema (`fk`) or guessed from its name (`guess`). */
+export interface SqlFk { column: string; refDb: string; refTable: string; refColumn: string; source: 'fk' | 'guess' }
+/** One table, for the schema tree's hover card and for following keys. Sizes in bytes; times as the server writes them. */
+export interface SqlTableMeta { db: string; table: string; type: 'table' | 'view'; engine: string | null; rows: number | null; dataBytes: number | null; indexBytes: number | null;
+  created: string | null; updated: string | null; comment: string; pk: string[]; fks: SqlFk[] }
+/** A column in another table that points at this one. `indexed` when it leads an index, so looking it up is cheap. */
+export interface SqlReference { db: string; table: string; column: string; refColumn: string; indexed: boolean; source: 'fk' | 'guess' }
+export interface SqlColumnHit { db: string; table: string; column: string; type: string; key: string }
+/** A saved query. `alias` and `db` are where it opens (null: the current tab's); `jira` ties it to a ticket card. */
+export interface SqlSaved { id: string; name: string; folder: string; jira: string | null; alias: string | null; db: string | null; sql: string; created: number; updated: number }
+/** A Tab-expanded template: type `name`, press Tab. ${field} placeholders are filled in turn (Tab moves on); fields with one name change together. */
+export interface SqlSnippet { name: string; label: string; body: string; source?: 'config' | 'user' }
 /** A connection's login as the SQL view shows it: never the password, only whether one is set. */
 export interface SqlCredential { alias: string; user: string; hasPassword: boolean; source: 'saved' | 'config' | 'env' | 'none' }
 
@@ -345,3 +399,15 @@ export interface QaRunDetail extends QaRunSummary {
 }
 
 export type QaEvent = { t: 'run'; run: QaRunSummary } | { t: 'log'; at: number; text: string };
+
+/** The IDE view: a folder listing, and a file read for editing. `mtime` guards a save against the file having changed on disk meanwhile. */
+export interface IdeEntry { name: string; dir: boolean; ignored: boolean }
+export interface IdeFile { kind: 'text' | 'binary' | 'too-large'; size: number; mtime: number; text?: string; eol?: 'lf' | 'crlf'; bom?: boolean }
+
+/** Git for the IDE view. Blame: one entry per commit, and `lines[i]` is the index of the commit that last changed line i+1. */
+export interface IdeBlame { commits: { sha: string; author: string; time: number; summary: string }[]; lines: number[] }
+/** A run of lines that differ from HEAD. A `deleted` run sits after line `start` (0 for the top of the file). */
+export interface IdeHunk { kind: 'added' | 'modified' | 'deleted'; start: number; count: number }
+export interface IdeLogEntry { sha: string; author: string; time: number; subject: string }
+/** Status codes by path under the folder: M modified, A added, D deleted, R renamed, ? untracked, U conflict. */
+export interface IdeGitStatus { branch: string; ahead: number; behind: number; files: Record<string, string> }

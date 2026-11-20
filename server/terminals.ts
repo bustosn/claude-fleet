@@ -45,11 +45,12 @@ function spawnError(err: unknown, shell: string): Error {
 
 /** One shell in a pseudo-terminal. The browser attaches over a WebSocket; closing the tab leaves the shell running. */
 export class Terminal extends EventEmitter {
-  id = randomUUID().slice(0, 8); cwd: string; shell: string; title: string; startedAt = Date.now(); exitCode: number | null = null;
+  id = randomUUID().slice(0, 8); cwd: string; shell: string; title: string; startedAt = Date.now(); exitCode: number | null = null; herdr: boolean;
   private p: pty.IPty; private buf = '';
 
-  constructor(opts: { cwd: string; shell: string; cols?: number; rows?: number }) {
+  constructor(opts: { cwd: string; shell: string; cols?: number; rows?: number; herdr?: boolean }) {
     super();
+    this.herdr = !!opts.herdr;
     this.cwd = opts.cwd; this.shell = opts.shell; this.title = path.basename(this.shell).replace(/\.exe$/i, '');
     try { this.p = pty.spawn(this.shell, loginArgs(this.shell), { name: 'xterm-256color', cols: opts.cols || 120, rows: opts.rows || 30, cwd: this.cwd, env: process.env as Record<string, string> }); }
     catch (err) { throw spawnError(err, this.shell); }
@@ -63,7 +64,7 @@ export class Terminal extends EventEmitter {
   kill() { if (this.exitCode == null) this.p.kill(); }
   // Shells and programs set the window title (claude sets it to the conversation topic); the tab shows it.
   setTitle(t: string) { const s = String(t).trim().slice(0, 120); if (s && s !== this.title) { this.title = s; this.emit('change'); } }
-  summary(): TerminalSummary { return { id: this.id, cwd: this.cwd, shell: this.shell, title: this.title, startedAt: this.startedAt, exitCode: this.exitCode }; }
+  summary(): TerminalSummary { return { id: this.id, cwd: this.cwd, shell: this.shell, title: this.title, startedAt: this.startedAt, exitCode: this.exitCode, ...(this.herdr ? { herdr: true } : {}) }; }
 }
 
 export class TerminalManager extends EventEmitter {
@@ -72,8 +73,8 @@ export class TerminalManager extends EventEmitter {
   /** What a new tab runs: the configured shell, else the platform default. */
   get shellPath(): string { return this.shell || defaultShell(); }
 
-  open(opts: { cwd: string; shell?: string | null; cols?: number; rows?: number }): Terminal {
-    const t = new Terminal({ cwd: opts.cwd, shell: opts.shell || this.shell || defaultShell(), cols: opts.cols, rows: opts.rows });
+  open(opts: { cwd: string; shell?: string | null; cols?: number; rows?: number; herdr?: boolean }): Terminal {
+    const t = new Terminal({ cwd: opts.cwd, shell: opts.shell || this.shell || defaultShell(), cols: opts.cols, rows: opts.rows, herdr: opts.herdr });
     this.terms.set(t.id, t);
     t.on('exit', () => this.emit('change'));
     t.on('change', () => this.emit('change'));
@@ -81,6 +82,8 @@ export class TerminalManager extends EventEmitter {
     return t;
   }
   get(id: string) { return this.terms.get(id) || null; }
+  /** The running terminal that holds the herdr client, if one is open. */
+  findHerdr(): Terminal | null { return [...this.terms.values()].find(t => t.herdr && t.exitCode == null) || null; }
   list(): TerminalSummary[] { return [...this.terms.values()].map(t => t.summary()); }
   close(id: string): boolean {
     const t = this.terms.get(id); if (!t) return false;

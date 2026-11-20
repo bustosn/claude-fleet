@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, ShieldCheck, Terminal, Users } from 'lucide-react';
+import { BarChart3, Bot, Code2, Database, GitBranch, KanbanSquare, KeyRound, LayoutGrid, ListPlus, MessageSquare, Plus, Search, ShieldCheck, Terminal, Users } from 'lucide-react';
 import { shortPath } from '../lib/format';
 import { actions, useStore, type View } from '../lib/store';
-import { openTerminal } from '../lib/terminal';
+import { openHerdr, openTerminal } from '../lib/terminal';
 import { api, type SqlLookup } from '../lib/api';
 
 /** An item either opens a view or runs an action. */
@@ -10,12 +10,13 @@ interface Item { id: string; label: string; hint: string; icon: typeof Search; v
 
 export function CommandPalette() {
   const open = useStore(s => s.paletteOpen);
+  const startQuery = useStore(s => s.paletteQuery);
   const snap = useStore(s => s.snapshot);
   const [q, setQ] = useState('');
   const [cursor, setCursor] = useState(0);
   const input = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { if (open) { setQ(''); setCursor(0); setTimeout(() => input.current?.focus(), 0); } }, [open]);
+  useEffect(() => { if (open) { setQ(startQuery); setCursor(0); setTimeout(() => input.current?.focus(), 0); } }, [open]);
   // The SQL view's lookups ("cb 123456"), read each time the palette opens so new ones show up.
   const [lookups, setLookups] = useState<SqlLookup[]>([]);
   useEffect(() => { if (open) api.sqlInfo().then(i => setLookups(i.lookups)).catch(() => {}); }, [open]);
@@ -26,6 +27,7 @@ export function CommandPalette() {
       { id: 'overview', label: 'Overview', hint: 'fleet board', icon: LayoutGrid, view: { kind: 'overview' } },
       { id: 'jira', label: 'Jira', hint: 'your tickets by status; move them or start a task', icon: KanbanSquare, view: { kind: 'jira' } },
       { id: 'jira-new', label: 'New Jira ticket', hint: 'create a ticket in Jira', icon: KanbanSquare, view: { kind: 'jira', create: true } },
+      { id: 'usage', label: 'Usage', hint: 'your Claude token usage by day, model and project', icon: BarChart3, view: { kind: 'usage' } },
       { id: 'hub', label: 'Hub', hint: 'AWS credentials and chores', icon: KeyRound, view: { kind: 'hub' } },
       { id: 'sql', label: 'SQL', hint: 'queries over the Teleport tunnels: dev read-write, prod read-only', icon: Database, view: { kind: 'sql' } },
       { id: 'qa', label: 'QA runs', hint: 'review a branch with fresh lens chats, verify every finding, one report', icon: ShieldCheck, view: { kind: 'qa' } },
@@ -33,13 +35,17 @@ export function CommandPalette() {
       { id: 'new', label: 'New chat', hint: 'start a chat in a worktree', icon: Plus, view: { kind: 'new-chat' } },
       { id: 'new-task', label: 'New task', hint: 'queue work; a chat picks it up and reports back for review', icon: ListPlus, view: { kind: 'new-task' } },
       { id: 'terminal', label: 'New terminal', hint: 'open a shell in the folder you are looking at', icon: Terminal, run: () => openTerminal() },
+      { id: 'herdr', label: 'herdr', hint: snap.herdr.installed ? `agent panes${snap.herdr.agents.length ? ` · ${snap.herdr.agents.length} agents` : ''}` : 'agent panes (not installed)', icon: Bot, run: () => openHerdr() },
       { id: 'new-dialogue', label: 'New dialogue', hint: 'two chats talk a topic through while you moderate', icon: Users, view: { kind: 'new-dialogue' } },
     ];
     for (const d of snap.dialogues) out.push({ id: `d:${d.id}`, label: d.topic, hint: `dialogue · ${d.participants.map(p => p.name).join(' and ')} · ${d.status}`, icon: Users, view: { kind: 'dialogue', id: d.id } });
+    for (const a of snap.herdr.agents) out.push({ id: `ha:${a.paneId}`, label: `${a.agent}: ${a.title || a.workspace}`, hint: `herdr · ${a.workspace} · ${a.status}`, icon: Bot, run: () => openHerdr(undefined, a.paneId) });
     for (const t of snap.terminals) out.push({ id: `t:${t.id}`, label: t.title, hint: `terminal · ${shortPath(t.cwd)}${t.exitCode != null ? ' · exited' : ''}`, icon: Terminal, view: { kind: 'terminal', id: t.id } });
     for (const s of snap.sessions) out.push({ id: `s:${s.id}`, label: s.title || s.name, hint: `${s.kind === 'dashboard' ? 'chat' : s.kind} · ${s.repo ? `${s.repo} / ${s.branch || ''}` : shortPath(s.cwd)} · ${s.state}`, icon: s.kind === 'dashboard' ? MessageSquare : Terminal,
       view: s.kind === 'dashboard' && s.chatId ? { kind: 'chat', chatId: s.chatId, title: s.title } : { kind: 'session', id: s.id } });
     for (const r of snap.repos) for (const w of r.worktrees) out.push({ id: `w:${w.path}`, label: `${r.name} / ${w.branch || shortPath(w.path)}`, hint: shortPath(w.path), icon: GitBranch, view: { kind: 'worktree', path: w.path } });
+    for (const r of snap.repos) for (const w of r.worktrees) out.push({ id: `ide:${w.path}`, label: `Code: ${r.name} / ${w.branch || shortPath(w.path)}`, hint: `edit files · ${shortPath(w.path)}`, icon: Code2, view: { kind: 'ide', root: w.path } });
+    if (snap.herdr.installed) for (const r of snap.repos) for (const w of r.worktrees) out.push({ id: `wh:${w.path}`, label: `herdr: ${r.name} / ${w.branch || shortPath(w.path)}`, hint: 'open this folder in herdr', icon: Bot, run: () => openHerdr(w.path) });
     for (const c of snap.conversations) if (!c.running && !c.chat) out.push({ id: `c:${c.sessionId}`, label: c.title, hint: `saved · ${c.repo || shortPath(c.cwd)}`, icon: MessageSquare, view: { kind: 'resume', sessionId: c.sessionId, cwd: c.cwd, title: c.title } });
     return out;
   }, [snap]);

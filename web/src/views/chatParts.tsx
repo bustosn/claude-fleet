@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, CircleDashed, Loader2, Square, Undo2, X } from 'lucide-react';
+import type { BackgroundTask } from '../../../shared/types';
 import { api, type ContextUsage, type EditPreview, type TodoItem } from '../lib/api';
 import { md } from '../lib/markdown';
 import { fmtTokens } from '../lib/format';
@@ -88,6 +89,25 @@ export function PermissionCard({ e, chatId }: { e: PermEntry; chatId: string }) 
 }
 
 // ---- todos ---------------------------------------------------------------------
+
+/** What is still running in the background, shown whether or not a turn is in progress, so "waiting for it to finish" is something you can see. */
+export function BackgroundBar({ tasks, chatId }: { tasks: BackgroundTask[]; chatId: string }) {
+  const stop = (taskId: string) => api.stopTask(chatId, taskId).catch(err => actions.toast(err.message, 'error'));
+  return (
+    <div className="todo-panel" role="status" aria-label="Running in the background">
+      <ul className="bg-list">
+        {tasks.map(t => (
+          <li key={t.taskId} className="bg-item">
+            <Loader2 size={12} className="shrink-0 animate-spin text-accent" aria-hidden="true" />
+            <span className="chip">{t.kind.replace(/^local_/, '')}</span>
+            <span className="min-w-0 flex-1 truncate" title={t.description}>{t.description || 'working'}</span>
+            <button type="button" className="btn sm ghost" title="Stop this task" onClick={() => stop(t.taskId)}><Square size={11} aria-hidden="true" /> Stop</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export function TodoPanel({ todos }: { todos: TodoItem[] }) {
   const [open, setOpen] = useState(true);

@@ -1,8 +1,9 @@
-import { useEffect, useRef, type MouseEvent } from 'react';
-import { Bot, Database, FolderGit2, PictureInPicture2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, ShieldCheck, Terminal, Users, X } from 'lucide-react';
+import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react';
+import { BarChart3, Bot, Code2, Database, FolderGit2, PictureInPicture2, GitBranch, KanbanSquare, KeyRound, ListPlus, MessageSquare, Plus, ShieldCheck, Terminal, Users, X } from 'lucide-react';
 import { dialogueDot } from '../views/DialogueView';
 import type { Snapshot } from '../lib/api';
 import { shortPath } from '../lib/format';
+import { BackgroundCount } from './ui';
 import { actions, tabKey, useStore, type Tab, type View } from '../lib/store';
 import { openTerminal } from '../lib/terminal';
 import { POPOUT, popOut } from '../lib/popout';
@@ -14,20 +15,38 @@ export function TabStrip() {
   const snap = useStore(s => s.snapshot);
   const active = view.kind === 'overview' ? null : tabKey(view);
   const strip = useRef<HTMLDivElement>(null);
+  // The tab being dragged, and where it would land: before or after the tab under the pointer.
+  const [drag, setDrag] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{ key: string; after: boolean } | null>(null);
+  const endDrag = () => { setDrag(null); setDrop(null); };
 
   useEffect(() => { strip.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [active]);
 
   if (tabs.length === 0 || POPOUT) return null;
   return (
     <div ref={strip} role="tablist" aria-label="Open views" className="tabstrip shrink-0">
-      {tabs.map(t => <TabButton key={t.key} tab={t} active={t.key === active} label={tabLabel(t.view, snap)} />)}
+      {tabs.map(t => (
+        <TabButton key={t.key} tab={t} active={t.key === active} label={tabLabel(t.view, snap)}
+          dragging={drag === t.key} dropAt={drop?.key === t.key && drag !== t.key ? (drop.after ? 'after' : 'before') : undefined}
+          onDragStart={() => setDrag(t.key)} onDragEnd={endDrag}
+          onDragOver={e => {
+            if (!drag) return;
+            e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+            const box = e.currentTarget.getBoundingClientRect();
+            const after = e.clientX > box.left + box.width / 2;
+            setDrop(d => d?.key === t.key && d.after === after ? d : { key: t.key, after });
+          }}
+          onDrop={e => { e.preventDefault(); if (drag && drop) actions.moveTab(drag, drop.key, drop.after); endDrag(); }} />
+      ))}
       <button className="iconbtn my-auto ml-1 shrink-0" style={{ width: 26, height: 26 }} title="New chat" aria-label="New chat" onClick={() => actions.go({ kind: 'new-chat' })}><Plus size={14} aria-hidden="true" /></button>
       <button className="iconbtn my-auto shrink-0" style={{ width: 26, height: 26 }} title="New terminal (in the current worktree or chat's folder)" aria-label="New terminal" onClick={() => openTerminal()}><Terminal size={14} aria-hidden="true" /></button>
     </div>
   );
 }
 
-function TabButton({ tab, active, label }: { tab: Tab; active: boolean; label: { text: string; hint: string; state?: string } }) {
+interface TabDrag { dragging: boolean; dropAt?: 'before' | 'after'; onDragStart: () => void; onDragEnd: () => void; onDragOver: (e: DragEvent<HTMLDivElement>) => void; onDrop: (e: DragEvent<HTMLDivElement>) => void }
+
+function TabButton({ tab, active, label, dragging, dropAt, onDragStart, onDragEnd, onDragOver, onDrop }: { tab: Tab; active: boolean; label: { text: string; hint: string; state?: string; bg?: number } } & TabDrag) {
   const Icon = iconFor(tab.view, label.state);
   const close = (e: MouseEvent) => { e.stopPropagation(); actions.closeTab(tab.key); };
   // Moves the tab into its own window; it comes back with Pop back in there.
@@ -42,12 +61,15 @@ function TabButton({ tab, active, label }: { tab: Tab; active: boolean; label: {
   return (
     <div
       role="tab" aria-selected={active} tabIndex={0} title={label.hint}
-      className="group tab"
+      className="group tab" data-dragging={dragging || undefined} data-drop={dropAt}
+      draggable onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/x-fleet-tab', tab.key); onDragStart(); }}
+      onDragEnd={onDragEnd} onDragOver={onDragOver} onDrop={onDrop}
       onClick={() => actions.go(tab.view)} onMouseDown={onDown} onAuxClick={onAux}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); actions.go(tab.view); } if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); actions.closeTab(tab.key); } }}
     >
       {label.state ? <span className="dot shrink-0" data-s={label.state} aria-hidden="true" /> : <Icon size={13} className="shrink-0 text-fg-faint" aria-hidden="true" />}
       <span className="min-w-0 flex-1 truncate">{label.text}</span>
+      <BackgroundCount n={label.bg || 0} />
       <button className="iconbtn shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" style={{ width: 20, height: 20 }} aria-label={`Pop out ${label.text}`} title="Pop out into its own window" onClick={pop}>
         <PictureInPicture2 size={12} aria-hidden="true" />
       </button>
@@ -64,6 +86,8 @@ export function iconFor(v: View, state?: string) {
   if (v.kind === 'jira') return KanbanSquare;
   if (v.kind === 'sql') return Database;
   if (v.kind === 'qa') return ShieldCheck;
+  if (v.kind === 'ide') return Code2;
+  if (v.kind === 'usage') return BarChart3;
   if (v.kind === 'session') return state ? Terminal : Bot;
   if (v.kind === 'terminal') return Terminal;
   if (v.kind === 'dialogue' || v.kind === 'new-dialogue') return Users;
@@ -73,20 +97,25 @@ export function iconFor(v: View, state?: string) {
 }
 
 /** Live titles: a renamed chat or a session's current state show up in its tab without reopening it. */
-export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: string; state?: string } {
+export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: string; state?: string; bg?: number } {
   switch (v.kind) {
     case 'overview': return { text: 'Overview', hint: 'Overview' };
     case 'hub': return { text: 'Hub', hint: 'AWS credentials and other chores' };
     case 'jira': return { text: 'Jira', hint: 'Your Jira tickets by status' };
     case 'qa': return v.id ? { text: `QA ${v.id}`, hint: `QA run ${v.id}` } : { text: 'QA', hint: 'QA runs: fresh reviewers, verified findings, one report' };
     case 'sql': return { text: 'SQL', hint: 'SQL over the Teleport tunnels: dev read-write, prod read-only' };
+    case 'ide': return { text: `${shortPath(v.root).split('/').pop() || v.root} · code`, hint: `Files in ${v.root}` };
+    case 'usage': return { text: 'Usage', hint: 'Your Claude usage' };
     case 'new-chat': return { text: 'New chat', hint: v.cwd ? `New chat in ${shortPath(v.cwd)}` : 'New chat' };
     case 'resume': return { text: v.title, hint: `Opening ${v.title}` };
     case 'chat': {
       const s = snap?.sessions.find(x => x.chatId === v.chatId);
       const c = snap?.chats.find(x => x.id === v.chatId);
       const text = s?.title || c?.title || v.title || 'Chat';
-      return { text, hint: `${text}${c?.repo ? `\n${c.repo} / ${c.branch || ''}` : ''}`, state: s?.state || c?.status };
+      const bg = c?.background.length || 0;
+      return { text, hint: `${text}${c?.repo ? `
+${c.repo} / ${c.branch || ''}` : ''}${bg ? `
+${bg} running in the background` : ''}`, state: s?.state || c?.status, bg };
     }
     case 'session': {
       const s = snap?.sessions.find(x => x.id === v.id);
@@ -107,7 +136,10 @@ export function tabLabel(v: View, snap: Snapshot | null): { text: string; hint: 
     case 'terminal': {
       const t = snap?.terminals.find(x => x.id === v.id);
       if (!t) return { text: 'Terminal', hint: 'Terminal (no longer running)', state: 'ended' };
-      return { text: t.title, hint: `${t.shell}\n${t.cwd}`, state: t.exitCode == null ? undefined : 'ended' };
+      const agents = t.herdr ? snap?.herdr.agents || [] : [];
+      const blocked = agents.filter(a => a.status === 'blocked').length, working = agents.filter(a => a.status === 'working').length;
+      const tally = agents.length ? `\n${agents.length} agents${blocked ? `, ${blocked} blocked` : ''}${working ? `, ${working} working` : ''}` : '';
+      return { text: t.herdr ? 'herdr' : t.title, hint: `${t.shell}\n${t.cwd}${tally}`, state: t.exitCode != null ? 'ended' : blocked ? 'blocked' : working ? 'working' : undefined };
     }
   }
 }
