@@ -18,11 +18,23 @@ export function ResumeView({ sessionId, cwd, title }: { sessionId: string; cwd: 
   return <Empty title={error ? 'Could not open this conversation' : `Opening ${title}`}>{error || 'Starting a Claude process and loading the saved history.'}</Empty>;
 }
 
+/** Aliases follow whatever the latest version is; the pinned ids fix the chat to one version. Anything else goes in "Other". */
+const MODEL_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'];
+const MODEL_VERSIONS: { id: string; label: string }[] = [
+  { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
+];
+const OTHER_MODEL = '__other__';
+
 export function NewChatView({ cwd }: { cwd?: string }) {
   const snap = useStore(s => s.snapshot);
   const dirs = [...new Set([...(snap?.repos || []).flatMap(r => r.worktrees.map(w => w.path)), ...(snap?.sessions.map(s => s.cwd) || [])].filter(Boolean))];
   const [dir, setDir] = useState(cwd || dirs[0] || '');
   const [model, setModel] = useState(snap?.dispatch.defaultModel || 'fable');
+  const known = MODEL_ALIASES.includes(model) || MODEL_VERSIONS.some(v => v.id === model);
+  const [other, setOther] = useState(!known);
   const [perm, setPerm] = useState(snap?.dispatch.permissionMode || 'auto');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -66,7 +78,12 @@ export function NewChatView({ cwd }: { cwd?: string }) {
       </label>
       <div className="mb-3 grid grid-cols-2 gap-3">
         <label className="grid gap-1 text-[12px] text-fg-muted">Model
-          <select className="input" value={model} onChange={e => setModel(e.target.value)}>{['fable', 'opus', 'sonnet', 'haiku'].map(m => <option key={m}>{m}</option>)}</select>
+          <select className="input" value={other ? OTHER_MODEL : model} onChange={e => { if (e.target.value === OTHER_MODEL) { setOther(true); setModel(''); } else { setOther(false); setModel(e.target.value); } }}>
+            <optgroup label="Latest">{MODEL_ALIASES.map(m => <option key={m} value={m}>{m}</option>)}</optgroup>
+            <optgroup label="Specific version">{MODEL_VERSIONS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</optgroup>
+            <option value={OTHER_MODEL}>Other…</option>
+          </select>
+          {other && <input className="input" value={model} onChange={e => setModel(e.target.value.trim())} placeholder="Model id, e.g. claude-opus-4-8" spellCheck={false} autoFocus />}
         </label>
         <label className="grid gap-1 text-[12px] text-fg-muted">Permissions
           <select className="input" value={perm} onChange={e => setPerm(e.target.value)}>
@@ -85,7 +102,7 @@ export function NewChatView({ cwd }: { cwd?: string }) {
       </label>
       <div className="flex justify-end gap-2">
         <button type="button" className="btn" onClick={() => actions.go({ kind: 'overview' })}>Cancel</button>
-        <button type="submit" className="btn primary" disabled={busy || !dir}>{busy ? 'Starting' : 'Start chat'}</button>
+        <button type="submit" className="btn primary" disabled={busy || !dir || !model}>{busy ? 'Starting' : 'Start chat'}</button>
       </div>
     </form>
   );
